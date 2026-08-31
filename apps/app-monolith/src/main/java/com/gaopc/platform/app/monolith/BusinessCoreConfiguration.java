@@ -1,11 +1,9 @@
 package com.gaopc.platform.app.monolith;
 
-import com.gaopc.platform.authorization.PermissionDeniedException;
 import com.gaopc.platform.authorization.UseCaseAuthorizer;
 import com.gaopc.platform.catalog.CatalogApplicationConfiguration;
 import com.gaopc.platform.catalog.CatalogInternalHttpConfiguration;
 import com.gaopc.platform.catalog.CatalogPersistenceConfiguration;
-import com.gaopc.platform.catalog.application.ProductNotFoundException;
 import com.gaopc.platform.identifier.IdentifierGenerator;
 import com.gaopc.platform.identifier.SnowflakeIdentifierGenerator;
 import com.gaopc.platform.inventory.configuration.InventoryApplicationConfiguration;
@@ -14,13 +12,11 @@ import com.gaopc.platform.inventory.inbound.messaging.ReserveInventoryCommandInb
 import com.gaopc.platform.migration.DatabaseComponent;
 import com.gaopc.platform.migration.DatabaseMigrator;
 import com.gaopc.platform.migration.MigrationPlan;
-import com.gaopc.platform.order.application.OrderNotFoundException;
 import com.gaopc.platform.order.configuration.OrderApplicationConfiguration;
 import com.gaopc.platform.order.configuration.OrderPersistenceConfiguration;
 import com.gaopc.platform.order.inbound.http.OrderHttpController;
 import com.gaopc.platform.order.inbound.http.OrderHttpInboundConfiguration;
 import com.gaopc.platform.order.inbound.messaging.InventoryResultInboundConfiguration;
-import com.gaopc.platform.web.ProblemStatusResolver;
 import java.time.Clock;
 import java.util.List;
 import javax.sql.DataSource;
@@ -29,8 +25,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
-import org.springframework.context.annotation.Primary;
-import org.springframework.http.HttpStatus;
 import org.springframework.core.MethodParameter;
 import org.springframework.http.MediaType;
 import org.springframework.http.converter.HttpMessageConverter;
@@ -71,21 +65,6 @@ class BusinessCoreConfiguration {
     @Bean
     UseCaseAuthorizer businessAuthorizer() {
         return new UseCaseAuthorizer();
-    }
-
-    @Bean
-    @Primary
-    ProblemStatusResolver businessProblemStatusResolver() {
-        return exception -> {
-            if (exception instanceof OrderNotFoundException
-                    || exception instanceof ProductNotFoundException) {
-                return HttpStatus.NOT_FOUND;
-            }
-            if (exception instanceof PermissionDeniedException) {
-                return HttpStatus.FORBIDDEN;
-            }
-            return HttpStatus.UNPROCESSABLE_CONTENT;
-        };
     }
 
     @Bean

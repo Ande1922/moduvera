@@ -1,14 +1,11 @@
 package com.gaopc.platform.app.order;
 
-import com.gaopc.platform.authorization.PermissionDeniedException;
 import com.gaopc.platform.authorization.UseCaseAuthorizer;
 import com.gaopc.platform.identifier.IdentifierGenerator;
 import com.gaopc.platform.identifier.SnowflakeIdentifierGenerator;
 import com.gaopc.platform.migration.DatabaseComponent;
 import com.gaopc.platform.migration.DatabaseMigrator;
 import com.gaopc.platform.migration.MigrationPlan;
-import com.gaopc.platform.order.application.OrderNotFoundException;
-import com.gaopc.platform.web.ProblemStatusResolver;
 import java.time.Clock;
 import java.util.List;
 import javax.sql.DataSource;
@@ -16,7 +13,6 @@ import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.http.HttpStatus;
 
 @Configuration(proxyBeanMethods = false)
 class OrderAppConfiguration {
@@ -34,19 +30,6 @@ class OrderAppConfiguration {
     @Bean
     UseCaseAuthorizer orderAuthorizer() {
         return new UseCaseAuthorizer();
-    }
-
-    @Bean
-    ProblemStatusResolver orderProblemStatusResolver() {
-        return exception -> {
-            if (exception instanceof OrderNotFoundException) {
-                return HttpStatus.NOT_FOUND;
-            }
-            if (exception instanceof PermissionDeniedException) {
-                return HttpStatus.FORBIDDEN;
-            }
-            return HttpStatus.UNPROCESSABLE_CONTENT;
-        };
     }
 
     @Bean

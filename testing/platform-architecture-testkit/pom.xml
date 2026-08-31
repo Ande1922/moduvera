@@ -104,6 +104,12 @@
       <scope>test</scope>
     </dependency>
     <dependency>
+      <groupId>com.gaopc.platform</groupId>
+      <artifactId>app-monolith</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter</artifactId>
       <scope>test</scope>
@@ -126,6 +132,7 @@
             <additionalClasspathElement>${maven.multiModuleProjectDirectory}/apps/inventory-app/target/classes</additionalClasspathElement>
             <additionalClasspathElement>${maven.multiModuleProjectDirectory}/apps/order-app/target/classes</additionalClasspathElement>
             <additionalClasspathElement>${maven.multiModuleProjectDirectory}/apps/gateway-app/target/classes</additionalClasspathElement>
+            <additionalClasspathElement>${maven.multiModuleProjectDirectory}/apps/app-monolith/target/classes</additionalClasspathElement>
           </additionalClasspathElements>
         </configuration>
       </plugin>

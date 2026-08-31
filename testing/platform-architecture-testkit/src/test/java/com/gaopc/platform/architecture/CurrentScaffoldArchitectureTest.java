@@ -19,6 +19,7 @@ class CurrentScaffoldArchitectureTest {
         assertImported("com.gaopc.platform.app.inventory.InventoryApplication");
         assertImported("com.gaopc.platform.app.order.OrderApplication");
         assertImported("com.gaopc.platform.app.gateway.GatewayApplication");
+        assertImported("com.gaopc.platform.app.monolith.PlatformMonolithApplication");
         assertImported("com.gaopc.platform.catalog.inbound.http.CatalogHttpController");
         assertImported("com.gaopc.platform.inventory.inbound.messaging.ReserveInventoryCommandInboundConfiguration");
         assertImported("com.gaopc.platform.order.inbound.http.OrderHttpController");
@@ -74,8 +75,8 @@ class CurrentScaffoldArchitectureTest {
     }
 
     @Test
-    void leafAppsOnlyAssembleInboundAdapters() {
-        PlatformArchitectureRules.LEAF_APPS_ONLY_ASSEMBLE_INBOUND_ADAPTERS.check(CURRENT_CLASSES);
+    void appAssembliesOnlySelectAndActivateInboundAdapters() {
+        PlatformArchitectureRules.APP_ASSEMBLIES_ONLY_ASSEMBLE_INBOUND_ADAPTERS.check(CURRENT_CLASSES);
     }
 
     @Test

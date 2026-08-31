@@ -133,6 +133,16 @@ class GatewayApplicationIT {
                 .orElseThrow();
         assertThat(correlation).isNotBlank();
         assertThat(ORDER_CORRELATION).hasValue(correlation);
+
+        HttpResponse<String> normalizedCorrelation =
+                get("/api/order/v1/orders/9001", "Bearer " + SESSION, "bad/value");
+        String normalized = normalizedCorrelation.headers()
+                .firstValue("X-Correlation-Id")
+                .orElseThrow();
+        assertThat(normalized)
+                .matches("[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+                .isNotEqualTo("bad/value");
+        assertThat(ORDER_CORRELATION).hasValue(normalized);
     }
 
     private HttpResponse<String> post(

@@ -10,7 +10,7 @@ import com.gaopc.platform.catalog.domain.ProductRepository;
 import com.gaopc.platform.catalog.infrastructure.persistence.CatalogProductMapper;
 import com.gaopc.platform.catalog.infrastructure.persistence.MybatisCatalogProductRepository;
 import com.gaopc.platform.catalog.inbound.http.CatalogHttpController;
-import com.gaopc.platform.web.ProblemStatusResolver;
+import com.gaopc.platform.web.ProblemStatusContributor;
 import java.lang.reflect.Proxy;
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -34,7 +34,7 @@ class CatalogConfigurationSlicesTest {
                     assertThat(context).hasSingleBean(CatalogApi.class);
                     assertThat(context).doesNotHaveBean(CatalogHttpController.class);
                     assertThat(context).doesNotHaveBean(CatalogProductMapper.class);
-                    assertThat(context).doesNotHaveBean(ProblemStatusResolver.class);
+                    assertThat(context).doesNotHaveBean(ProblemStatusContributor.class);
                 });
     }
 
@@ -57,7 +57,7 @@ class CatalogConfigurationSlicesTest {
                         CatalogInternalHttpConfiguration.class, InternalHttpDependencies.class)
                 .run(context -> {
                     assertThat(context).hasSingleBean(CatalogHttpController.class);
-                    assertThat(context).hasSingleBean(ProblemStatusResolver.class);
+                    assertThat(context).hasSingleBean(ProblemStatusContributor.class);
                     assertThat(context).doesNotHaveBean(ProductRepository.class);
                     assertThat(context).doesNotHaveBean(CatalogProductMapper.class);
                 });

@@ -24,10 +24,11 @@ public final class PlatformArchitectureRules {
         "com.gaopc.platform.inventory.inbound.messaging..",
         "com.gaopc.platform.order.inbound.messaging.."
     };
-    private static final String[] LEAF_APP_PACKAGES = {
+    private static final String[] APP_ASSEMBLY_PACKAGES = {
         "com.gaopc.platform.app.catalog..",
         "com.gaopc.platform.app.inventory..",
-        "com.gaopc.platform.app.order.."
+        "com.gaopc.platform.app.order..",
+        "com.gaopc.platform.app.monolith.."
     };
     private static final String GATEWAY_PACKAGE = "com.gaopc.platform.app.gateway..";
     private static final String[] BUSINESS_APPLICATION_PACKAGES = {
@@ -152,11 +153,11 @@ public final class PlatformArchitectureRules {
                             .resideInAnyPackage(BUSINESS_SERVICE_PACKAGES))
                     .as("the Gateway must not declare HTTP endpoints or depend on Business Service code");
 
-    public static final ArchRule LEAF_APPS_ONLY_ASSEMBLE_INBOUND_ADAPTERS =
-            withoutHttpMappingsIn(LEAF_APP_PACKAGES)
+    public static final ArchRule APP_ASSEMBLIES_ONLY_ASSEMBLE_INBOUND_ADAPTERS =
+            withoutHttpMappingsIn(APP_ASSEMBLY_PACKAGES)
                     .and(noClasses()
                             .that()
-                            .resideInAnyPackage(LEAF_APP_PACKAGES)
+                            .resideInAnyPackage(APP_ASSEMBLY_PACKAGES)
                             .should()
                             .dependOnClassesThat()
                             .resideInAnyPackage(
@@ -166,28 +167,34 @@ public final class PlatformArchitectureRules {
                                     "tools.jackson.."))
                     .and(noClasses()
                             .that()
-                            .resideInAnyPackage(LEAF_APP_PACKAGES)
+                            .resideInAnyPackage(APP_ASSEMBLY_PACKAGES)
                             .should()
-                            .dependOnClassesThat(JavaClass.Predicates.resideInAnyPackage(BUSINESS_APPLICATION_PACKAGES)
-                                    .and(JavaClass.Predicates.simpleNameEndingWith("Exception")
-                                            .negate())))
+                            .dependOnClassesThat()
+                            .resideInAnyPackage(BUSINESS_APPLICATION_PACKAGES))
+                    .and(noClasses()
+                            .that()
+                            .resideInAnyPackage(APP_ASSEMBLY_PACKAGES)
+                            .should()
+                            .dependOnClassesThat()
+                            .haveNameMatching(
+                                    "com\\.gaopc\\.platform\\.web\\.ProblemStatus(Contributor|Resolver)"))
                     .and(noMethods()
                             .that()
                             .areDeclaredInClassesThat()
-                            .resideInAnyPackage(LEAF_APP_PACKAGES)
+                            .resideInAnyPackage(APP_ASSEMBLY_PACKAGES)
                             .should()
                             .haveRawReturnType(java.util.function.Consumer.class))
                     .and(noClasses()
                             .that()
-                            .resideInAnyPackage(LEAF_APP_PACKAGES)
+                            .resideInAnyPackage(APP_ASSEMBLY_PACKAGES)
                             .should()
                             .haveSimpleNameEndingWith("MessageMapper"))
                     .and(noClasses()
                             .that()
-                            .resideInAnyPackage(LEAF_APP_PACKAGES)
+                            .resideInAnyPackage(APP_ASSEMBLY_PACKAGES)
                             .should()
                             .haveSimpleNameEndingWith("MessageHandler"))
-                    .as("leaf Apps must only assemble, not implement HTTP or message inbound adapters");
+                    .as("App Assemblies must only select and activate business inbound adapters");
 
     public static final ArchRule BUSINESS_HTTP_CONTROLLERS_BELONG_TO_PROVIDER_INBOUND = noClasses()
             .that()

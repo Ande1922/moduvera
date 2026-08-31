@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.gaopc.platform.app.gateway.architecturefixture.GatewayBusinessControllerViolation;
 import com.gaopc.platform.app.inventory.architecturefixture.LeafAppBusinessCallbackViolation;
+import com.gaopc.platform.app.monolith.architecturefixture.MonolithBusinessControllerViolation;
 import com.gaopc.platform.app.order.architecturefixture.LeafAppMessageHandlerViolation;
 import com.gaopc.platform.catalog.api.architecturefixture.TransportApiViolation;
 import com.gaopc.platform.inventory.architecturefixture.MisplacedInventoryMessageHandler;
@@ -24,13 +25,16 @@ class AssemblyArchitectureRulesTest {
     }
 
     @Test
-    void rejectsMessageHandlersInLeafApps() {
+    void rejectsBusinessInboundMappingsInAppAssemblies() {
         assertViolation(
-                PlatformArchitectureRules.LEAF_APPS_ONLY_ASSEMBLE_INBOUND_ADAPTERS,
+                PlatformArchitectureRules.APP_ASSEMBLIES_ONLY_ASSEMBLE_INBOUND_ADAPTERS,
                 LeafAppMessageHandlerViolation.class);
         assertViolation(
-                PlatformArchitectureRules.LEAF_APPS_ONLY_ASSEMBLE_INBOUND_ADAPTERS,
+                PlatformArchitectureRules.APP_ASSEMBLIES_ONLY_ASSEMBLE_INBOUND_ADAPTERS,
                 LeafAppBusinessCallbackViolation.class);
+        assertViolation(
+                PlatformArchitectureRules.APP_ASSEMBLIES_ONLY_ASSEMBLE_INBOUND_ADAPTERS,
+                MonolithBusinessControllerViolation.class);
     }
 
     @Test

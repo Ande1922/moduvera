@@ -1,5 +1,6 @@
 package com.gaopc.platform.app.gateway;
 
+import com.gaopc.platform.context.ExecutionContext;
 import java.util.UUID;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.filter.GlobalFilter;
@@ -31,7 +32,7 @@ final class CorrelationGlobalFilter implements GlobalFilter, Ordered {
     }
 
     private static String correlationId(String supplied) {
-        if (supplied == null || supplied.isBlank() || supplied.length() > 128) {
+        if (!ExecutionContext.isValidCorrelationId(supplied)) {
             return UUID.randomUUID().toString();
         }
         return supplied;
