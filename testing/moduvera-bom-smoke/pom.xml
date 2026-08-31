@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>io.github.ande1922.moduvera</groupId>
+    <artifactId>moduvera-parent</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <relativePath>../../pom.xml</relativePath>
+  </parent>
+
+  <artifactId>moduvera-bom-smoke</artifactId>
+  <name>Moduvera :: Testing :: BOM Consumer Smoke</name>
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>io.github.ande1922.moduvera</groupId>
+        <artifactId>moduvera-bom</artifactId>
+        <version>${project.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <dependencies>
+    <dependency>
+      <groupId>io.github.ande1922.moduvera</groupId>
+      <artifactId>moduvera-kernel</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.github.ande1922.moduvera</groupId>
+      <artifactId>moduvera-message-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.assertj</groupId>
+      <artifactId>assertj-core</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+</project>

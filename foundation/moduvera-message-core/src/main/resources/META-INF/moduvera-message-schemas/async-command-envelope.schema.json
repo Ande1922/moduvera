@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:moduvera:schema:message:async-command-envelope:1",
+  "title": "Moduvera asynchronous command envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind", "id", "source", "type", "destination", "time",
+    "contenttype", "tenantid", "actortype", "actorsubject",
+    "correlationid", "initiatortype", "initiatorsubject", "partitionkey", "payload"
+  ],
+  "properties": {
+    "kind": { "const": "async-command" },
+    "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "source": { "type": "string", "format": "uri" },
+    "type": { "type": "string", "pattern": "\\.v[1-9][0-9]*$" },
+    "destination": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "time": { "type": "string", "format": "date-time" },
+    "contenttype": { "type": "string", "minLength": 1 },
+    "tenantid": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "actortype": { "enum": ["USER", "SERVICE", "SYSTEM"] },
+    "actorsubject": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "correlationid": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "causationid": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "initiatortype": { "enum": ["USER", "SERVICE", "SYSTEM"] },
+    "initiatorsubject": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "partitionkey": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "payload": true
+  }
+}

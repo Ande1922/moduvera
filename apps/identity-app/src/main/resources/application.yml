@@ -1,0 +1,24 @@
+server:
+  port: ${IDENTITY_PORT:8081}
+
+spring:
+  application:
+    name: identity-app
+  datasource:
+    url: ${IDENTITY_DATABASE_URL:jdbc:postgresql://localhost:5432/identity}
+    username: ${IDENTITY_DATABASE_USER}
+    password: ${IDENTITY_DATABASE_PASSWORD}
+  flyway:
+    enabled: false
+
+identity:
+  issuer: ${IDENTITY_ISSUER:http://localhost:8081}
+  session-ttl: ${IDENTITY_SESSION_TTL:8h}
+  jwt-ttl: ${IDENTITY_JWT_TTL:5m}
+  allowed-audiences:
+    - catalog-service
+    - order-service
+
+logging:
+  level:
+    org.springframework.security: INFO

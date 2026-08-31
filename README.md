@@ -1,4 +1,4 @@
-# Gaopc Java Microservice Scaffold
+# Moduvera — A Verifiable Java Service Platform
 
 This repository is an executable Spring Boot 4.1.1/JDK 26 platform scaffold plus a non-trivial multi-tenant order-fulfillment reference product. PostgreSQL is the Golden Path, MyBatis-Plus is the selected ORM, Kafka is the selected broker, and MySQL is maintained through focused compatibility tests rather than a second end-to-end matrix. The five-App microservice topology is the Golden Path; a focused business-core modular monolith is also supported behind the same Gateway and Identity trust boundary.
 

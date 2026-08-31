@@ -1,0 +1,71 @@
+{
+  "probe_id": "codex-cli-resume-usage-20260830-01",
+  "status": "PASS_WITH_WARNINGS",
+  "executed_at": "2026-08-30T03:42:23Z",
+  "codex_cli_version": "0.144.4",
+  "authentication": "ChatGPT",
+  "model_requested": "gpt-5.6-sol",
+  "reasoning_effort_requested": "high",
+  "service_tier_requested": "default",
+  "sandbox": "read-only",
+  "working_directory": "/private/tmp",
+  "thread_id": "01a050c2-f0f0-7051-808c-518015a547d0",
+  "initial": {
+    "expected_message": "CAL1",
+    "observed_message": "CAL1",
+    "events": "initial.jsonl",
+    "events_sha256": "405dab70ef22d0eb77820f1f05308c4c4ade5f6227ca4b63362112ad5adadb21",
+    "input_tokens_cumulative": 23652,
+    "cached_input_tokens_cumulative": 9984,
+    "output_tokens_cumulative": 6,
+    "reasoning_output_tokens_cumulative": 0
+  },
+  "resume": {
+    "expected_message": "CAL2",
+    "observed_message": "CAL2",
+    "events": "resume.jsonl",
+    "events_sha256": "7bff0f48da93b8240c56249ab57b37a82073ae61eab9232f775af11877d741d7",
+    "input_tokens_cumulative": 47774,
+    "cached_input_tokens_cumulative": 33280,
+    "output_tokens_cumulative": 12,
+    "reasoning_output_tokens_cumulative": 0
+  },
+  "calibration": {
+    "usage_semantics": "session-cumulative",
+    "turns": 2,
+    "input_tokens": 47774,
+    "cached_input_tokens": 33280,
+    "uncached_input_tokens": 14494,
+    "output_tokens": 12,
+    "reasoning_output_tokens": 0,
+    "visible_output_tokens": 12,
+    "gross_total_tokens": 47786,
+    "turn_deltas": [
+      {
+        "turn": 1,
+        "input_tokens": 23652,
+        "cached_input_tokens": 9984,
+        "output_tokens": 6,
+        "reasoning_output_tokens": 0,
+        "gross_total_tokens": 23658
+      },
+      {
+        "turn": 2,
+        "input_tokens": 24122,
+        "cached_input_tokens": 23296,
+        "output_tokens": 6,
+        "reasoning_output_tokens": 0,
+        "gross_total_tokens": 24128
+      }
+    ]
+  },
+  "warnings": [
+    "the local model-cache schema lacked base_instructions",
+    "the background model-list refresh timed out",
+    "MCP shutdown emitted bounded process-group/handshake warnings"
+  ],
+  "limitations": [
+    "JSONL identifies the requested configuration and thread but does not emit a separately resolved model snapshot",
+    "this probe calibrates usage semantics only; it is not a candidate implementation run"
+  ]
+}

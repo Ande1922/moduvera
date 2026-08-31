@@ -3,54 +3,54 @@
   <modelVersion>4.0.0</modelVersion>
 
   <parent>
-    <groupId>com.gaopc.platform</groupId>
-    <artifactId>platform-parent</artifactId>
+    <groupId>io.github.ande1922.moduvera</groupId>
+    <artifactId>moduvera-parent</artifactId>
     <version>0.1.0-SNAPSHOT</version>
     <relativePath>../../pom.xml</relativePath>
   </parent>
 
   <artifactId>app-monolith</artifactId>
-  <name>Gaopc Platform :: App :: Monolith</name>
+  <name>Moduvera :: App :: Monolith</name>
 
   <dependencies>
     <dependency>
-      <groupId>com.gaopc.platform</groupId>
+      <groupId>io.github.ande1922.moduvera</groupId>
       <artifactId>catalog-service</artifactId>
       <version>${project.version}</version>
     </dependency>
     <dependency>
-      <groupId>com.gaopc.platform</groupId>
+      <groupId>io.github.ande1922.moduvera</groupId>
       <artifactId>order-service</artifactId>
       <version>${project.version}</version>
     </dependency>
     <dependency>
-      <groupId>com.gaopc.platform</groupId>
+      <groupId>io.github.ande1922.moduvera</groupId>
       <artifactId>inventory-service</artifactId>
       <version>${project.version}</version>
     </dependency>
     <dependency>
-      <groupId>com.gaopc.platform</groupId>
-      <artifactId>platform-web-spring-boot-starter</artifactId>
+      <groupId>io.github.ande1922.moduvera</groupId>
+      <artifactId>moduvera-web-spring-boot-starter</artifactId>
       <version>${project.version}</version>
     </dependency>
     <dependency>
-      <groupId>com.gaopc.platform</groupId>
-      <artifactId>platform-auth-resource-server-autoconfigure</artifactId>
+      <groupId>io.github.ande1922.moduvera</groupId>
+      <artifactId>moduvera-auth-resource-server-autoconfigure</artifactId>
       <version>${project.version}</version>
     </dependency>
     <dependency>
-      <groupId>com.gaopc.platform</groupId>
-      <artifactId>platform-data-mybatis-plus-spring-boot-starter</artifactId>
+      <groupId>io.github.ande1922.moduvera</groupId>
+      <artifactId>moduvera-data-mybatis-plus-spring-boot-starter</artifactId>
       <version>${project.version}</version>
     </dependency>
     <dependency>
-      <groupId>com.gaopc.platform</groupId>
-      <artifactId>platform-messaging-kafka-spring-boot-starter</artifactId>
+      <groupId>io.github.ande1922.moduvera</groupId>
+      <artifactId>moduvera-messaging-kafka-spring-boot-starter</artifactId>
       <version>${project.version}</version>
     </dependency>
     <dependency>
-      <groupId>com.gaopc.platform</groupId>
-      <artifactId>platform-database-migration</artifactId>
+      <groupId>io.github.ande1922.moduvera</groupId>
+      <artifactId>moduvera-database-migration</artifactId>
       <version>${project.version}</version>
     </dependency>
 

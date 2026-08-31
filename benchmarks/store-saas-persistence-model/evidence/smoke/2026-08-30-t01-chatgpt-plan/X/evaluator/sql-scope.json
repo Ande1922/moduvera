@@ -1,0 +1,1 @@
+{"assertion_id": "T01-H04", "errors": [], "statements": ["CandidateStoreMapper.xml:findById", "CandidateStoreMapper.xml:updateByVersion"], "status": "PASS"}

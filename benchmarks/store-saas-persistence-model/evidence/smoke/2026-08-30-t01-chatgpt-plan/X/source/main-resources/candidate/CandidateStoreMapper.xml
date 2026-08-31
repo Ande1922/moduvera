@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+    PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+    "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.gaopc.benchmark.store.candidate.CandidateStoreMapper">
+  <resultMap id="storeResult" type="com.gaopc.benchmark.store.shared.Store" autoMapping="false">
+    <id
+        property="id"
+        column="store_id"
+        javaType="com.gaopc.benchmark.store.shared.StoreId"
+        typeHandler="com.gaopc.benchmark.store.candidate.StoreIdTypeHandler" />
+    <result
+        property="tenantId"
+        column="tenant_id"
+        javaType="com.gaopc.benchmark.store.shared.TenantId"
+        typeHandler="com.gaopc.benchmark.store.candidate.TenantIdTypeHandler" />
+    <result property="code" column="code" />
+    <result property="name" column="name" />
+    <result property="timeZoneId" column="time_zone_id" />
+    <result
+        property="status"
+        column="status"
+        javaType="com.gaopc.benchmark.store.shared.StoreStatus" />
+    <result property="version" column="version" />
+    <association
+        property="audit"
+        javaType="com.gaopc.benchmark.store.shared.AuditMetadata"
+        notNullColumn="created_at">
+      <result property="createdAt" column="created_at" javaType="java.time.Instant" />
+      <result
+          property="createdByType"
+          column="created_by_type"
+          javaType="com.gaopc.benchmark.store.shared.ActorType" />
+      <result property="createdById" column="created_by_id" />
+      <result property="updatedAt" column="updated_at" javaType="java.time.Instant" />
+      <result
+          property="updatedByType"
+          column="updated_by_type"
+          javaType="com.gaopc.benchmark.store.shared.ActorType" />
+      <result property="updatedById" column="updated_by_id" />
+    </association>
+  </resultMap>
+
+  <sql id="storeColumns">
+    tenant_id,
+    store_id,
+    code,
+    name,
+    time_zone_id,
+    status,
+    version,
+    created_at,
+    created_by_type,
+    created_by_id,
+    updated_at,
+    updated_by_type,
+    updated_by_id
+  </sql>
+
+  <select id="findById" resultMap="storeResult">
+    SELECT
+      <include refid="storeColumns" />
+    FROM store_location
+    WHERE tenant_id = #{tenantId}
+      AND store_id = #{storeId}
+  </select>
+
+  <insert id="insert">
+    INSERT INTO store_location (
+      tenant_id,
+      store_id,
+      code,
+      name,
+      time_zone_id,
+      status,
+      version,
+      created_at,
+      created_by_type,
+      created_by_id,
+      updated_at,
+      updated_by_type,
+      updated_by_id
+    ) VALUES (
+      #{tenantId},
+      #{store.id.value},
+      #{store.code},
+      #{store.name},
+      #{store.timeZoneId},
+      'ACTIVE',
+      0,
+      #{auditTime},
+      #{actorType},
+      #{actorId},
+      #{auditTime},
+      #{actorType},
+      #{actorId}
+    )
+  </insert>
+
+  <update id="updateByVersion">
+    UPDATE store_location
+    SET name = #{store.name},
+        status = #{store.status},
+        version = version + 1,
+        updated_at = #{auditTime},
+        updated_by_type = #{actorType},
+        updated_by_id = #{actorId}
+    WHERE tenant_id = #{tenantId}
+      AND store_id = #{store.id.value}
+      AND version = #{store.version}
+  </update>
+</mapper>

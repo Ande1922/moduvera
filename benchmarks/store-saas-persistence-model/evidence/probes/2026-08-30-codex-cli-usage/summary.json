@@ -1,0 +1,51 @@
+{
+  "probe_id": "codex-cli-usage-20260830-01",
+  "status": "PASS_WITH_LIMITATIONS",
+  "executed_at": "2026-08-30T02:48:22Z",
+  "codex_cli_version": "0.144.4",
+  "command_argv": [
+    "codex",
+    "exec",
+    "--json",
+    "--ephemeral",
+    "--skip-git-repo-check",
+    "-C",
+    "/private/tmp",
+    "--sandbox",
+    "read-only",
+    "Reply with exactly: OK"
+  ],
+  "exit_code": 0,
+  "wall_time_seconds": 13.312023042,
+  "model_requested": null,
+  "reasoning_effort_requested": null,
+  "raw_events": "events.jsonl",
+  "usage": {
+    "usage_semantics": "single",
+    "turns": 1,
+    "input_tokens": 23084,
+    "cached_input_tokens": 0,
+    "uncached_input_tokens": 23084,
+    "output_tokens": 5,
+    "reasoning_output_tokens": 0,
+    "visible_output_tokens": 5,
+    "gross_total_tokens": 23089
+  },
+  "observations": [
+    "codex exec --json emitted a turn.completed usage object with all required fields",
+    "a one-word response still loaded enough implicit context to consume 23084 input tokens",
+    "the event did not identify the effective model or reasoning effort"
+  ],
+  "warnings_observed": [
+    "local model-cache entry lacked base_instructions",
+    "some plugin icon paths were ignored",
+    "state database lookup used fallback",
+    "recommended plugin catalog parsing failed",
+    "one MCP shutdown path reported a handshake failure"
+  ],
+  "limitations": [
+    "stderr was mixed into the invoking tool output and was summarized rather than persisted verbatim",
+    "the probe has one turn and does not establish resume-turn usage semantics",
+    "the probe proves local CLI fields, not Pilot reproducibility or effective-model provenance"
+  ]
+}

@@ -1,0 +1,40 @@
+spring:
+  application:
+    name: simple-notes-demo
+  datasource:
+    url: ${NOTES_DB_URL:jdbc:postgresql://localhost:5432/notes_demo}
+    username: ${NOTES_DB_USERNAME:notes}
+    password: ${NOTES_DB_PASSWORD:notes}
+  flyway:
+    enabled: false
+  cloud:
+    function:
+      definition: noteCreated
+    stream:
+      bindings:
+        noteCreated-in-0:
+          destination: ${NOTES_TOPIC:notes-events}
+          group: ${NOTES_CONSUMER_GROUP:notes-demo}
+        notesCreated-out-0:
+          destination: ${NOTES_TOPIC:notes-events}
+        alwaysFail-in-0:
+          destination: ${NOTES_FAILURE_TOPIC:notes-failure}
+          group: ${NOTES_FAILURE_GROUP:notes-failure-demo}
+        alwaysFail-out-0:
+          destination: ${NOTES_FAILURE_TOPIC:notes-failure}
+
+moduvera:
+  messaging:
+    kafka:
+      routes:
+        notes.events: notesCreated-out-0
+        failure.events: alwaysFail-out-0
+      consumer-bindings:
+        - noteCreated-in-0
+        - alwaysFail-in-0
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

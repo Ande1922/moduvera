@@ -6,15 +6,15 @@ This is the only current status source for the repository. Status is based on ex
 
 | Artifact/capability | Supported behavior | Evidence boundary |
 |---|---|---|
-| `platform-dependencies` | Version management for platform and governed third-party coordinates | versionless BOM smoke and independent-parent Notes consumer |
-| `platform-kernel` | coded errors, execution/tenant/actor/initiator context, authorization, identifiers, paging and `TransactionBoundary`, separated by package | framework-free tests plus architecture rules; platform/virtual-thread snapshot propagation tests |
-| `platform-web-spring-boot-starter` | native success bodies, validation, correlation and RFC 9457 errors | starter contract tests, Notes HTTP and dual-topology public black box |
-| `platform-auth-resource-server-autoconfigure` | signed JWT issuer/audience checks, USER/SERVICE tenant rules, fail-closed context lifecycle and 401/403 responses | signed-token App tests, virtual-thread HTTP and public Gateway flow |
-| `platform-data-mybatis-plus-spring-boot-starter` | MyBatis-Plus 3.5.17, context-derived tenant enforcement and one READ_COMMITTED top-level transaction boundary | PostgreSQL consumer Apps/Notes and real MySQL repository TCK |
-| `platform-database-migration` | component identity, private history, guarded baseline/migrate/validate | PostgreSQL/MySQL migration tests and all persistent Apps |
-| `platform-message-core` | transport-neutral Event/Async Command descriptors, durable Outbox state machine and atomic Inbox contract | unit contracts plus PostgreSQL/MySQL store integration |
-| `platform-messaging-kafka-spring-boot-starter` | Cloud Stream imperative model, structured CloudEvents for Events, distinct async-command envelope, logical route mapping, synchronous broker ACK, JDBC Outbox/Inbox, bounded retry and Kafka DLQ integration | real Kafka Notes/App tests, topology-specific duplicate-delivery ITs and dual-topology recovery black box |
-| `platform-test-support` | deterministic clocks, bounded eventually and run identifiers | test-scope consumers only |
+| `moduvera-bom` | Version management for platform and governed third-party coordinates | versionless BOM smoke and independent-parent Notes consumer |
+| `moduvera-kernel` | coded errors, execution/tenant/actor/initiator context, authorization, identifiers, paging and `TransactionBoundary`, separated by package | framework-free tests plus architecture rules; platform/virtual-thread snapshot propagation tests |
+| `moduvera-web-spring-boot-starter` | native success bodies, validation, correlation and RFC 9457 errors | starter contract tests, Notes HTTP and dual-topology public black box |
+| `moduvera-auth-resource-server-autoconfigure` | signed JWT issuer/audience checks, USER/SERVICE tenant rules, fail-closed context lifecycle and 401/403 responses | signed-token App tests, virtual-thread HTTP and public Gateway flow |
+| `moduvera-data-mybatis-plus-spring-boot-starter` | MyBatis-Plus 3.5.17, context-derived tenant enforcement and one READ_COMMITTED top-level transaction boundary | PostgreSQL consumer Apps/Notes and real MySQL repository TCK |
+| `moduvera-database-migration` | component identity, private history, guarded baseline/migrate/validate | PostgreSQL/MySQL migration tests and all persistent Apps |
+| `moduvera-message-core` | transport-neutral Event/Async Command descriptors, durable Outbox state machine and atomic Inbox contract | unit contracts plus PostgreSQL/MySQL store integration |
+| `moduvera-messaging-kafka-spring-boot-starter` | Cloud Stream imperative model, structured CloudEvents for Events, distinct async-command envelope, logical route mapping, synchronous broker ACK, JDBC Outbox/Inbox, bounded retry and Kafka DLQ integration | real Kafka Notes/App tests, topology-specific duplicate-delivery ITs and dual-topology recovery black box |
+| `moduvera-test-support` | deterministic clocks, bounded eventually and run identifiers | test-scope consumers only |
 
 The supported database default is PostgreSQL. MySQL is supported as a compatibility target for Catalog, Order, Inventory and messaging persistence contracts; it does not own Gateway/Kafka end-to-end, AI/vector, performance or failure-recovery claims.
 
@@ -27,9 +27,9 @@ The supported database default is PostgreSQL. MySQL is supported as a compatibil
 
 ## Incubating
 
-- `platform-lock-core`, `platform-lock-local` and `platform-scheduler-spring-boot-starter`: tested local behavior, but no distributed lock adapter and no reference-product consumer.
-- `platform-object-storage-api`: contract only; no S3 adapter or business consumer.
-- `platform-architecture-testkit`: repository-internal gate; not yet an external testing product.
+- `moduvera-lock-core`, `moduvera-lock-local` and `moduvera-scheduler-spring-boot-starter`: tested local behavior, but no distributed lock adapter and no reference-product consumer.
+- `moduvera-object-storage-api`: contract only; no S3 adapter or business consumer.
+- `moduvera-architecture-testkit`: repository-internal gate; not yet an external testing product.
 
 ## Planned
 

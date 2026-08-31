@@ -1,0 +1,45 @@
+spring:
+  application:
+    name: inventory-app
+  datasource:
+    url: ${INVENTORY_DATABASE_URL:jdbc:postgresql://localhost:5432/inventory}
+    username: ${INVENTORY_DATABASE_USERNAME:inventory}
+    password: ${INVENTORY_DATABASE_PASSWORD:inventory}
+  flyway:
+    enabled: false
+  cloud:
+    function:
+      definition: reserveInventory
+    stream:
+      bindings:
+        reserveInventory-in-0:
+          destination: ${INVENTORY_RESERVE_TOPIC:inventory-reserve}
+          group: inventory-service
+        inventoryResult-out-0:
+          destination: ${INVENTORY_RESULT_TOPIC:inventory-result}
+          producer:
+            use-native-encoding: true
+      kafka:
+        binder:
+          brokers: ${KAFKA_BROKERS:localhost:9092}
+        bindings:
+          inventoryResult-out-0:
+            producer:
+              sync: true
+              configuration:
+                acks: all
+                key.serializer: org.apache.kafka.common.serialization.StringSerializer
+                value.serializer: org.apache.kafka.common.serialization.ByteArraySerializer
+moduvera:
+  messaging:
+    kafka:
+      consumer-bindings: [reserveInventory-in-0]
+      routes:
+        order.inventory-result: inventoryResult-out-0
+server:
+  port: ${INVENTORY_PORT:8084}
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

@@ -17,7 +17,7 @@ if [[ "${REFERENCE_SKIP_BUILD:-0}" != "1" ]]; then
   "$PROJECT_ROOT/mvnw" -q clean install
   # These topology-specific tests inject duplicate deliveries below the public seam. Exposing a
   # production test endpoint merely for duplicate injection would weaken the black-box boundary.
-  echo "Focused duplicate-delivery evidence: PASS (OrderApplicationIT, InventoryApplicationIT, PlatformMonolithApplicationIT)"
+  echo "Focused duplicate-delivery evidence: PASS (OrderApplicationIT, InventoryApplicationIT, ModuveraMonolithApplicationIT)"
 fi
 
 if [[ "$TOPOLOGY" == "all" ]]; then

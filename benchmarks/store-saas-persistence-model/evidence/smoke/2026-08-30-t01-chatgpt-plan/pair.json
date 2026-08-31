@@ -1,0 +1,84 @@
+{
+  "schema_version": "t01-unscored-smoke-v1",
+  "experiment_id": "2026-08-30-t01-chatgpt-plan",
+  "scored": false,
+  "task_id": "T01",
+  "randomization": {
+    "seed": 20260830,
+    "X": "U",
+    "Y": "S"
+  },
+  "authentication": {
+    "mode": "chatgpt",
+    "access_route": "chatgpt-plan",
+    "api_key_fallback_allowed": false,
+    "preflight_status": "Logged in using ChatGPT"
+  },
+  "agent": {
+    "cli": "codex-cli 0.144.4",
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "high",
+    "service_tier": "default",
+    "approval_policy": "never",
+    "sandbox": "workspace-write"
+  },
+  "environment": {
+    "jdk": "OpenJDK 26+35-2893",
+    "database_image": "mysql:8.4.11",
+    "database_image_id": "sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb",
+    "database_binding": "127.0.0.1:32768"
+  },
+  "inputs": {
+    "seed_tree_sha256": "baca4e175a35b803c9cc1f64e3c08964b831f789da651501a4c07f71988bc342",
+    "frozen_manifest_sha256": "6daa4c7280bbb125c7bd9089ced24b7d23f3f152cb4a20e0d8fadfb4b5c21b0c",
+    "X_prompt_sha256": "f4c7eb287bd5b50608f27b74cabc2d5543e2553102de1219dd6b4087b8d6c18e",
+    "Y_prompt_sha256": "1644a869495337d8485374748f86ff2006b8b32464dcc1b6e5a54f271b7ed626"
+  },
+  "candidates": {
+    "X": {
+      "variant": "U",
+      "thread_id": "01a050ea-dea2-7cb3-8c8d-052322175b07",
+      "initial_turns": 1,
+      "repair_turns": 0,
+      "usage": {
+        "input_tokens": 3234744,
+        "cached_input_tokens": 3128320,
+        "uncached_input_tokens": 106424,
+        "output_tokens": 17200,
+        "reasoning_output_tokens": 6701
+      },
+      "gates": {
+        "frozen_integrity": "PASS",
+        "structure_T01_U01": "PASS",
+        "sql_scope_T01_H04": "PASS",
+        "public": {"tests": 8, "failures": 0, "errors": 0, "skipped": 0},
+        "hidden": {"tests": 8, "failures": 0, "errors": 0, "skipped": 0}
+      }
+    },
+    "Y": {
+      "variant": "S",
+      "thread_id": "01a050f6-6868-7702-a5d1-70291f1cdc5d",
+      "initial_turns": 1,
+      "repair_turns": 0,
+      "usage": {
+        "input_tokens": 1868879,
+        "cached_input_tokens": 1795328,
+        "uncached_input_tokens": 73551,
+        "output_tokens": 13905,
+        "reasoning_output_tokens": 5142
+      },
+      "gates": {
+        "frozen_integrity": "PASS",
+        "structure_T01_S01": "PASS",
+        "sql_scope_T01_H04": "PASS",
+        "public": {"tests": 8, "failures": 0, "errors": 0, "skipped": 0},
+        "hidden": {"tests": 8, "failures": 0, "errors": 0, "skipped": 0}
+      }
+    }
+  },
+  "limitations": [
+    "This is one unscored smoke pair and cannot establish an S-versus-U winner.",
+    "Evaluator sources were not copied into candidate workspaces, but smoke isolation was not equivalent to the planned scored worktree/container boundary.",
+    "The Y agent's internal seed-test attempt used the system JDK 21; only the independent host evaluator's JDK 26 public and hidden results count as gates."
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "usage_semantics": "session-cumulative",
+  "turns": 1,
+  "input_tokens": 3234744,
+  "cached_input_tokens": 3128320,
+  "uncached_input_tokens": 106424,
+  "output_tokens": 17200,
+  "reasoning_output_tokens": 6701,
+  "visible_output_tokens": 10499,
+  "gross_total_tokens": 3251944,
+  "per_turn": [
+    {
+      "turn": 1,
+      "input_tokens": 3234744,
+      "cached_input_tokens": 3128320,
+      "output_tokens": 17200,
+      "reasoning_output_tokens": 6701,
+      "uncached_input_tokens": 106424,
+      "visible_output_tokens": 10499,
+      "gross_total_tokens": 3251944
+    }
+  ]
+}

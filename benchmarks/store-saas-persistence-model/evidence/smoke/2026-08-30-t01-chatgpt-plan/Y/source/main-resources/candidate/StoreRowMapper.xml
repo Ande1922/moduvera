@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+    PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+    "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.gaopc.benchmark.store.candidate.StoreRowMapper">
+  <resultMap id="storeRow" type="com.gaopc.benchmark.store.candidate.StoreRow" autoMapping="false">
+    <id property="storeId" column="store_id" javaType="long"/>
+    <result property="tenantId" column="tenant_id" javaType="java.lang.String"/>
+    <result property="code" column="code" javaType="java.lang.String"/>
+    <result property="name" column="name" javaType="java.lang.String"/>
+    <result property="timeZoneId" column="time_zone_id" javaType="java.lang.String"/>
+    <result property="status" column="status" javaType="java.lang.String"/>
+    <result property="version" column="version" javaType="long"/>
+    <result property="createdAt" column="created_at" javaType="java.time.LocalDateTime"/>
+    <result property="createdByType" column="created_by_type" javaType="java.lang.String"/>
+    <result property="createdById" column="created_by_id" javaType="java.lang.String"/>
+    <result property="updatedAt" column="updated_at" javaType="java.time.LocalDateTime"/>
+    <result property="updatedByType" column="updated_by_type" javaType="java.lang.String"/>
+    <result property="updatedById" column="updated_by_id" javaType="java.lang.String"/>
+  </resultMap>
+
+  <sql id="columns">
+    tenant_id,
+    store_id,
+    code,
+    name,
+    time_zone_id,
+    status,
+    version,
+    created_at,
+    created_by_type,
+    created_by_id,
+    updated_at,
+    updated_by_type,
+    updated_by_id
+  </sql>
+
+  <select id="selectByTenantAndId" resultMap="storeRow">
+    SELECT <include refid="columns"/>
+    FROM store_location
+    WHERE tenant_id = #{tenantId}
+      AND store_id = #{storeId}
+  </select>
+
+  <insert id="insert" parameterType="com.gaopc.benchmark.store.candidate.StoreRow">
+    INSERT INTO store_location (
+      <include refid="columns"/>
+    ) VALUES (
+      #{tenantId},
+      #{storeId},
+      #{code},
+      #{name},
+      #{timeZoneId},
+      #{status},
+      #{version},
+      #{createdAt},
+      #{createdByType},
+      #{createdById},
+      #{updatedAt},
+      #{updatedByType},
+      #{updatedById}
+    )
+  </insert>
+
+  <update id="updateByTenantIdAndVersion"
+          parameterType="com.gaopc.benchmark.store.candidate.StoreRow">
+    UPDATE store_location
+    SET name = #{name},
+        status = #{status},
+        version = version + 1,
+        updated_at = #{updatedAt},
+        updated_by_type = #{updatedByType},
+        updated_by_id = #{updatedById}
+    WHERE tenant_id = #{tenantId}
+      AND store_id = #{storeId}
+      AND version = #{version}
+  </update>
+</mapper>

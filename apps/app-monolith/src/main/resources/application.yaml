@@ -1,6 +1,6 @@
 spring:
   application:
-    name: platform-monolith
+    name: moduvera-reference-monolith
   datasource:
     url: ${BUSINESS_DATABASE_URL:jdbc:postgresql://localhost:5432/business}
     username: ${BUSINESS_DATABASE_USERNAME:business}
@@ -52,7 +52,7 @@ spring:
           jwk-set-uri: ${IDENTITY_JWKS_URI:http://localhost:8081/oauth2/jwks}
           audiences: [order-service]
 
-platform:
+moduvera:
   messaging:
     kafka:
       consumer-bindings: [reserveInventory-in-0, inventoryResult-in-0]

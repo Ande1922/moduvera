@@ -14,7 +14,7 @@ source "$CONFIG_FILE"
 
 COMPOSE_FILE="$PROJECT_ROOT/deployment/reference/docker-compose.yml"
 RUN_ID="$(date +%s)-$$-$TOPOLOGY"
-COMPOSE_PROJECT="${REFERENCE_COMPOSE_PROJECT:-platform-reference-$RUN_ID}"
+COMPOSE_PROJECT="${REFERENCE_COMPOSE_PROJECT:-moduvera-reference-$RUN_ID}"
 KAFKA_PORT="${REFERENCE_KAFKA_PORT:-59092}"
 POSTGRES_PORT="${REFERENCE_POSTGRES_PORT:-55432}"
 GATEWAY_PORT="${REFERENCE_GATEWAY_PORT:-58080}"
@@ -25,7 +25,7 @@ INVENTORY_PORT="${REFERENCE_INVENTORY_PORT:-58084}"
 MONOLITH_PORT="${REFERENCE_MONOLITH_PORT:-58085}"
 HEALTH_TIMEOUT_SECONDS="${REFERENCE_HEALTH_TIMEOUT_SECONDS:-180}"
 REFERENCE_JAVA_TOOL_OPTIONS="${REFERENCE_JAVA_TOOL_OPTIONS:--Xms64m -Xmx256m}"
-RUN_DIR="$(mktemp -d "${TMPDIR:-/tmp}/platform-reference.XXXXXX")"
+RUN_DIR="$(mktemp -d "${TMPDIR:-/tmp}/moduvera-reference.XXXXXX")"
 STATE_FILE="$RUN_DIR/recovery-order-id"
 FAILED=1
 JAVA_BIN="${JAVA_HOME:-}/bin/java"
@@ -37,9 +37,9 @@ diagnostics() {
   echo "Reference-product diagnostics for $REFERENCE_TOPOLOGY_NAME (secrets and payloads omitted)" >&2
   compose ps >&2 || true
   for database in orders inventory; do
-    if [[ "$(compose exec -T postgres psql -At -U postgres -d "$database" -c "SELECT to_regclass('platform_message_outbox')" 2>/dev/null || true)" == "platform_message_outbox" ]]; then
+    if [[ "$(compose exec -T postgres psql -At -U postgres -d "$database" -c "SELECT to_regclass('moduvera_message_outbox')" 2>/dev/null || true)" == "moduvera_message_outbox" ]]; then
       compose exec -T postgres psql -U postgres -d "$database" -c \
-        "SELECT message_id,status,attempt_count,next_attempt_at,published_at,terminal_at,last_failure FROM platform_message_outbox ORDER BY occurred_at DESC LIMIT 12" >&2 || true
+        "SELECT message_id,status,attempt_count,next_attempt_at,published_at,terminal_at,last_failure FROM moduvera_message_outbox ORDER BY occurred_at DESC LIMIT 12" >&2 || true
     fi
   done
   for app in identity catalog order inventory monolith gateway; do
@@ -143,7 +143,7 @@ start_catalog() {
   start_app catalog apps/catalog-app/target/catalog-app-0.1.0-SNAPSHOT.jar \
     "CATALOG_PORT=$CATALOG_PORT" "CATALOG_DB_URL=jdbc:postgresql://localhost:$POSTGRES_PORT/catalog" \
     CATALOG_DB_USERNAME=catalog CATALOG_DB_PASSWORD=catalog-reference \
-    "PLATFORM_JWT_ISSUER=http://localhost:$IDENTITY_PORT" "PLATFORM_JWKS_URI=http://localhost:$IDENTITY_PORT/oauth2/jwks"
+    "IDENTITY_ISSUER_URI=http://localhost:$IDENTITY_PORT" "IDENTITY_JWKS_URI=http://localhost:$IDENTITY_PORT/oauth2/jwks"
   wait_http catalog "http://localhost:$CATALOG_PORT/actuator/health"
 }
 

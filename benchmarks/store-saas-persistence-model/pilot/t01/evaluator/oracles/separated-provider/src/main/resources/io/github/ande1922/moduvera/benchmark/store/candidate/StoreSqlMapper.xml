@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+    PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+    "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="io.github.ande1922.moduvera.benchmark.store.candidate.StoreSqlMapper">
+  <resultMap id="storeRow" type="io.github.ande1922.moduvera.benchmark.store.candidate.StoreRow">
+    <id property="storeId" column="store_id" javaType="long"/>
+    <result property="tenantId" column="tenant_id" javaType="java.lang.String"/>
+    <result property="code" column="code" javaType="java.lang.String"/>
+    <result property="name" column="name" javaType="java.lang.String"/>
+    <result property="timeZoneId" column="time_zone_id" javaType="java.lang.String"/>
+    <result property="status" column="status"/>
+    <result property="version" column="version" javaType="long"/>
+    <result property="createdAt" column="created_at" javaType="java.time.LocalDateTime"/>
+    <result property="createdByType" column="created_by_type"/>
+    <result property="createdById" column="created_by_id" javaType="java.lang.String"/>
+    <result property="updatedAt" column="updated_at" javaType="java.time.LocalDateTime"/>
+    <result property="updatedByType" column="updated_by_type"/>
+    <result property="updatedById" column="updated_by_id" javaType="java.lang.String"/>
+  </resultMap>
+
+  <select id="selectById" resultMap="storeRow">
+    SELECT tenant_id,
+           store_id,
+           code,
+           name,
+           time_zone_id,
+           status,
+           version,
+           created_at,
+           created_by_type,
+           created_by_id,
+           updated_at,
+           updated_by_type,
+           updated_by_id
+      FROM store_location
+     WHERE tenant_id = #{tenantId,jdbcType=VARCHAR}
+       AND store_id = #{storeId,jdbcType=BIGINT}
+  </select>
+
+  <insert id="insert" parameterType="io.github.ande1922.moduvera.benchmark.store.candidate.StoreRow">
+    INSERT INTO store_location (
+        tenant_id,
+        store_id,
+        code,
+        name,
+        time_zone_id,
+        status,
+        version,
+        created_at,
+        created_by_type,
+        created_by_id,
+        updated_at,
+        updated_by_type,
+        updated_by_id)
+    VALUES (
+        #{tenantId,jdbcType=VARCHAR},
+        #{storeId,jdbcType=BIGINT},
+        #{code,jdbcType=VARCHAR},
+        #{name,jdbcType=VARCHAR},
+        #{timeZoneId,jdbcType=VARCHAR},
+        #{status,jdbcType=VARCHAR},
+        #{version,jdbcType=BIGINT},
+        #{createdAt,jdbcType=TIMESTAMP},
+        #{createdByType,jdbcType=VARCHAR},
+        #{createdById,jdbcType=VARCHAR},
+        #{updatedAt,jdbcType=TIMESTAMP},
+        #{updatedByType,jdbcType=VARCHAR},
+        #{updatedById,jdbcType=VARCHAR})
+  </insert>
+
+  <update id="updateWithVersion">
+    UPDATE store_location
+       SET name = #{row.name,jdbcType=VARCHAR},
+           status = #{row.status,jdbcType=VARCHAR},
+           version = #{row.version,jdbcType=BIGINT},
+           updated_at = #{row.updatedAt,jdbcType=TIMESTAMP},
+           updated_by_type = #{row.updatedByType,jdbcType=VARCHAR},
+           updated_by_id = #{row.updatedById,jdbcType=VARCHAR}
+     WHERE tenant_id = #{row.tenantId,jdbcType=VARCHAR}
+       AND store_id = #{row.storeId,jdbcType=BIGINT}
+       AND version = #{expectedVersion,jdbcType=BIGINT}
+  </update>
+</mapper>

@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"01a050c2-f0f0-7051-808c-518015a547d0"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"CAL1"}}
+{"type":"turn.completed","usage":{"input_tokens":23652,"cached_input_tokens":9984,"output_tokens":6,"reasoning_output_tokens":0}}

@@ -1,0 +1,335 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:moduvera:schema:benchmark:store-saas-persistence:run-manifest:1.0",
+  "title": "Store SaaS S/U benchmark run manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "protocol_version",
+    "preflight_status",
+    "experiment_id",
+    "run_id",
+    "pair_id",
+    "task_id",
+    "run_kind",
+    "variant_label",
+    "canonical_variant",
+    "repeat_index",
+    "randomization",
+    "seed",
+    "prompt",
+    "agent",
+    "billing",
+    "token_calibration",
+    "execution",
+    "environment",
+    "artifacts",
+    "registered_differences",
+    "hard_stops",
+    "created_at"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "protocol_version": { "type": "string", "minLength": 1 },
+    "preflight_status": { "enum": ["READY", "BLOCKED"] },
+    "experiment_id": { "$ref": "#/$defs/id" },
+    "run_id": { "$ref": "#/$defs/id" },
+    "pair_id": { "$ref": "#/$defs/id" },
+    "task_id": { "enum": ["T01", "T02", "T03", "T04"] },
+    "run_kind": { "enum": ["initial", "fixed-change"] },
+    "variant_label": { "enum": ["X", "Y"] },
+    "canonical_variant": { "enum": ["S", "U"] },
+    "repeat_index": { "type": "integer", "minimum": 1 },
+    "randomization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["seed", "pair_position"],
+      "properties": {
+        "seed": { "type": "integer", "minimum": 0 },
+        "pair_position": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "seed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "repository_ref",
+        "source_sha256",
+        "candidate_visible_sha256",
+        "evaluator_sha256"
+      ],
+      "properties": {
+        "kind": { "enum": ["neutral", "canonical-change-baseline"] },
+        "repository_ref": { "type": "string", "minLength": 1 },
+        "source_sha256": { "$ref": "#/$defs/sha256" },
+        "candidate_visible_sha256": { "$ref": "#/$defs/sha256" },
+        "evaluator_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "prompt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "$ref": "#/$defs/relative_path" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "codex_cli_version",
+        "model_requested",
+        "model_effective",
+        "reasoning_effort_requested",
+        "reasoning_effort_effective",
+        "service_tier",
+        "instructions_sha256",
+        "skills_sha256",
+        "tools_sha256"
+      ],
+      "properties": {
+        "codex_cli_version": { "type": "string", "minLength": 1 },
+        "model_requested": { "type": "string", "minLength": 1 },
+        "model_effective": { "type": ["string", "null"] },
+        "reasoning_effort_requested": { "type": "string", "minLength": 1 },
+        "reasoning_effort_effective": { "type": ["string", "null"] },
+        "service_tier": { "type": "string", "minLength": 1 },
+        "instructions_sha256": { "$ref": "#/$defs/sha256" },
+        "skills_sha256": { "$ref": "#/$defs/sha256" },
+        "tools_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "billing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authentication_mode",
+        "access_route",
+        "api_key_fallback_allowed",
+        "login_status"
+      ],
+      "properties": {
+        "authentication_mode": { "const": "chatgpt" },
+        "access_route": { "const": "chatgpt-plan" },
+        "api_key_fallback_allowed": { "const": false },
+        "login_status": { "const": "Logged in using ChatGPT" }
+      }
+    },
+    "token_calibration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["usage_semantics", "probe_sha256", "codex_cli_version"],
+      "properties": {
+        "usage_semantics": {
+          "enum": ["per-turn", "session-cumulative", null]
+        },
+        "probe_sha256": {
+          "oneOf": [
+            { "$ref": "#/$defs/sha256" },
+            { "type": "null" }
+          ]
+        },
+        "codex_cli_version": { "type": ["string", "null"], "minLength": 1 }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command_argv",
+        "resume_command_argv",
+        "resume_cwd",
+        "sandbox",
+        "permission_profile",
+        "approval_policy",
+        "network_policy",
+        "max_repair_turns",
+        "fresh_session",
+        "candidate_timeout_seconds"
+      ],
+      "properties": {
+        "command_argv": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" }
+        },
+        "resume_command_argv": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" }
+        },
+        "resume_cwd": { "type": "string", "minLength": 1 },
+        "sandbox": { "enum": ["read-only", "workspace-write", "permission-profile"] },
+        "permission_profile": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "sha256",
+            "default_deny_root",
+            "command_network",
+            "calibration_report_sha256"
+          ],
+          "properties": {
+            "name": { "const": "pilot_candidate" },
+            "sha256": { "$ref": "#/$defs/sha256" },
+            "default_deny_root": { "const": true },
+            "command_network": { "const": "denied" },
+            "calibration_report_sha256": {
+              "oneOf": [
+                { "$ref": "#/$defs/sha256" },
+                { "type": "null" }
+              ]
+            }
+          }
+        },
+        "approval_policy": { "type": "string", "minLength": 1 },
+        "network_policy": { "type": "string", "minLength": 1 },
+        "max_repair_turns": { "type": "integer", "minimum": 0 },
+        "fresh_session": { "const": true },
+        "candidate_timeout_seconds": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "os",
+        "architecture",
+        "jdk",
+        "maven",
+        "adapter",
+        "database",
+        "database_image",
+        "database_image_digest",
+        "dependency_cache"
+      ],
+      "properties": {
+        "os": { "type": "string", "minLength": 1 },
+        "architecture": { "type": "string", "minLength": 1 },
+        "jdk": { "type": "string", "minLength": 1 },
+        "maven": { "type": "string", "minLength": 1 },
+        "adapter": { "const": "mybatis-plus" },
+        "database": { "const": "mysql" },
+        "database_image": { "type": "string", "minLength": 1 },
+        "database_image_digest": { "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "dependency_cache": { "enum": ["preheated", "cold-calibration"] }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run_root", "events_jsonl", "result_json", "candidate_patch"],
+      "properties": {
+        "run_root": { "$ref": "#/$defs/relative_path" },
+        "events_jsonl": { "$ref": "#/$defs/relative_path" },
+        "result_json": { "$ref": "#/$defs/relative_path" },
+        "candidate_patch": { "$ref": "#/$defs/relative_path" }
+      }
+    },
+    "registered_differences": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "hard_stops": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "created_at": { "type": "string", "format": "date-time" }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "preflight_status": { "const": "READY" } },
+        "required": ["preflight_status"]
+      },
+      "then": {
+        "properties": {
+          "seed": {
+            "properties": {
+              "repository_ref": {
+                "type": "string",
+                "minLength": 1,
+                "not": { "const": "TO_BE_AUTHORIZED" }
+              },
+              "source_sha256": { "$ref": "#/$defs/nonzero_sha256" },
+              "candidate_visible_sha256": { "$ref": "#/$defs/nonzero_sha256" },
+              "evaluator_sha256": { "$ref": "#/$defs/nonzero_sha256" }
+            }
+          },
+          "prompt": {
+            "properties": {
+              "sha256": { "$ref": "#/$defs/nonzero_sha256" }
+            }
+          },
+          "agent": {
+            "properties": {
+              "model_requested": {
+                "type": "string",
+                "minLength": 1,
+                "not": { "const": "TO_BE_CONFIRMED" }
+              },
+              "model_effective": { "type": "string", "minLength": 1 },
+              "reasoning_effort_requested": {
+                "type": "string",
+                "minLength": 1,
+                "not": { "const": "TO_BE_CONFIRMED" }
+              },
+              "reasoning_effort_effective": { "type": "string", "minLength": 1 },
+              "service_tier": {
+                "type": "string",
+                "minLength": 1,
+                "not": { "const": "TO_BE_CONFIRMED" }
+              },
+              "instructions_sha256": { "$ref": "#/$defs/nonzero_sha256" },
+              "skills_sha256": { "$ref": "#/$defs/nonzero_sha256" },
+              "tools_sha256": { "$ref": "#/$defs/nonzero_sha256" }
+            }
+          },
+          "token_calibration": {
+            "properties": {
+              "usage_semantics": { "enum": ["per-turn", "session-cumulative"] },
+              "probe_sha256": { "$ref": "#/$defs/nonzero_sha256" },
+              "codex_cli_version": { "type": "string", "minLength": 1 }
+            }
+          },
+          "execution": {
+            "properties": {
+              "sandbox": { "const": "permission-profile" },
+              "permission_profile": {
+                "properties": {
+                  "sha256": { "$ref": "#/$defs/nonzero_sha256" },
+                  "calibration_report_sha256": { "$ref": "#/$defs/nonzero_sha256" }
+                }
+              }
+            }
+          },
+          "environment": {
+            "properties": {
+              "database_image_digest": { "$ref": "#/$defs/nonzero_sha256" }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "nonzero_sha256": {
+      "type": "string",
+      "pattern": "^(?!0{64}$)[a-f0-9]{64}$"
+    },
+    "relative_path": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+    }
+  }
+}

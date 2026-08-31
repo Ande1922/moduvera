@@ -1,0 +1,120 @@
+{
+  "schema_version": "1.0",
+  "protocol_version": "0.1.0-proposed",
+  "preflight_status": "BLOCKED",
+  "experiment_id": "store-saas-mp-mysql-pilot-001",
+  "run_id": "T01-pair01-X-r1",
+  "pair_id": "T01-pair01-r1",
+  "task_id": "T01",
+  "run_kind": "initial",
+  "variant_label": "X",
+  "canonical_variant": "S",
+  "repeat_index": 1,
+  "randomization": {
+    "seed": 20260830,
+    "pair_position": 1
+  },
+  "seed": {
+    "kind": "neutral",
+    "repository_ref": "TO_BE_AUTHORIZED",
+    "source_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "candidate_visible_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "evaluator_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "prompt": {
+    "path": "prompts/T01-X.md",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "agent": {
+    "codex_cli_version": "0.144.4",
+    "model_requested": "TO_BE_CONFIRMED",
+    "model_effective": null,
+    "reasoning_effort_requested": "TO_BE_CONFIRMED",
+    "reasoning_effort_effective": null,
+    "service_tier": "TO_BE_CONFIRMED",
+    "instructions_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "skills_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "tools_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "billing": {
+    "authentication_mode": "chatgpt",
+    "access_route": "chatgpt-plan",
+    "api_key_fallback_allowed": false,
+    "login_status": "Logged in using ChatGPT"
+  },
+  "token_calibration": {
+    "usage_semantics": "session-cumulative",
+    "probe_sha256": "4eb71f515153101930611434566b807f91592a66e8fcf217dfab471e82dd5004",
+    "codex_cli_version": "0.144.4"
+  },
+  "execution": {
+    "command_argv": [
+      "codex",
+      "exec",
+      "--json",
+      "--model",
+      "TO_BE_CONFIRMED",
+      "-c",
+      "model_reasoning_effort=\"TO_BE_CONFIRMED\"",
+      "-c",
+      "service_tier=\"TO_BE_CONFIRMED\"",
+      "-c",
+      "approval_policy=\"never\"",
+      "--sandbox",
+      "workspace-write",
+      "-C",
+      "candidate-workspace",
+      "-"
+    ],
+    "resume_command_argv": [
+      "codex",
+      "exec",
+      "resume",
+      "--json",
+      "<EXACT_SESSION_ID>",
+      "-"
+    ],
+    "resume_cwd": "candidate-workspace",
+    "sandbox": "workspace-write",
+    "permission_profile": {
+      "name": "pilot_candidate",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "default_deny_root": true,
+      "command_network": "denied",
+      "calibration_report_sha256": null
+    },
+    "approval_policy": "frozen-no-interactive-expansion",
+    "network_policy": "frozen-by-runner",
+    "max_repair_turns": 2,
+    "fresh_session": true,
+    "candidate_timeout_seconds": 3600
+  },
+  "environment": {
+    "os": "Darwin",
+    "architecture": "arm64",
+    "jdk": "26",
+    "maven": "3.9.16",
+    "adapter": "mybatis-plus",
+    "database": "mysql",
+    "database_image": "mysql:8.4.11",
+    "database_image_digest": null,
+    "dependency_cache": "preheated"
+  },
+  "artifacts": {
+    "run_root": "evidence/store-saas-mp-mysql-pilot-001/T01/pair01/X/r1",
+    "events_jsonl": "evidence/store-saas-mp-mysql-pilot-001/T01/pair01/X/r1/agent/events.jsonl",
+    "result_json": "evidence/store-saas-mp-mysql-pilot-001/T01/pair01/X/r1/result.json",
+    "candidate_patch": "evidence/store-saas-mp-mysql-pilot-001/T01/pair01/X/r1/source/candidate.patch"
+  },
+  "registered_differences": [
+    "Variant constraint only: S uses a second typed persistence object and explicit object Mapper"
+  ],
+  "hard_stops": [
+    "all shared public and hidden assertions are green",
+    "two repair turns have completed without green",
+    "correctness hard-gate violation",
+    "infrastructure failure or manifest drift",
+    "approved cost or time budget is exhausted"
+  ],
+  "created_at": "2026-08-30T03:00:00Z"
+}

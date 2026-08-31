@@ -1,0 +1,45 @@
+{
+  "schema_version": "0.1",
+  "protocol_version": "0.1.0-proposed",
+  "experiment_id": "store-saas-mp-mysql-pilot-001",
+  "run_id": "T01-pair01-X-r1",
+  "pair_id": "T01-pair01-r1",
+  "variant_label": "X",
+  "canonical_variant": "S",
+  "constraint": "separated",
+  "repeat_index": 1,
+  "randomization": {
+    "seed": 20260830,
+    "pair_position": 1
+  },
+  "repository_ref": "uncommitted-no-head",
+  "artifact_prefix": "evidence/store-saas-mp-mysql-pilot-001/T01/pair01/X/r1",
+  "agent": {
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "high",
+    "service_tier": "priority",
+    "effective_provenance_report": null
+  },
+  "execution": {
+    "max_repair_turns": 2,
+    "candidate_timeout_seconds": 3600
+  },
+  "toolchain": {
+    "jdk_home": "/ABSOLUTE/PATH/TO/JDK-26/HOME",
+    "maven_home": "/ABSOLUTE/PATH/TO/APACHE-MAVEN",
+    "maven_version": "3.9.12",
+    "maven_repository": "/ABSOLUTE/PATH/TO/PREHEATED/.m2/repository"
+  },
+  "database": {
+    "image": "mysql:8.4.11",
+    "image_digest": null
+  },
+  "token_calibration": {
+    "usage_semantics": "session-cumulative",
+    "probe_sha256": "4eb71f515153101930611434566b807f91592a66e8fcf217dfab471e82dd5004",
+    "codex_cli_version": "0.144.4"
+  },
+  "isolation": {
+    "calibration_report": null
+  }
+}

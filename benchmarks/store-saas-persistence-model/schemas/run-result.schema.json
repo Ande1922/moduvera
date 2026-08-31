@@ -1,0 +1,254 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:moduvera:schema:benchmark:store-saas-persistence:run-result:1.0",
+  "title": "Store SaaS S/U benchmark scored run result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "manifest_sha256",
+    "final_status",
+    "excluded_from_efficiency",
+    "exclusion_reasons",
+    "attempts",
+    "usage_semantics",
+    "usage_total",
+    "tokens_to_green",
+    "correctness",
+    "defects",
+    "change_metrics",
+    "timing",
+    "evidence"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "run_id": { "$ref": "#/$defs/id" },
+    "manifest_sha256": { "$ref": "#/$defs/sha256" },
+    "final_status": { "enum": ["GREEN", "NOT_GREEN", "INFRA_FAILURE", "INVALID_RUN"] },
+    "excluded_from_efficiency": { "type": "boolean" },
+    "exclusion_reasons": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "attempts": {
+      "type": "array",
+      "minItems": 0,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "attempt_index",
+          "kind",
+          "thread_id",
+          "started_at",
+          "finished_at",
+          "agent_exit_code",
+          "public_test_exit_code",
+          "hidden_test_exit_code",
+          "usage",
+          "assertions"
+        ],
+        "properties": {
+          "attempt_index": { "type": "integer", "minimum": 0 },
+          "kind": { "enum": ["initial", "repair"] },
+          "thread_id": { "type": ["string", "null"], "minLength": 1 },
+          "started_at": { "type": "string", "format": "date-time" },
+          "finished_at": { "type": "string", "format": "date-time" },
+          "agent_exit_code": { "type": ["integer", "null"] },
+          "public_test_exit_code": { "type": ["integer", "null"] },
+          "hidden_test_exit_code": { "type": ["integer", "null"] },
+          "usage": {
+            "oneOf": [
+              { "$ref": "#/$defs/usage" },
+              { "type": "null" }
+            ]
+          },
+          "assertions": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/assertion" }
+          }
+        }
+      }
+    },
+    "usage_semantics": { "enum": ["per-turn", "session-cumulative"] },
+    "usage_total": { "$ref": "#/$defs/usage" },
+    "tokens_to_green": { "type": ["integer", "null"], "minimum": 0 },
+    "correctness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "atomic_assertions_total",
+        "first_passed",
+        "final_passed",
+        "first_pass_rate",
+        "final_pass_rate",
+        "hard_gate_failures"
+      ],
+      "properties": {
+        "atomic_assertions_total": { "type": "integer", "minimum": 1 },
+        "first_passed": { "type": "integer", "minimum": 0 },
+        "final_passed": { "type": "integer", "minimum": 0 },
+        "first_pass_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+        "final_pass_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+        "hard_gate_failures": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "defects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["defect_id", "severity", "root_cause", "first_attempt", "resolved_attempt"],
+        "properties": {
+          "defect_id": { "$ref": "#/$defs/id" },
+          "severity": { "enum": ["P1", "P2", "P3"] },
+          "root_cause": { "type": "string", "minLength": 1 },
+          "first_attempt": { "type": "integer", "minimum": 0 },
+          "resolved_attempt": { "type": ["integer", "null"], "minimum": 0 }
+        }
+      }
+    },
+    "change_metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "files_read",
+        "files_changed",
+        "handwritten_lines_added",
+        "handwritten_lines_deleted",
+        "generated_lines_added",
+        "public_interface_items_changed",
+        "domain_framework_imports",
+        "duplicate_mapped_fields",
+        "compile_commands",
+        "test_commands",
+        "human_clarifications"
+      ],
+      "properties": {
+        "files_read": { "type": "integer", "minimum": 0 },
+        "files_changed": { "type": "integer", "minimum": 0 },
+        "handwritten_lines_added": { "type": "integer", "minimum": 0 },
+        "handwritten_lines_deleted": { "type": "integer", "minimum": 0 },
+        "generated_lines_added": { "type": "integer", "minimum": 0 },
+        "public_interface_items_changed": { "type": "integer", "minimum": 0 },
+        "domain_framework_imports": { "type": "integer", "minimum": 0 },
+        "duplicate_mapped_fields": { "type": "integer", "minimum": 0 },
+        "compile_commands": { "type": "integer", "minimum": 0 },
+        "test_commands": { "type": "integer", "minimum": 0 },
+        "human_clarifications": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "timing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["wall_clock_ms", "agent_active_ms", "maven_ms", "testcontainers_ms"],
+      "properties": {
+        "wall_clock_ms": { "type": "integer", "minimum": 0 },
+        "agent_active_ms": { "type": "integer", "minimum": 0 },
+        "maven_ms": { "type": "integer", "minimum": 0 },
+        "testcontainers_ms": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256", "kind"],
+        "properties": {
+          "path": { "$ref": "#/$defs/relative_path" },
+          "sha256": { "$ref": "#/$defs/sha256" },
+          "kind": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "final_status": { "const": "GREEN" } },
+        "required": ["final_status"]
+      },
+      "then": {
+        "properties": {
+          "excluded_from_efficiency": { "const": false },
+          "exclusion_reasons": { "maxItems": 0 },
+          "attempts": { "minItems": 1 },
+          "tokens_to_green": { "type": "integer", "minimum": 0 },
+          "correctness": {
+            "properties": {
+              "hard_gate_failures": { "maxItems": 0 }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "excluded_from_efficiency": { "const": true },
+          "exclusion_reasons": { "minItems": 1 },
+          "tokens_to_green": { "type": "null" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "final_status": { "not": { "const": "INFRA_FAILURE" } }
+        },
+        "required": ["final_status"]
+      },
+      "then": {
+        "properties": { "attempts": { "minItems": 1 } }
+      }
+    }
+  ],
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "relative_path": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "turns",
+        "input_tokens",
+        "cached_input_tokens",
+        "uncached_input_tokens",
+        "output_tokens",
+        "reasoning_output_tokens",
+        "visible_output_tokens",
+        "gross_total_tokens"
+      ],
+      "properties": {
+        "turns": { "type": "integer", "minimum": 0 },
+        "input_tokens": { "type": "integer", "minimum": 0 },
+        "cached_input_tokens": { "type": "integer", "minimum": 0 },
+        "uncached_input_tokens": { "type": "integer", "minimum": 0 },
+        "output_tokens": { "type": "integer", "minimum": 0 },
+        "reasoning_output_tokens": { "type": "integer", "minimum": 0 },
+        "visible_output_tokens": { "type": "integer", "minimum": 0 },
+        "gross_total_tokens": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "assertion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "visibility", "status", "hard_gate"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "visibility": { "enum": ["public", "hidden", "structural"] },
+        "status": { "enum": ["PASS", "FAIL", "NOT_RUN"] },
+        "hard_gate": { "type": "boolean" }
+      }
+    }
+  }
+}

@@ -20,15 +20,15 @@ App Assemblies are the only classpath composition roots. Business Services own r
 
 ## Platform artifacts
 
-- `platform-dependencies`: dependency-management BOM; it installs nothing.
-- `platform-kernel`: framework-light package seams for API values, errors, context, authorization, identifiers and transaction contracts.
-- `platform-web-spring-boot-starter`: MVC/validation/correlation/Problem Details.
-- `platform-auth-resource-server-autoconfigure`: JWT validation and trusted context entry.
-- `platform-data-mybatis-plus-spring-boot-starter`: MyBatis-Plus tenant/data wiring and Spring transaction adapter.
-- `platform-database-migration`: explicit component migration orchestration.
-- `platform-message-core`: transport-neutral descriptor, Inbox and Outbox contracts/algorithms.
-- `platform-messaging-kafka-spring-boot-starter`: JDBC stores, Kafka codecs/routes/transport, reliable consumer and relay.
-- `platform-test-support`: test-only deterministic helpers.
+- `moduvera-bom`: dependency-management BOM; it installs nothing.
+- `moduvera-kernel`: framework-light package seams for API values, errors, context, authorization, identifiers and transaction contracts.
+- `moduvera-web-spring-boot-starter`: MVC/validation/correlation/Problem Details.
+- `moduvera-auth-resource-server-autoconfigure`: JWT validation and trusted context entry.
+- `moduvera-data-mybatis-plus-spring-boot-starter`: MyBatis-Plus tenant/data wiring and Spring transaction adapter.
+- `moduvera-database-migration`: explicit component migration orchestration.
+- `moduvera-message-core`: transport-neutral descriptor, Inbox and Outbox contracts/algorithms.
+- `moduvera-messaging-kafka-spring-boot-starter`: JDBC stores, Kafka codecs/routes/transport, reliable consumer and relay.
+- `moduvera-test-support`: test-only deterministic helpers.
 
 Lock, scheduler and object-storage artifacts are independent capability experiments; see the product-surface page before consuming them.
 
