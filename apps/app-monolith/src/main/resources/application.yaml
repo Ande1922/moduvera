@@ -1,0 +1,70 @@
+spring:
+  application:
+    name: platform-monolith
+  datasource:
+    url: ${BUSINESS_DATABASE_URL:jdbc:postgresql://localhost:5432/business}
+    username: ${BUSINESS_DATABASE_USERNAME:business}
+    password: ${BUSINESS_DATABASE_PASSWORD:business}
+  flyway:
+    enabled: false
+  cloud:
+    function:
+      definition: reserveInventory;inventoryResult
+    stream:
+      bindings:
+        reserveInventory-out-0:
+          destination: ${INVENTORY_RESERVE_TOPIC:inventory-reserve}
+          producer:
+            use-native-encoding: true
+        reserveInventory-in-0:
+          destination: ${INVENTORY_RESERVE_TOPIC:inventory-reserve}
+          group: inventory-service
+        inventoryResult-out-0:
+          destination: ${INVENTORY_RESULT_TOPIC:inventory-result}
+          producer:
+            use-native-encoding: true
+        inventoryResult-in-0:
+          destination: ${INVENTORY_RESULT_TOPIC:inventory-result}
+          group: order-service
+      kafka:
+        binder:
+          brokers: ${KAFKA_BROKERS:localhost:9092}
+        bindings:
+          reserveInventory-out-0:
+            producer:
+              sync: true
+              configuration:
+                acks: all
+                key.serializer: org.apache.kafka.common.serialization.StringSerializer
+                value.serializer: org.apache.kafka.common.serialization.ByteArraySerializer
+          inventoryResult-out-0:
+            producer:
+              sync: true
+              configuration:
+                acks: all
+                key.serializer: org.apache.kafka.common.serialization.StringSerializer
+                value.serializer: org.apache.kafka.common.serialization.ByteArraySerializer
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${IDENTITY_ISSUER_URI:http://localhost:8081}
+          jwk-set-uri: ${IDENTITY_JWKS_URI:http://localhost:8081/oauth2/jwks}
+          audiences: [order-service]
+
+platform:
+  messaging:
+    kafka:
+      consumer-bindings: [reserveInventory-in-0, inventoryResult-in-0]
+      routes:
+        inventory.reserve: reserveInventory-out-0
+        order.inventory-result: inventoryResult-out-0
+
+server:
+  port: ${SERVER_PORT:8083}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

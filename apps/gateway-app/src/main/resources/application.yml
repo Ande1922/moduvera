@@ -1,0 +1,20 @@
+server:
+  port: ${GATEWAY_PORT:8080}
+
+spring:
+  application:
+    name: gateway-app
+
+gateway:
+  identity-base-url: ${IDENTITY_BASE_URL:http://localhost:8081}
+  order-base-url: ${ORDER_BASE_URL:http://localhost:8083}
+  order-target-preserves-prefix: ${ORDER_TARGET_PRESERVES_PREFIX:false}
+  service-id: ${GATEWAY_SERVICE_ID:gateway}
+  service-secret: ${GATEWAY_SERVICE_SECRET}
+  timeout: ${GATEWAY_DOWNSTREAM_TIMEOUT:3s}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
