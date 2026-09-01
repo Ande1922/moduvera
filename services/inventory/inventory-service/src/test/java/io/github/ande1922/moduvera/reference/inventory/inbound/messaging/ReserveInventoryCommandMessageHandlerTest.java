@@ -14,7 +14,7 @@ import io.github.ande1922.moduvera.reference.inventory.api.InventoryReserved;
 import io.github.ande1922.moduvera.reference.inventory.api.ReserveInventoryCommand;
 import io.github.ande1922.moduvera.reference.inventory.api.ReserveInventoryLine;
 import io.github.ande1922.moduvera.reference.inventory.application.InventoryApplicationService;
-import io.github.ande1922.moduvera.reference.inventory.infrastructure.memory.InMemoryInventoryStore;
+import io.github.ande1922.moduvera.reference.inventory.domain.ReservationDecision;
 import io.github.ande1922.moduvera.message.Destination;
 import io.github.ande1922.moduvera.message.MessageDescriptor;
 import io.github.ande1922.moduvera.message.MessageId;
@@ -39,9 +39,9 @@ class ReserveInventoryCommandMessageHandlerTest {
     @Test
     void mapsSerializedPayloadAndInvokesInventoryUseCase() throws Exception {
         var published = new AtomicReference<InventoryReserved>();
-        var store = new InMemoryInventoryStore();
+        var expected = new InventoryReserved("reserve-order-42", 42, Instant.EPOCH);
         var service = new InventoryApplicationService(
-                store,
+                (command, now) -> new ReservationDecision(expected, true),
                 new UseCaseAuthorizer(),
                 Clock.fixed(Instant.EPOCH, ZoneOffset.UTC),
                 result -> published.set((InventoryReserved) result));
@@ -55,13 +55,11 @@ class ReserveInventoryCommandMessageHandlerTest {
                         "order-service",
                         Set.of(InventoryApplicationService.RESERVE.value())),
                 "corr-42");
-        ExecutionContextHolder.run(context, () -> store.setAvailable(7, 2));
 
         ExecutionContextHolder.run(
                 context, () -> handler.handle(serialized(json.writeValueAsString(command))));
 
-        assertThat(published.get())
-                .isEqualTo(new InventoryReserved("reserve-order-42", 42, Instant.EPOCH));
+        assertThat(published.get()).isEqualTo(expected);
     }
 
     @Test
