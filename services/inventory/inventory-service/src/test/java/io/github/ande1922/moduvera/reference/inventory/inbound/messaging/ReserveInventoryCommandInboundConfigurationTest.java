@@ -16,7 +16,6 @@ import io.github.ande1922.moduvera.message.MessageKind;
 import io.github.ande1922.moduvera.message.MessageType;
 import io.github.ande1922.moduvera.message.NonRetryableMessageException;
 import io.github.ande1922.moduvera.message.SerializedMessage;
-import io.github.ande1922.moduvera.message.inbox.memory.InMemoryInboxRepository;
 import io.github.ande1922.moduvera.messaging.kafka.KafkaMessageMapper;
 import io.github.ande1922.moduvera.messaging.kafka.ReliableMessageConsumerFactory;
 import io.github.ande1922.moduvera.reference.inventory.api.InventoryReserved;
@@ -111,7 +110,7 @@ class ReserveInventoryCommandInboundConfigurationTest {
     private ReliableMessageConsumerFactory consumerFactory() {
         return new ReliableMessageConsumerFactory(
                 mapper,
-                new InMemoryInboxRepository(),
+                (tenantId, consumerId, messageId, processedAt) -> true,
                 new DirectTransactionBoundary(),
                 Clock.fixed(Instant.parse("2026-08-30T00:00:00Z"), ZoneOffset.UTC));
     }
