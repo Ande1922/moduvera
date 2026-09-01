@@ -4,9 +4,13 @@
 
 **Blocked by:** 01 — 发布 Inventory 拥有的规范消息身份
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] 同步形状的 Inventory Java Service API 被移除，Inventory Application Service 不再实现该接口，且授权、预占决策与结果发布行为保持不变。
-- [ ] Reserve Inventory Command Handler 直接调用 Inventory Application Service，并复用现有协议无关 Command/Result；不增加镜像 DTO、Mapper 或测试专用公开接口。
-- [ ] malformed Payload 仍被分类为不可重试且不会执行 Application 用例；kind、type、source 和 destination 仍在业务处理前校验。
-- [ ] Application、Handler 与 configuration-slice 测试通过，并证明消息 inbound 可在没有公开 Inventory Java API 的情况下激活。
+- [x] 同步形状的 Inventory Java Service API 被移除，Inventory Application Service 不再实现该接口，且授权、预占决策与结果发布行为保持不变。
+- [x] Reserve Inventory Command Handler 直接调用 Inventory Application Service，并复用现有协议无关 Command/Result；不增加镜像 DTO、Mapper 或测试专用公开接口。
+- [x] malformed Payload 仍被分类为不可重试且不会执行 Application 用例；kind、type、source 和 destination 仍在业务处理前校验。
+- [x] Application、Handler 与 configuration-slice 测试通过，并证明消息 inbound 可在没有公开 Inventory Java API 的情况下激活。
+
+## Answer
+
+Implemented by `3724169`. The unsupported synchronous Inventory Java API was removed, the message adapter now calls Inventory Application Service directly, and focused tests preserve authorization, publication, contract rejection, malformed-payload classification, and slice activation. Standards and Spec reviews both passed.
