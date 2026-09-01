@@ -24,7 +24,17 @@ class CatalogApplicationServiceTest {
 
     @Test
     void authorizesBeforeReadingTheRepository() {
-        var repository = new ReadOnlyProductRepository(Optional.empty());
+        ProductRepository repository = new ProductRepository() {
+            @Override
+            public Optional<Product> findById(long productId) {
+                throw new AssertionError("repository must not be read before authorization");
+            }
+
+            @Override
+            public void save(Product product) {
+                throw new UnsupportedOperationException("application stub does not provide persistence");
+            }
+        };
         var service = new CatalogApplicationService(repository, new UseCaseAuthorizer());
 
         assertThatThrownBy(() -> ExecutionContextHolder.call(
