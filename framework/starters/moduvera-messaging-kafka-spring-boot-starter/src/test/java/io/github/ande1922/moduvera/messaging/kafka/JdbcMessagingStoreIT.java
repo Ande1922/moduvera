@@ -5,19 +5,33 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.ande1922.moduvera.context.Actor;
 import io.github.ande1922.moduvera.context.ActorType;
+import io.github.ande1922.moduvera.context.ExecutionContextHolder;
 import io.github.ande1922.moduvera.context.Initiator;
+import io.github.ande1922.moduvera.context.MissingExecutionContextException;
 import io.github.ande1922.moduvera.context.TenantId;
+import io.github.ande1922.moduvera.data.spring.SpringTransactionBoundary;
 import io.github.ande1922.moduvera.message.Destination;
+import io.github.ande1922.moduvera.message.InboundMessageContract;
 import io.github.ande1922.moduvera.message.MessageDescriptor;
 import io.github.ande1922.moduvera.message.MessageId;
 import io.github.ande1922.moduvera.message.MessageKind;
 import io.github.ande1922.moduvera.message.MessageType;
+import io.github.ande1922.moduvera.message.NonRetryableMessageException;
 import io.github.ande1922.moduvera.message.SerializedMessage;
+import io.github.ande1922.moduvera.message.inbox.InboxOutcome;
+import io.github.ande1922.moduvera.message.inbox.InboxTemplate;
+import io.github.ande1922.moduvera.message.outbox.MessageTransport;
+import io.github.ande1922.moduvera.message.outbox.OutboxPublishReport;
+import io.github.ande1922.moduvera.message.outbox.OutboxWorker;
+import io.github.ande1922.moduvera.message.outbox.PublicationObserver;
+import io.github.ande1922.moduvera.message.publication.DurablePublicationTransactionException;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
@@ -47,18 +61,19 @@ class JdbcMessagingStoreIT {
     private static final PostgreSQLContainer POSTGRES =
             new PostgreSQLContainer(System.getProperty("postgresql.test.image", "postgres:18.6"));
 
+    private DataSource dataSource;
     private JdbcTemplate jdbc;
     private JdbcOutboxStore outbox;
     private JdbcOutboxStore secondOutbox;
     private JdbcDurablePublication publication;
     private JdbcInboxRepository inbox;
+    private ReliableMessageConsumerFactory inboxConsumers;
     private TransactionTemplate transactions;
     private AtomicInteger wakeSignals;
 
     @BeforeAll
     void setUp() throws Exception {
-        DataSource dataSource = new DriverManagerDataSource(
-                POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
+        dataSource = postgresDataSource();
         try (Connection connection = dataSource.getConnection()) {
             ScriptUtils.executeSqlScript(
                     connection,
@@ -77,11 +92,27 @@ class JdbcMessagingStoreIT {
         secondOutbox = new JdbcOutboxStore(
                 named, JdbcMessagingDialect.POSTGRESQL, transactions, new LocalOutboxWakeSignal());
         inbox = new JdbcInboxRepository(named);
+        inboxConsumers = new ReliableMessageConsumerFactory(
+                new KafkaMessageMapper(),
+                inbox,
+                new SpringTransactionBoundary(transactions),
+                Clock.fixed(Instant.parse("2026-08-30T00:00:00Z"), ZoneOffset.UTC));
+        jdbc.execute("""
+                CREATE TABLE test_inbox_business_record (
+                    tenant_id VARCHAR(128) NOT NULL,
+                    consumer_id VARCHAR(128) NOT NULL,
+                    message_id VARCHAR(128) NOT NULL,
+                    PRIMARY KEY (tenant_id, consumer_id, message_id)
+                )
+                """);
     }
 
     @BeforeEach
     void clearTables() {
-        jdbc.execute("TRUNCATE TABLE moduvera_message_inbox, moduvera_message_outbox, test_business_record");
+        jdbc.execute("""
+                TRUNCATE TABLE moduvera_message_inbox, moduvera_message_outbox,
+                    test_business_record, test_inbox_business_record
+                """);
         wakeSignals.set(0);
     }
 
@@ -112,6 +143,30 @@ class JdbcMessagingStoreIT {
                         Integer.class,
                         "msg-rollback"))
                 .isZero();
+    }
+
+    @Test
+    void durablePublicationRejectsMissingReadOnlyAndWrongDataSourceTransactions() {
+        assertThatThrownBy(() -> publication.append(message("missing-tx", "missing")))
+                .isInstanceOf(DurablePublicationTransactionException.class)
+                .hasMessageContaining("active local database transaction");
+
+        TransactionTemplate readOnly = transactionTemplate(dataSource);
+        readOnly.setReadOnly(true);
+        assertThatThrownBy(() -> readOnly.executeWithoutResult(
+                        ignored -> publication.append(message("read-only", "read-only"))))
+                .isInstanceOf(DurablePublicationTransactionException.class)
+                .hasMessageContaining("writable");
+
+        DataSource otherDataSource = postgresDataSource();
+        TransactionTemplate otherTransactions = transactionTemplate(otherDataSource);
+        assertThatThrownBy(() -> otherTransactions.executeWithoutResult(
+                        ignored -> publication.append(message("wrong-source", "wrong-source"))))
+                .isInstanceOf(DurablePublicationTransactionException.class)
+                .hasMessageContaining("outbox DataSource");
+
+        assertThat(outbox.backlog().pendingCount()).isZero();
+        assertThat(wakeSignals).hasValue(0);
     }
 
     @Test
@@ -243,6 +298,84 @@ class JdbcMessagingStoreIT {
     }
 
     @Test
+    void workerPersistsRetryAttemptsAndTerminalOutcomes() {
+        append(message("worker-retry", "worker-retry"));
+        AtomicInteger retrySends = new AtomicInteger();
+        var retryWorker = worker(ignored -> {
+            if (retrySends.incrementAndGet() == 1) {
+                throw new IllegalStateException("broker unavailable");
+            }
+        }, 3);
+
+        assertThat(retryWorker.publishBatch(1))
+                .isEqualTo(new OutboxPublishReport(1, 0, 1, 0, 0));
+        var retryClaim = outbox.claim(1, Duration.ofSeconds(30)).orElseThrow();
+        assertThat(retryClaim.messages().getFirst().failedAttempts()).isEqualTo(1);
+        expireClaim("worker-retry");
+        assertThat(retryWorker.publishBatch(1))
+                .isEqualTo(new OutboxPublishReport(1, 1, 0, 0, 0));
+        assertThat(retrySends).hasValue(2);
+
+        append(message("worker-terminal", "worker-terminal"));
+        var terminalWorker = worker(ignored -> {
+            throw new NonRetryableMessageException("invalid route");
+        }, 3);
+        assertThat(terminalWorker.publishBatch(1))
+                .isEqualTo(new OutboxPublishReport(1, 0, 1, 0, 0));
+
+        var terminal = outbox.findTerminal(10).getFirst();
+        assertThat(terminal.id()).isEqualTo(new MessageId("worker-terminal"));
+        assertThat(terminal.safeFailure()).isEqualTo("NonRetryableMessageException");
+        assertThat(outbox.backlog().terminalCount()).isEqualTo(1);
+    }
+
+    @Test
+    void interruptedUnknownSendConsumesNoAttemptAndRemainsEligibleAfterLeaseTakeover() {
+        append(message("worker-unknown", "worker-unknown"));
+        var interruptedWorker = worker(ignored -> {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(new InterruptedException("forced stop"));
+        }, 3);
+
+        try {
+            assertThat(interruptedWorker.publishBatch(1))
+                    .isEqualTo(new OutboxPublishReport(1, 0, 0, 1, 0));
+        } finally {
+            Thread.interrupted();
+        }
+        assertThat(outbox.backlog().pendingCount()).isEqualTo(1);
+
+        expireClaim("worker-unknown");
+        var reclaimed = secondOutbox.claim(1, Duration.ofSeconds(30)).orElseThrow();
+        assertThat(reclaimed.messages().getFirst().message().descriptor().id())
+                .isEqualTo(new MessageId("worker-unknown"));
+        assertThat(reclaimed.messages().getFirst().failedAttempts()).isZero();
+    }
+
+    @Test
+    void leaseTakeoverFencesTheOriginalWorkerCompletion() {
+        append(message("worker-takeover", "worker-takeover"));
+        AtomicInteger sends = new AtomicInteger();
+        var takeover = new OutboxWorker(
+                secondOutbox,
+                ignored -> sends.incrementAndGet(),
+                Clock.systemUTC(),
+                Duration.ofSeconds(30),
+                Duration.ZERO,
+                3);
+        var original = worker(ignored -> {
+            sends.incrementAndGet();
+            expireClaim("worker-takeover");
+            assertThat(takeover.publishBatch(1).published()).isEqualTo(1);
+        }, 3);
+
+        assertThat(original.publishBatch(1))
+                .isEqualTo(new OutboxPublishReport(1, 1, 0, 0, 1));
+        assertThat(sends).hasValue(2);
+        assertThat(outbox.backlog().pendingCount()).isZero();
+    }
+
+    @Test
     void terminalCanBeQueriedAndFencedRedrivePreservesTheMessageIdAndReleasesSuccessor() {
         append(message("msg-a1", "destination-a", "shared-key"));
         append(message("msg-a2", "destination-a", "shared-key"));
@@ -268,6 +401,61 @@ class JdbcMessagingStoreIT {
                         .orElseThrow()
                         .failedAttempts())
                 .isEqualTo(1);
+    }
+
+    @Test
+    void administrationPreservesIdentityOrderingAndCleansInBoundedBatches() {
+        append(message("admin-ordered-1", "inventory.commands", "tenant-a:admin-ordered"));
+        append(message("admin-ordered-2", "inventory.commands", "tenant-a:admin-ordered"));
+        append(message("admin-published-1", "inventory.commands", "tenant-a:published-1"));
+        append(message("admin-published-2", "inventory.commands", "tenant-a:published-2"));
+        append(message("admin-pending", "inventory.commands", "tenant-a:pending"));
+        var batch = outbox.claim(10, Duration.ofSeconds(30)).orElseThrow();
+        assertThat(batch.messages())
+                .extracting(entry -> entry.message().descriptor().id().value())
+                .containsExactlyInAnyOrder(
+                        "admin-ordered-1",
+                        "admin-published-1",
+                        "admin-published-2",
+                        "admin-pending");
+        assertThat(outbox.markTerminal(
+                        new MessageId("admin-ordered-1"),
+                        batch.claimToken(),
+                        Instant.now(),
+                        "InvalidPayload"))
+                .isTrue();
+        assertThat(outbox.markPublished(
+                        new MessageId("admin-published-1"), batch.claimToken(), Instant.EPOCH))
+                .isTrue();
+        assertThat(outbox.markPublished(
+                        new MessageId("admin-published-2"), batch.claimToken(), Instant.EPOCH))
+                .isTrue();
+
+        var terminal = outbox.findTerminal(10).getFirst();
+        assertThat(terminal.id()).isEqualTo(new MessageId("admin-ordered-1"));
+        assertThat(outbox.redrive(terminal.id(), "stale-token")).isFalse();
+        assertThat(outbox.redrive(terminal.id(), terminal.redriveToken())).isTrue();
+
+        var redriven = outbox.claim(10, Duration.ofSeconds(30)).orElseThrow();
+        assertThat(redriven.messages())
+                .extracting(entry -> entry.message().descriptor().id().value())
+                .containsExactly("admin-ordered-1");
+        SerializedMessage redrivenMessage = redriven.messages().getFirst().message();
+        assertThat(redrivenMessage.descriptor().type().value())
+                .isEqualTo("io.github.ande1922.moduvera.reference.inventory.reserve.v1");
+        assertThat(redrivenMessage.descriptor().destination())
+                .isEqualTo(new Destination("inventory.commands"));
+        assertThat(redrivenMessage.descriptor().partitionKey())
+                .isEqualTo("tenant-a:admin-ordered");
+        assertThat(redrivenMessage.payload())
+                .containsExactly("{\"orderId\":\"42\"}".getBytes(StandardCharsets.UTF_8));
+        assertThat(redriven.messages().getFirst().failedAttempts()).isEqualTo(1);
+        assertThat(outbox.findTerminal(10)).isEmpty();
+
+        assertThat(outbox.deletePublishedBefore(Instant.now().minusSeconds(1), 1)).isEqualTo(1);
+        assertThat(outbox.deletePublishedBefore(Instant.now().minusSeconds(1), 1)).isEqualTo(1);
+        assertThat(outbox.deletePublishedBefore(Instant.now().minusSeconds(1), 1)).isZero();
+        assertThat(outbox.backlog().pendingCount()).isEqualTo(3);
     }
 
     @Test
@@ -359,6 +547,76 @@ class JdbcMessagingStoreIT {
         assertThat(inbox.tryStart(tenant, "order", id, Instant.now())).isTrue();
     }
 
+    @Test
+    void commitsBusinessChangesOncePerTrustedTenantAndConsumerScope() {
+        var mapper = new KafkaMessageMapper();
+        var tenantA = inboxMessage("msg-inbox-scope", "tenant-a");
+        var inventory = inboxConsumers.forConsumer("inventory", inboxContract());
+
+        assertThat(inventory.handle(
+                        mapper.toSpringMessage(tenantA), recordBusinessChange("inventory")))
+                .isEqualTo(InboxOutcome.APPLIED);
+        assertThat(inventory.handle(
+                        mapper.toSpringMessage(tenantA), recordBusinessChange("inventory")))
+                .isEqualTo(InboxOutcome.DUPLICATE);
+        assertThat(inboxConsumers
+                        .forConsumer("audit", inboxContract())
+                        .handle(mapper.toSpringMessage(tenantA), recordBusinessChange("audit")))
+                .isEqualTo(InboxOutcome.APPLIED);
+        assertThat(inventory.handle(
+                        mapper.toSpringMessage(inboxMessage("msg-inbox-scope", "tenant-b")),
+                        recordBusinessChange("inventory")))
+                .isEqualTo(InboxOutcome.APPLIED);
+
+        assertThat(businessScopes())
+                .containsExactly(
+                        "tenant-a:audit:msg-inbox-scope",
+                        "tenant-a:inventory:msg-inbox-scope",
+                        "tenant-b:inventory:msg-inbox-scope");
+        assertThat(inboxRecordCount("msg-inbox-scope")).isEqualTo(3);
+        assertThat(ExecutionContextHolder.current()).isEmpty();
+    }
+
+    @Test
+    void rollsBackInboxAndBusinessChangeTogetherSoTheMessageCanRetry() {
+        var mapper = new KafkaMessageMapper();
+        var serialized = inboxMessage("msg-inbox-retry", "tenant-a");
+        var consumer = inboxConsumers.forConsumer("inventory", inboxContract());
+
+        assertThatThrownBy(() -> consumer.handle(mapper.toSpringMessage(serialized), message -> {
+                    recordBusinessChange("inventory").accept(message);
+                    throw new IllegalStateException("handler failed");
+                }))
+                .isInstanceOf(NonRetryableMessageException.class)
+                .hasCauseInstanceOf(IllegalStateException.class);
+        assertThat(businessRecordCount("msg-inbox-retry")).isZero();
+        assertThat(inboxRecordCount("msg-inbox-retry")).isZero();
+
+        assertThat(consumer.handle(
+                        mapper.toSpringMessage(serialized), recordBusinessChange("inventory")))
+                .isEqualTo(InboxOutcome.APPLIED);
+        assertThat(businessRecordCount("msg-inbox-retry")).isEqualTo(1);
+        assertThat(inboxRecordCount("msg-inbox-retry")).isEqualTo(1);
+        assertThat(ExecutionContextHolder.current()).isEmpty();
+    }
+
+    @Test
+    void missingTrustedTenantContextFailsClosedWithoutPersistingInboxState() {
+        var template = new InboxTemplate(
+                "inventory",
+                inbox,
+                new SpringTransactionBoundary(transactions),
+                Clock.fixed(Instant.parse("2026-08-30T00:00:00Z"), ZoneOffset.UTC));
+        AtomicInteger businessChanges = new AtomicInteger();
+
+        assertThatThrownBy(() -> template.handle(
+                        new MessageId("msg-missing-context"), businessChanges::incrementAndGet))
+                .isInstanceOf(MissingExecutionContextException.class);
+
+        assertThat(businessChanges).hasValue(0);
+        assertThat(inboxRecordCount("msg-missing-context")).isZero();
+    }
+
     private static Set<String> claimIds(
             JdbcOutboxStore store, CountDownLatch ready, CountDownLatch start)
             throws InterruptedException {
@@ -367,8 +625,76 @@ class JdbcMessagingStoreIT {
         return new HashSet<>(ids(store.claim(10, Duration.ofSeconds(30)).orElseThrow()));
     }
 
+    private java.util.function.Consumer<SerializedMessage> recordBusinessChange(String consumerId) {
+        return serialized -> {
+            var context = ExecutionContextHolder.require();
+            assertThat(context.tenantId()).isEqualTo(serialized.descriptor().tenantId());
+            assertThat(context.actor().subjectId()).isEqualTo("inventory-service");
+            jdbc.update(
+                    """
+                    INSERT INTO test_inbox_business_record(tenant_id, consumer_id, message_id)
+                    VALUES (?, ?, ?)
+                    """,
+                    context.tenantId().value(),
+                    consumerId,
+                    serialized.descriptor().id().value());
+        };
+    }
+
+    private java.util.List<String> businessScopes() {
+        return jdbc.queryForList(
+                """
+                SELECT CONCAT(tenant_id, ':', consumer_id, ':', message_id)
+                  FROM test_inbox_business_record
+                 ORDER BY tenant_id, consumer_id, message_id
+                """,
+                String.class);
+    }
+
+    private int businessRecordCount(String messageId) {
+        return jdbc.queryForObject(
+                "SELECT COUNT(*) FROM test_inbox_business_record WHERE message_id = ?",
+                Integer.class,
+                messageId);
+    }
+
+    private int inboxRecordCount(String messageId) {
+        return jdbc.queryForObject(
+                "SELECT COUNT(*) FROM moduvera_message_inbox WHERE message_id = ?",
+                Integer.class,
+                messageId);
+    }
+
     private void append(SerializedMessage message) {
         transactions.executeWithoutResult(ignored -> publication.append(message));
+    }
+
+    private OutboxWorker worker(MessageTransport transport, int maxAttempts) {
+        return new OutboxWorker(
+                outbox,
+                transport,
+                Clock.systemUTC(),
+                System::nanoTime,
+                Duration.ofSeconds(30),
+                Duration.ofSeconds(1),
+                Duration.ZERO,
+                maxAttempts,
+                PublicationObserver.noop());
+    }
+
+    private void expireClaim(String messageId) {
+        jdbc.update(
+                "UPDATE moduvera_message_outbox SET claim_expires_at = CURRENT_TIMESTAMP - INTERVAL '1 second' WHERE message_id = ?",
+                messageId);
+    }
+
+    private DataSource postgresDataSource() {
+        return new DriverManagerDataSource(
+                POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
+    }
+
+    private static TransactionTemplate transactionTemplate(DataSource source) {
+        return new TransactionTemplate(new DataSourceTransactionManager(source));
     }
 
     private static java.util.List<String> ids(io.github.ande1922.moduvera.message.outbox.ClaimedOutboxBatch batch) {
@@ -389,6 +715,10 @@ class JdbcMessagingStoreIT {
         return message(id, "inventory.commands", "tenant-a:order-42");
     }
 
+    private SerializedMessage message(String id, String partitionKey) {
+        return message(id, "inventory.commands", "tenant-a:" + partitionKey);
+    }
+
     private SerializedMessage message(String id, String destination, String partitionKey) {
         var descriptor = new MessageDescriptor(
                 new MessageId(id),
@@ -407,5 +737,32 @@ class JdbcMessagingStoreIT {
                 descriptor,
                 SerializedMessage.JSON,
                 "{\"orderId\":\"42\"}".getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static InboundMessageContract inboxContract() {
+        return new InboundMessageContract(
+                MessageKind.ASYNC_COMMAND,
+                new MessageType("io.github.ande1922.moduvera.reference.inventory.reserve.v1"),
+                URI.create("urn:service:order"),
+                new Destination("inventory.commands"),
+                new Actor(ActorType.SERVICE, "inventory-service", Set.of("inventory:reserve")));
+    }
+
+    private static SerializedMessage inboxMessage(String id, String tenantId) {
+        return SerializedMessage.json(
+                new MessageDescriptor(
+                        new MessageId(id),
+                        MessageKind.ASYNC_COMMAND,
+                        new MessageType("io.github.ande1922.moduvera.reference.inventory.reserve.v1"),
+                        URI.create("urn:service:order"),
+                        new Destination("inventory.commands"),
+                        Instant.parse("2026-08-30T00:00:00Z"),
+                        new TenantId(tenantId),
+                        new Actor(ActorType.SERVICE, "order-service"),
+                        "corr-inbox",
+                        null,
+                        new Initiator(ActorType.USER, "alice"),
+                        tenantId + ":order-42"),
+                "{}");
     }
 }

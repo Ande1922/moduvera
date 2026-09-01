@@ -17,6 +17,7 @@ import io.github.ande1922.moduvera.reference.inventory.api.InventoryRejected;
 import io.github.ande1922.moduvera.reference.inventory.api.InventoryReserved;
 import io.github.ande1922.moduvera.reference.inventory.api.ReserveInventoryCommand;
 import io.github.ande1922.moduvera.reference.inventory.api.ReserveInventoryLine;
+import io.github.ande1922.moduvera.reference.inventory.domain.ReservationDecision;
 import io.github.ande1922.moduvera.reference.inventory.infrastructure.persistence.InventoryMapper;
 import io.github.ande1922.moduvera.reference.inventory.infrastructure.persistence.MybatisInventoryStore;
 import io.github.ande1922.moduvera.migration.DatabaseComponent;
@@ -34,6 +35,9 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Currency;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -165,20 +169,75 @@ class MySqlBusinessRepositoriesIT {
         var reserved = new ReserveInventoryCommand(
                 "reserve-ok", 71, List.of(new ReserveInventoryLine(7, 2)));
 
-        ExecutionContextHolder.run(context("tenant-a"), () -> transactions.inTransaction(() -> {
-            assertThat(inventory.reserve(rejected, NOW).result()).isInstanceOf(InventoryRejected.class);
-            return null;
-        }));
+        ReservationDecision rejectedDecision = reserve("tenant-a", rejected, NOW);
+        assertThat(rejectedDecision.created()).isTrue();
+        assertThat(rejectedDecision.result())
+                .isEqualTo(new InventoryRejected("reserve-rejected", 70, List.of(8L), NOW));
         assertThat(available("tenant-a", 7)).isEqualTo(5);
         assertThat(available("tenant-a", 8)).isEqualTo(1);
 
-        ExecutionContextHolder.run(context("tenant-a"), () -> transactions.inTransaction(() -> {
-            assertThat(inventory.reserve(reserved, NOW).result()).isInstanceOf(InventoryReserved.class);
-            assertThat(inventory.reserve(reserved, NOW).created()).isFalse();
-            return null;
-        }));
+        ReservationDecision reconstructedRejection =
+                reserve("tenant-a", rejected, NOW.plusSeconds(1));
+        assertThat(reconstructedRejection.created()).isFalse();
+        assertThat(reconstructedRejection.result()).isEqualTo(rejectedDecision.result());
+
+        ReservationDecision reservedDecision = reserve("tenant-a", reserved, NOW);
+        assertThat(reservedDecision.created()).isTrue();
+        assertThat(reservedDecision.result())
+                .isEqualTo(new InventoryReserved("reserve-ok", 71, NOW));
+        ReservationDecision reconstructedReservation =
+                reserve("tenant-a", reserved, NOW.plusSeconds(1));
+        assertThat(reconstructedReservation.created()).isFalse();
+        assertThat(reconstructedReservation.result()).isEqualTo(reservedDecision.result());
         assertThat(available("tenant-a", 7)).isEqualTo(3);
         assertThat(available("tenant-b", 7)).isEqualTo(9);
+
+        ReservationDecision sameIdentityInOtherTenant = reserve("tenant-b", reserved, NOW);
+        assertThat(sameIdentityInOtherTenant.created()).isTrue();
+        assertThat(sameIdentityInOtherTenant.result()).isEqualTo(reservedDecision.result());
+        assertThat(available("tenant-a", 7)).isEqualTo(3);
+        assertThat(available("tenant-b", 7)).isEqualTo(7);
+    }
+
+    @Test
+    void qualifiesInventoryConcurrentCompetitionAndResultReconstruction() throws Exception {
+        seedStock("tenant-a", 7, 5);
+        var firstCommand = new ReserveInventoryCommand(
+                "concurrent-1", 501, List.of(new ReserveInventoryLine(7, 4)));
+        var secondCommand = new ReserveInventoryCommand(
+                "concurrent-2", 502, List.of(new ReserveInventoryLine(7, 4)));
+        var ready = new CountDownLatch(2);
+        var start = new CountDownLatch(1);
+        ReservationDecision firstDecision;
+        ReservationDecision secondDecision;
+        try (var workers = Executors.newVirtualThreadPerTaskExecutor()) {
+            var first = workers.submit(() -> reserveTogether(ready, start, firstCommand));
+            var second = workers.submit(() -> reserveTogether(ready, start, secondCommand));
+            try {
+                assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+            } finally {
+                start.countDown();
+            }
+            firstDecision = first.get(5, TimeUnit.SECONDS);
+            secondDecision = second.get(5, TimeUnit.SECONDS);
+        }
+
+        assertThat(List.of(firstDecision.result(), secondDecision.result()))
+                .filteredOn(InventoryReserved.class::isInstance)
+                .hasSize(1);
+        assertThat(List.of(firstDecision.result(), secondDecision.result()))
+                .filteredOn(InventoryRejected.class::isInstance)
+                .hasSize(1);
+        assertThat(available("tenant-a", 7)).isEqualTo(1);
+
+        ReservationDecision reconstructedFirst =
+                reserve("tenant-a", firstCommand, NOW.plusSeconds(1));
+        ReservationDecision reconstructedSecond =
+                reserve("tenant-a", secondCommand, NOW.plusSeconds(1));
+        assertThat(reconstructedFirst.created()).isFalse();
+        assertThat(reconstructedFirst.result()).isEqualTo(firstDecision.result());
+        assertThat(reconstructedSecond.created()).isFalse();
+        assertThat(reconstructedSecond.result()).isEqualTo(secondDecision.result());
     }
 
     private static void migrate(DatabaseMigrator migrator, String component, String location) {
@@ -210,6 +269,20 @@ class MySqlBusinessRepositoriesIT {
                 Integer.class,
                 tenant,
                 product);
+    }
+
+    private ReservationDecision reserve(
+            String tenant, ReserveInventoryCommand command, Instant now) {
+        return ExecutionContextHolder.call(
+                context(tenant), () -> transactions.inTransaction(() -> inventory.reserve(command, now)));
+    }
+
+    private ReservationDecision reserveTogether(
+            CountDownLatch ready, CountDownLatch start, ReserveInventoryCommand command)
+            throws InterruptedException {
+        ready.countDown();
+        start.await();
+        return reserve("tenant-a", command, NOW);
     }
 
     private static ExecutionContext context(String tenant) {

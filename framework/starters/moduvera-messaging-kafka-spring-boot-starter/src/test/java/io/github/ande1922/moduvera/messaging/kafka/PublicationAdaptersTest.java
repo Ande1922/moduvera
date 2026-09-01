@@ -13,7 +13,6 @@ import io.github.ande1922.moduvera.message.MessageId;
 import io.github.ande1922.moduvera.message.MessageKind;
 import io.github.ande1922.moduvera.message.MessageType;
 import io.github.ande1922.moduvera.message.SerializedMessage;
-import io.github.ande1922.moduvera.message.publication.DurablePublicationTransactionException;
 import io.github.ande1922.moduvera.message.publication.ImmediatePublicationInTransactionException;
 import java.lang.reflect.Proxy;
 import java.net.URI;
@@ -28,42 +27,6 @@ import org.springframework.jdbc.datasource.SingleConnectionDataSource;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 class PublicationAdaptersTest {
-
-    @Test
-    void durablePublicationAppendsInsideTheTransactionBoundToItsDataSource() {
-        DataSource dataSource = dataSource();
-        AtomicInteger appends = new AtomicInteger();
-        var publication = new JdbcDurablePublication(dataSource, ignored -> appends.incrementAndGet());
-
-        inTransaction(dataSource, false, () -> publication.append(message()));
-
-        assertThat(appends).hasValue(1);
-    }
-
-    @Test
-    void durablePublicationRejectsMissingReadOnlyAndWrongDataSourceTransactions() {
-        DataSource outboxDataSource = dataSource();
-        DataSource otherDataSource = dataSource();
-        AtomicInteger appends = new AtomicInteger();
-        var publication =
-                new JdbcDurablePublication(outboxDataSource, ignored -> appends.incrementAndGet());
-        SerializedMessage message = message();
-
-        assertThatThrownBy(() -> publication.append(message))
-                .isInstanceOf(DurablePublicationTransactionException.class)
-                .hasMessageContaining("active local database transaction");
-
-        assertThatThrownBy(() -> inTransaction(
-                        outboxDataSource, true, () -> publication.append(message)))
-                .isInstanceOf(DurablePublicationTransactionException.class)
-                .hasMessageContaining("writable");
-
-        assertThatThrownBy(() -> inTransaction(
-                        otherDataSource, false, () -> publication.append(message)))
-                .isInstanceOf(DurablePublicationTransactionException.class)
-                .hasMessageContaining("outbox DataSource");
-        assertThat(appends).hasValue(0);
-    }
 
     @Test
     void immediatePublicationSendsOnceOutsideTransactionsAndRejectsActiveTransactions()
