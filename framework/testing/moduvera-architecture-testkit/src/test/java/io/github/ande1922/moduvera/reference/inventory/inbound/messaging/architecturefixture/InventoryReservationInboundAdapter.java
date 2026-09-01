@@ -3,15 +3,15 @@ package io.github.ande1922.moduvera.reference.inventory.inbound.messaging.archit
 import io.github.ande1922.moduvera.reference.inventory.api.ReserveInventoryCommand;
 import io.github.ande1922.moduvera.reference.inventory.api.architecturefixture.SynchronousInventoryApi;
 
-public final class ReserveInventoryCommandMessageHandler {
+public final class InventoryReservationInboundAdapter {
 
     private final SynchronousInventoryApi inventory;
 
-    public ReserveInventoryCommandMessageHandler(SynchronousInventoryApi inventory) {
+    public InventoryReservationInboundAdapter(SynchronousInventoryApi inventory) {
         this.inventory = inventory;
     }
 
-    public void handle(ReserveInventoryCommand command) {
+    public void accept(ReserveInventoryCommand command) {
         inventory.reserve(command);
     }
 }
