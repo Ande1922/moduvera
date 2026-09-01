@@ -23,7 +23,7 @@ import java.time.Clock;
 import java.util.Currency;
 import java.util.List;
 
-public final class OrderApplicationService implements OrderApi, InventoryResultHandler {
+public final class OrderApplicationService implements OrderApi {
 
     public static final PermissionCode CREATE = new PermissionCode("order:create");
     public static final PermissionCode READ = new PermissionCode("order:read");
@@ -94,8 +94,7 @@ public final class OrderApplicationService implements OrderApi, InventoryResultH
         return requireOrder(query.orderId()).toView();
     }
 
-    @Override
-    public void handle(InventoryReservationResult result) {
+    public void resolvePendingStock(InventoryReservationResult result) {
         authorizer.require(APPLY_INVENTORY_RESULT);
         Order order = requireOrder(result.orderId());
         if (result instanceof InventoryReserved reserved) {
