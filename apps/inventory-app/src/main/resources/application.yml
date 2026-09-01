@@ -31,6 +31,10 @@ spring:
                 key.serializer: org.apache.kafka.common.serialization.StringSerializer
                 value.serializer: org.apache.kafka.common.serialization.ByteArraySerializer
 moduvera:
+  database:
+    migration:
+      mode: startup
+      initialize: true
   messaging:
     kafka:
       consumer-bindings: [reserveInventory-in-0]

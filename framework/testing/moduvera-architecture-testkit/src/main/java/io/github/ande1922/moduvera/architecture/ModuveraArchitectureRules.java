@@ -25,7 +25,7 @@ public final class ModuveraArchitectureRules {
     };
     private static final String[] BUSINESS_MESSAGING_INBOUND_PACKAGES = {
         "io.github.ande1922.moduvera.reference.catalog.inbound.messaging..",
-        "io.github.ande1922.moduvera.reference.inventory.inbound.messaging..",
+        "io.github.ande1922.moduvera.reference.inventory.adapter.inbound.messaging..",
         "io.github.ande1922.moduvera.reference.order.inbound.messaging.."
     };
     private static final String[] APP_ASSEMBLY_PACKAGES = {
@@ -46,9 +46,11 @@ public final class ModuveraArchitectureRules {
             "org.springframework.web.bind.annotation.RestController";
     private static final String RESERVE_INVENTORY_COMMAND =
             "io.github.ande1922.moduvera.reference.inventory.api.ReserveInventoryCommand";
-    private static final DescribedPredicate<JavaClass> INVENTORY_RESERVATION_MESSAGE_ADAPTER =
+    static final String MESSAGING_MIGRATION_CONFIGURATION =
+            "io.github.ande1922.moduvera.messaging.kafka.migration.ModuveraMessagingMigrationConfiguration";
+    static final DescribedPredicate<JavaClass> INVENTORY_RESERVATION_MESSAGE_ADAPTER =
             JavaClass.Predicates.resideInAPackage(
-                            "io.github.ande1922.moduvera.reference.inventory.inbound.messaging..")
+                            "io.github.ande1922.moduvera.reference.inventory.adapter.inbound.messaging..")
                     .and(DescribedPredicate.describe(
                             "depend on the provider-owned Reserve Inventory Command",
                             javaClass -> javaClass.getDirectDependenciesFromSelf().stream()
@@ -70,6 +72,14 @@ public final class ModuveraArchitectureRules {
                     .and(JavaClass.Predicates.containAnyMethodsThat(
                             SYNCHRONOUS_INVENTORY_RESERVATION_OPERATION))
                     .as("public Inventory API interfaces that expose synchronous inventory reservation");
+    private static final DescribedPredicate<JavaClass> APP_ASSEMBLY_TRANSPORT_MECHANIC =
+            DescribedPredicate.describe(
+                    "transport mechanics other than the explicit messaging platform migration definition",
+                    javaClass -> residesIn(javaClass, "org.springframework.messaging")
+                            || residesIn(javaClass, "io.github.ande1922.moduvera.message")
+                            || residesIn(javaClass, "tools.jackson")
+                            || (residesIn(javaClass, "io.github.ande1922.moduvera.messaging.kafka")
+                                    && !javaClass.getName().equals(MESSAGING_MIGRATION_CONFIGURATION)));
 
     public static final ArchRule SERVICE_APIS_ARE_PROTOCOL_NEUTRAL = noClasses()
             .that()
@@ -191,12 +201,7 @@ public final class ModuveraArchitectureRules {
                             .that()
                             .resideInAnyPackage(APP_ASSEMBLY_PACKAGES)
                             .should()
-                            .dependOnClassesThat()
-                            .resideInAnyPackage(
-                                    "org.springframework.messaging..",
-                                    "io.github.ande1922.moduvera.message..",
-                                    "io.github.ande1922.moduvera.messaging.kafka..",
-                                    "tools.jackson.."))
+                            .dependOnClassesThat(APP_ASSEMBLY_TRANSPORT_MECHANIC))
                     .and(noClasses()
                             .that()
                             .resideInAnyPackage(APP_ASSEMBLY_PACKAGES)
@@ -250,7 +255,7 @@ public final class ModuveraArchitectureRules {
                             .resideInAnyPackage(
                                     "org.springframework.messaging..",
                                     "io.github.ande1922.moduvera.message.InboundMessageContract",
-                                    "io.github.ande1922.moduvera.messaging.kafka.ReliableMessageConsumer",
+                                    "io.github.ande1922.moduvera.messaging.kafka.ReliableInboundEndpoint",
                                     "io.github.ande1922.moduvera.messaging.kafka.ReliableMessageConsumerFactory"))
                     .and(noClasses()
                             .that()
@@ -300,6 +305,11 @@ public final class ModuveraArchitectureRules {
                         .resideInAnyPackage(packages)
                         .should()
                         .beMetaAnnotatedWith(REQUEST_MAPPING));
+    }
+
+    private static boolean residesIn(JavaClass javaClass, String packageName) {
+        return javaClass.getPackageName().equals(packageName)
+                || javaClass.getPackageName().startsWith(packageName + ".");
     }
 
     private ModuveraArchitectureRules() {}
