@@ -4,10 +4,9 @@
 
 **Blocked by:** 07 — 收缩旧形态并锁定模块与 Adapter 架构.
 
-**Status:** ready-for-agent
+**Status:** claimed
 
 - [ ] 完整 Reactor 的编译、单元、集成、架构、格式化、PMD 和 JaCoCo 检查通过，并保留当前执行证据。
 - [ ] 微服务 Golden Path 与业务核心模块化单体均通过未放宽的公共 HTTP 黑盒 harness。
 - [ ] 验收覆盖订单创建/查询、库存确认/拒绝、Tenant 隔离、可信上下文、Outbox/Inbox、最终一致性与公共契约兼容。
 - [ ] 任何环境失败、未执行检查或支持矩阵限制被明确记录；仅在全部必需证据通过后将本 effort 标记完成。
-
