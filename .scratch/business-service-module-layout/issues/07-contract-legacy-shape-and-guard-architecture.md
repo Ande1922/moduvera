@@ -8,6 +8,5 @@
 
 - [ ] 三个 Business Service 不再包含 generic top-level `configuration` 或 `infrastructure` package，只保留规格明确允许且新 App 不导入的 deprecated compatibility facade。
 - [ ] 三个业务叶子 App 与业务核心模块化单体不再直接构造迁移执行器或复制组件资源元数据；Identity 与示例调用者仅作为兼容消费者保留，除非编译迁移必需。
-- [ ] 架构规则验证业务模块归属、Inbound/Outbound Adapter 方向、Application/Domain 对 Adapter 和传输框架独立、Module Configuration 不激活 Adapter，以及 App Assembly 不拥有业务映射。
+- [ ] 架构规则验证业务模块归属、Inbound/Outbound Adapter 方向、具体消息 Handler 位于 `adapter.inbound.messaging` 并实现对应 Command/Event 分类接口、Application Service 不实现消息 Handler、Reliable 层拥有 Inbox/重试/可信上下文、Module Configuration 不激活 Adapter，以及 App Assembly 不拥有业务映射。
 - [ ] 负例 fixtures、当前仓库架构测试与模块地图/产品架构文档同步更新，同时保留 ADR 允许的 compatibility 例外。
-
