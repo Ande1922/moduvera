@@ -8,11 +8,13 @@ import io.github.ande1922.moduvera.reference.app.inventory.architecturefixture.L
 import io.github.ande1922.moduvera.reference.app.monolith.architecturefixture.MonolithBusinessControllerViolation;
 import io.github.ande1922.moduvera.reference.app.order.architecturefixture.LeafAppMessageHandlerViolation;
 import io.github.ande1922.moduvera.reference.catalog.api.architecturefixture.TransportApiViolation;
+import io.github.ande1922.moduvera.reference.inventory.api.architecturefixture.InventoryAllocationGateway;
 import io.github.ande1922.moduvera.reference.inventory.api.architecturefixture.InventoryLookupService;
 import io.github.ande1922.moduvera.reference.inventory.api.architecturefixture.InventoryReservationService;
 import io.github.ande1922.moduvera.reference.inventory.api.architecturefixture.MessageCoreApiViolation;
 import io.github.ande1922.moduvera.reference.inventory.api.architecturefixture.MessagingStarterApiViolation;
 import io.github.ande1922.moduvera.reference.inventory.architecturefixture.MisplacedInventoryMessageHandler;
+import io.github.ande1922.moduvera.reference.inventory.inbound.messaging.architecturefixture.InventoryCommandListener;
 import io.github.ande1922.moduvera.reference.inventory.inbound.messaging.architecturefixture.InventoryReservationInboundAdapter;
 import io.github.ande1922.moduvera.reference.inventory.inbound.messaging.architecturefixture.ReservationCommandConsumer;
 import io.github.ande1922.moduvera.reference.inventory.inbound.messaging.architecturefixture.ReservationInventoryLookup;
@@ -72,6 +74,14 @@ class AssemblyArchitectureRulesTest {
                 ModuveraArchitectureRules.ASYNC_ONLY_INVENTORY_RESERVATION_DOES_NOT_USE_SYNCHRONOUS_SERVICE_API,
                 ReservationCommandConsumer.class,
                 InventoryReservationService.class);
+    }
+
+    @Test
+    void rejectsSynchronousReservationInterfacesWithDifferentReturnTypes() {
+        assertViolation(
+                ModuveraArchitectureRules.ASYNC_ONLY_INVENTORY_RESERVATION_DOES_NOT_USE_SYNCHRONOUS_SERVICE_API,
+                InventoryCommandListener.class,
+                InventoryAllocationGateway.class);
     }
 
     @Test

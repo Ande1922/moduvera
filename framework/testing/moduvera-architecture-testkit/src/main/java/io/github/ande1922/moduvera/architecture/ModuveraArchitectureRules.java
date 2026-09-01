@@ -46,8 +46,6 @@ public final class ModuveraArchitectureRules {
             "org.springframework.web.bind.annotation.RestController";
     private static final String RESERVE_INVENTORY_COMMAND =
             "io.github.ande1922.moduvera.reference.inventory.api.ReserveInventoryCommand";
-    private static final String INVENTORY_RESERVATION_RESULT =
-            "io.github.ande1922.moduvera.reference.inventory.api.InventoryReservationResult";
     private static final DescribedPredicate<JavaClass> INVENTORY_RESERVATION_MESSAGE_ADAPTER =
             JavaClass.Predicates.resideInAPackage(
                             "io.github.ande1922.moduvera.reference.inventory.inbound.messaging..")
@@ -61,10 +59,9 @@ public final class ModuveraArchitectureRules {
                     .as("Inventory messaging inbound classes that consume the Reserve Inventory Command");
     private static final DescribedPredicate<JavaMethod> SYNCHRONOUS_INVENTORY_RESERVATION_OPERATION =
             DescribedPredicate.describe(
-                    "accept the Reserve Inventory Command and return the Inventory Reservation Result",
+                    "accept the provider-owned Reserve Inventory Command",
                     method -> method.getRawParameterTypes().stream()
-                                    .anyMatch(parameter -> parameter.getName().equals(RESERVE_INVENTORY_COMMAND))
-                            && method.getRawReturnType().getName().equals(INVENTORY_RESERVATION_RESULT));
+                            .anyMatch(parameter -> parameter.getName().equals(RESERVE_INVENTORY_COMMAND)));
     private static final DescribedPredicate<JavaClass> SYNCHRONOUS_INVENTORY_RESERVATION_INTERFACE =
             JavaClass.Predicates.resideInAPackage(
                             "io.github.ande1922.moduvera.reference.inventory.api..")
