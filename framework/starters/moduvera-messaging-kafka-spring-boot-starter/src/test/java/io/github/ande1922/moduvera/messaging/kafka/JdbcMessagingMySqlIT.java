@@ -5,18 +5,25 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.ande1922.moduvera.context.Actor;
 import io.github.ande1922.moduvera.context.ActorType;
+import io.github.ande1922.moduvera.context.ExecutionContext;
+import io.github.ande1922.moduvera.context.ExecutionContextHolder;
 import io.github.ande1922.moduvera.context.Initiator;
 import io.github.ande1922.moduvera.context.TenantId;
+import io.github.ande1922.moduvera.data.spring.SpringTransactionBoundary;
 import io.github.ande1922.moduvera.message.Destination;
 import io.github.ande1922.moduvera.message.MessageDescriptor;
 import io.github.ande1922.moduvera.message.MessageId;
 import io.github.ande1922.moduvera.message.MessageKind;
 import io.github.ande1922.moduvera.message.MessageType;
 import io.github.ande1922.moduvera.message.SerializedMessage;
+import io.github.ande1922.moduvera.message.inbox.InboxOutcome;
+import io.github.ande1922.moduvera.message.inbox.InboxTemplate;
 import java.net.URI;
 import java.sql.Connection;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
@@ -50,6 +57,7 @@ class JdbcMessagingMySqlIT {
     private JdbcOutboxStore secondOutbox;
     private JdbcDurablePublication publication;
     private JdbcInboxRepository inbox;
+    private SpringTransactionBoundary inboxTransactions;
     private TransactionTemplate transactions;
 
     @BeforeAll
@@ -63,8 +71,17 @@ class JdbcMessagingMySqlIT {
         }
         jdbc = new JdbcTemplate(dataSource);
         jdbc.execute("CREATE TABLE test_business_record (id VARCHAR(128) PRIMARY KEY)");
+        jdbc.execute("""
+                CREATE TABLE test_inbox_business_record (
+                    tenant_id VARCHAR(128) NOT NULL,
+                    consumer_id VARCHAR(128) NOT NULL,
+                    message_id VARCHAR(128) NOT NULL,
+                    PRIMARY KEY (tenant_id, consumer_id, message_id)
+                )
+                """);
         var named = new NamedParameterJdbcTemplate(dataSource);
         transactions = new TransactionTemplate(new DataSourceTransactionManager(dataSource));
+        inboxTransactions = new SpringTransactionBoundary(transactions);
         outbox = new JdbcOutboxStore(
                 named,
                 JdbcMessagingDialect.MYSQL,
@@ -84,6 +101,7 @@ class JdbcMessagingMySqlIT {
         jdbc.execute("DELETE FROM moduvera_message_inbox");
         jdbc.execute("DELETE FROM moduvera_message_outbox");
         jdbc.execute("DELETE FROM test_business_record");
+        jdbc.execute("DELETE FROM test_inbox_business_record");
     }
 
     @Test
@@ -208,6 +226,53 @@ class JdbcMessagingMySqlIT {
     }
 
     @Test
+    void inboxTemplateCommitsOncePerTenantAndConsumerScope() {
+        var id = new MessageId("mysql-inbox-scope");
+        var inventory = inboxTemplate("inventory");
+
+        assertThat(handle("tenant-a", inventory, id, recordBusinessChange("inventory", id)))
+                .isEqualTo(InboxOutcome.APPLIED);
+        assertThat(handle("tenant-a", inventory, id, recordBusinessChange("inventory", id)))
+                .isEqualTo(InboxOutcome.DUPLICATE);
+        assertThat(handle(
+                        "tenant-a",
+                        inboxTemplate("audit"),
+                        id,
+                        recordBusinessChange("audit", id)))
+                .isEqualTo(InboxOutcome.APPLIED);
+        assertThat(handle("tenant-b", inventory, id, recordBusinessChange("inventory", id)))
+                .isEqualTo(InboxOutcome.APPLIED);
+
+        assertThat(businessScopes())
+                .containsExactly(
+                        "tenant-a:audit:mysql-inbox-scope",
+                        "tenant-a:inventory:mysql-inbox-scope",
+                        "tenant-b:inventory:mysql-inbox-scope");
+        assertThat(inboxRecordCount(id)).isEqualTo(3);
+        assertThat(ExecutionContextHolder.current()).isEmpty();
+    }
+
+    @Test
+    void inboxAndBusinessMutationRollBackTogetherAndCanRetry() {
+        var id = new MessageId("mysql-inbox-retry");
+        var template = inboxTemplate("inventory");
+
+        assertThatThrownBy(() -> handle("tenant-a", template, id, () -> {
+                    recordBusinessChange("inventory", id).run();
+                    throw new IllegalStateException("handler failed");
+                }))
+                .isInstanceOf(IllegalStateException.class);
+        assertThat(businessRecordCount(id)).isZero();
+        assertThat(inboxRecordCount(id)).isZero();
+
+        assertThat(handle("tenant-a", template, id, recordBusinessChange("inventory", id)))
+                .isEqualTo(InboxOutcome.APPLIED);
+        assertThat(businessRecordCount(id)).isEqualTo(1);
+        assertThat(inboxRecordCount(id)).isEqualTo(1);
+        assertThat(ExecutionContextHolder.current()).isEmpty();
+    }
+
+    @Test
     void lifecycleQueriesExposeTheirDialectSpecificIndexesToThePlanner() {
         for (int index = 0; index < 240; index++) {
             append(message("mysql-idx-" + index, "destination-a", "key-" + index));
@@ -270,6 +335,66 @@ class JdbcMessagingMySqlIT {
         ready.countDown();
         start.await();
         return new HashSet<>(ids(store.claim(6, Duration.ofSeconds(30)).orElseThrow()));
+    }
+
+    private InboxTemplate inboxTemplate(String consumerId) {
+        return new InboxTemplate(
+                consumerId,
+                inbox,
+                inboxTransactions,
+                Clock.fixed(Instant.parse("2026-08-30T00:00:00Z"), ZoneOffset.UTC));
+    }
+
+    private static InboxOutcome handle(
+            String tenantId, InboxTemplate template, MessageId messageId, Runnable businessChange) {
+        return ExecutionContextHolder.call(
+                context(tenantId), () -> template.handle(messageId, businessChange));
+    }
+
+    private Runnable recordBusinessChange(String consumerId, MessageId messageId) {
+        return () -> {
+            var context = ExecutionContextHolder.require();
+            assertThat(context.actor().subjectId()).isEqualTo("inventory-service");
+            jdbc.update(
+                    """
+                    INSERT INTO test_inbox_business_record(tenant_id, consumer_id, message_id)
+                    VALUES (?, ?, ?)
+                    """,
+                    context.tenantId().value(),
+                    consumerId,
+                    messageId.value());
+        };
+    }
+
+    private java.util.List<String> businessScopes() {
+        return jdbc.queryForList(
+                """
+                SELECT CONCAT(tenant_id, ':', consumer_id, ':', message_id)
+                  FROM test_inbox_business_record
+                 ORDER BY tenant_id, consumer_id, message_id
+                """,
+                String.class);
+    }
+
+    private int businessRecordCount(MessageId messageId) {
+        return jdbc.queryForObject(
+                "SELECT COUNT(*) FROM test_inbox_business_record WHERE message_id = ?",
+                Integer.class,
+                messageId.value());
+    }
+
+    private int inboxRecordCount(MessageId messageId) {
+        return jdbc.queryForObject(
+                "SELECT COUNT(*) FROM moduvera_message_inbox WHERE message_id = ?",
+                Integer.class,
+                messageId.value());
+    }
+
+    private static ExecutionContext context(String tenantId) {
+        return ExecutionContext.initiatedBy(
+                new TenantId(tenantId),
+                new Actor(ActorType.SERVICE, "inventory-service"),
+                "corr-mysql-inbox");
     }
 
     private void append(SerializedMessage message) {

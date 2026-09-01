@@ -5,15 +5,21 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.ande1922.moduvera.context.Actor;
 import io.github.ande1922.moduvera.context.ActorType;
+import io.github.ande1922.moduvera.context.ExecutionContextHolder;
 import io.github.ande1922.moduvera.context.Initiator;
+import io.github.ande1922.moduvera.context.MissingExecutionContextException;
 import io.github.ande1922.moduvera.context.TenantId;
+import io.github.ande1922.moduvera.data.spring.SpringTransactionBoundary;
 import io.github.ande1922.moduvera.message.Destination;
+import io.github.ande1922.moduvera.message.InboundMessageContract;
 import io.github.ande1922.moduvera.message.MessageDescriptor;
 import io.github.ande1922.moduvera.message.MessageId;
 import io.github.ande1922.moduvera.message.MessageKind;
 import io.github.ande1922.moduvera.message.MessageType;
 import io.github.ande1922.moduvera.message.NonRetryableMessageException;
 import io.github.ande1922.moduvera.message.SerializedMessage;
+import io.github.ande1922.moduvera.message.inbox.InboxOutcome;
+import io.github.ande1922.moduvera.message.inbox.InboxTemplate;
 import io.github.ande1922.moduvera.message.outbox.MessageTransport;
 import io.github.ande1922.moduvera.message.outbox.OutboxPublishReport;
 import io.github.ande1922.moduvera.message.outbox.OutboxWorker;
@@ -25,6 +31,7 @@ import java.sql.Connection;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
@@ -60,6 +67,7 @@ class JdbcMessagingStoreIT {
     private JdbcOutboxStore secondOutbox;
     private JdbcDurablePublication publication;
     private JdbcInboxRepository inbox;
+    private ReliableMessageConsumerFactory inboxConsumers;
     private TransactionTemplate transactions;
     private AtomicInteger wakeSignals;
 
@@ -84,11 +92,27 @@ class JdbcMessagingStoreIT {
         secondOutbox = new JdbcOutboxStore(
                 named, JdbcMessagingDialect.POSTGRESQL, transactions, new LocalOutboxWakeSignal());
         inbox = new JdbcInboxRepository(named);
+        inboxConsumers = new ReliableMessageConsumerFactory(
+                new KafkaMessageMapper(),
+                inbox,
+                new SpringTransactionBoundary(transactions),
+                Clock.fixed(Instant.parse("2026-08-30T00:00:00Z"), ZoneOffset.UTC));
+        jdbc.execute("""
+                CREATE TABLE test_inbox_business_record (
+                    tenant_id VARCHAR(128) NOT NULL,
+                    consumer_id VARCHAR(128) NOT NULL,
+                    message_id VARCHAR(128) NOT NULL,
+                    PRIMARY KEY (tenant_id, consumer_id, message_id)
+                )
+                """);
     }
 
     @BeforeEach
     void clearTables() {
-        jdbc.execute("TRUNCATE TABLE moduvera_message_inbox, moduvera_message_outbox, test_business_record");
+        jdbc.execute("""
+                TRUNCATE TABLE moduvera_message_inbox, moduvera_message_outbox,
+                    test_business_record, test_inbox_business_record
+                """);
         wakeSignals.set(0);
     }
 
@@ -523,12 +547,122 @@ class JdbcMessagingStoreIT {
         assertThat(inbox.tryStart(tenant, "order", id, Instant.now())).isTrue();
     }
 
+    @Test
+    void commitsBusinessChangesOncePerTrustedTenantAndConsumerScope() {
+        var mapper = new KafkaMessageMapper();
+        var tenantA = inboxMessage("msg-inbox-scope", "tenant-a");
+        var inventory = inboxConsumers.forConsumer("inventory", inboxContract());
+
+        assertThat(inventory.handle(
+                        mapper.toSpringMessage(tenantA), recordBusinessChange("inventory")))
+                .isEqualTo(InboxOutcome.APPLIED);
+        assertThat(inventory.handle(
+                        mapper.toSpringMessage(tenantA), recordBusinessChange("inventory")))
+                .isEqualTo(InboxOutcome.DUPLICATE);
+        assertThat(inboxConsumers
+                        .forConsumer("audit", inboxContract())
+                        .handle(mapper.toSpringMessage(tenantA), recordBusinessChange("audit")))
+                .isEqualTo(InboxOutcome.APPLIED);
+        assertThat(inventory.handle(
+                        mapper.toSpringMessage(inboxMessage("msg-inbox-scope", "tenant-b")),
+                        recordBusinessChange("inventory")))
+                .isEqualTo(InboxOutcome.APPLIED);
+
+        assertThat(businessScopes())
+                .containsExactly(
+                        "tenant-a:audit:msg-inbox-scope",
+                        "tenant-a:inventory:msg-inbox-scope",
+                        "tenant-b:inventory:msg-inbox-scope");
+        assertThat(inboxRecordCount("msg-inbox-scope")).isEqualTo(3);
+        assertThat(ExecutionContextHolder.current()).isEmpty();
+    }
+
+    @Test
+    void rollsBackInboxAndBusinessChangeTogetherSoTheMessageCanRetry() {
+        var mapper = new KafkaMessageMapper();
+        var serialized = inboxMessage("msg-inbox-retry", "tenant-a");
+        var consumer = inboxConsumers.forConsumer("inventory", inboxContract());
+
+        assertThatThrownBy(() -> consumer.handle(mapper.toSpringMessage(serialized), message -> {
+                    recordBusinessChange("inventory").accept(message);
+                    throw new IllegalStateException("handler failed");
+                }))
+                .isInstanceOf(NonRetryableMessageException.class)
+                .hasCauseInstanceOf(IllegalStateException.class);
+        assertThat(businessRecordCount("msg-inbox-retry")).isZero();
+        assertThat(inboxRecordCount("msg-inbox-retry")).isZero();
+
+        assertThat(consumer.handle(
+                        mapper.toSpringMessage(serialized), recordBusinessChange("inventory")))
+                .isEqualTo(InboxOutcome.APPLIED);
+        assertThat(businessRecordCount("msg-inbox-retry")).isEqualTo(1);
+        assertThat(inboxRecordCount("msg-inbox-retry")).isEqualTo(1);
+        assertThat(ExecutionContextHolder.current()).isEmpty();
+    }
+
+    @Test
+    void missingTrustedTenantContextFailsClosedWithoutPersistingInboxState() {
+        var template = new InboxTemplate(
+                "inventory",
+                inbox,
+                new SpringTransactionBoundary(transactions),
+                Clock.fixed(Instant.parse("2026-08-30T00:00:00Z"), ZoneOffset.UTC));
+        AtomicInteger businessChanges = new AtomicInteger();
+
+        assertThatThrownBy(() -> template.handle(
+                        new MessageId("msg-missing-context"), businessChanges::incrementAndGet))
+                .isInstanceOf(MissingExecutionContextException.class);
+
+        assertThat(businessChanges).hasValue(0);
+        assertThat(inboxRecordCount("msg-missing-context")).isZero();
+    }
+
     private static Set<String> claimIds(
             JdbcOutboxStore store, CountDownLatch ready, CountDownLatch start)
             throws InterruptedException {
         ready.countDown();
         start.await();
         return new HashSet<>(ids(store.claim(10, Duration.ofSeconds(30)).orElseThrow()));
+    }
+
+    private java.util.function.Consumer<SerializedMessage> recordBusinessChange(String consumerId) {
+        return serialized -> {
+            var context = ExecutionContextHolder.require();
+            assertThat(context.tenantId()).isEqualTo(serialized.descriptor().tenantId());
+            assertThat(context.actor().subjectId()).isEqualTo("inventory-service");
+            jdbc.update(
+                    """
+                    INSERT INTO test_inbox_business_record(tenant_id, consumer_id, message_id)
+                    VALUES (?, ?, ?)
+                    """,
+                    context.tenantId().value(),
+                    consumerId,
+                    serialized.descriptor().id().value());
+        };
+    }
+
+    private java.util.List<String> businessScopes() {
+        return jdbc.queryForList(
+                """
+                SELECT CONCAT(tenant_id, ':', consumer_id, ':', message_id)
+                  FROM test_inbox_business_record
+                 ORDER BY tenant_id, consumer_id, message_id
+                """,
+                String.class);
+    }
+
+    private int businessRecordCount(String messageId) {
+        return jdbc.queryForObject(
+                "SELECT COUNT(*) FROM test_inbox_business_record WHERE message_id = ?",
+                Integer.class,
+                messageId);
+    }
+
+    private int inboxRecordCount(String messageId) {
+        return jdbc.queryForObject(
+                "SELECT COUNT(*) FROM moduvera_message_inbox WHERE message_id = ?",
+                Integer.class,
+                messageId);
     }
 
     private void append(SerializedMessage message) {
@@ -603,5 +737,32 @@ class JdbcMessagingStoreIT {
                 descriptor,
                 SerializedMessage.JSON,
                 "{\"orderId\":\"42\"}".getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static InboundMessageContract inboxContract() {
+        return new InboundMessageContract(
+                MessageKind.ASYNC_COMMAND,
+                new MessageType("io.github.ande1922.moduvera.reference.inventory.reserve.v1"),
+                URI.create("urn:service:order"),
+                new Destination("inventory.commands"),
+                new Actor(ActorType.SERVICE, "inventory-service", Set.of("inventory:reserve")));
+    }
+
+    private static SerializedMessage inboxMessage(String id, String tenantId) {
+        return SerializedMessage.json(
+                new MessageDescriptor(
+                        new MessageId(id),
+                        MessageKind.ASYNC_COMMAND,
+                        new MessageType("io.github.ande1922.moduvera.reference.inventory.reserve.v1"),
+                        URI.create("urn:service:order"),
+                        new Destination("inventory.commands"),
+                        Instant.parse("2026-08-30T00:00:00Z"),
+                        new TenantId(tenantId),
+                        new Actor(ActorType.SERVICE, "order-service"),
+                        "corr-inbox",
+                        null,
+                        new Initiator(ActorType.USER, "alice"),
+                        tenantId + ":order-42"),
+                "{}");
     }
 }
