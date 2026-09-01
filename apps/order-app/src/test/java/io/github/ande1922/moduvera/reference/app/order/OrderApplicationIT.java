@@ -170,6 +170,8 @@ class OrderApplicationIT {
                 .contains("\"productId\":\"100\"")
                 .contains("\"status\":\"PENDING_STOCK\"")
                 .doesNotContain("\"data\"");
+        assertThat(persistedOrder(orderId))
+                .isEqualTo(new PersistedOrder("PENDING_STOCK", 0, "alice", "alice"));
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM order_header", Integer.class)).isEqualTo(1);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM moduvera_message_outbox", Integer.class))
                 .isEqualTo(1);
@@ -243,12 +245,25 @@ class OrderApplicationIT {
                 "corr-reject-result"));
         eventuallyStatus(rejectedId, "REJECTED");
 
-        assertThat(jdbc.queryForObject(
-                        "SELECT version FROM order_header WHERE order_id = ?",
-                        Long.class,
-                        Long.parseLong(confirmedId)))
-                .isEqualTo(1L);
+        assertThat(persistedOrder(confirmedId))
+                .isEqualTo(new PersistedOrder("CONFIRMED", 1, "alice", "inventory-service"));
         assertThat(count("moduvera_message_inbox")).isEqualTo(2);
+    }
+
+    private PersistedOrder persistedOrder(String orderId) {
+        return jdbc.queryForObject(
+                """
+                SELECT status, version, created_by, updated_by
+                  FROM order_header
+                 WHERE tenant_id = 'tenant-a'
+                   AND order_id = ?
+                """,
+                (result, rowNumber) -> new PersistedOrder(
+                        result.getString("status"),
+                        result.getLong("version"),
+                        result.getString("created_by"),
+                        result.getString("updated_by")),
+                Long.parseLong(orderId));
     }
 
     private String createOrder(String correlationId) throws Exception {
@@ -293,6 +308,8 @@ class OrderApplicationIT {
     private int count(String table) {
         return jdbc.queryForObject("SELECT COUNT(*) FROM " + table, Integer.class);
     }
+
+    private record PersistedOrder(String status, long version, String createdBy, String updatedBy) {}
 
     private static void eventually(java.util.function.BooleanSupplier condition) throws Exception {
         Instant deadline = Instant.now().plusSeconds(15);
