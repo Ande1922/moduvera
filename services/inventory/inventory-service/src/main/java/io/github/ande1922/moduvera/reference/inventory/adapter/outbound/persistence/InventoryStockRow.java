@@ -1,4 +1,4 @@
-package io.github.ande1922.moduvera.reference.inventory.infrastructure.persistence;
+package io.github.ande1922.moduvera.reference.inventory.adapter.outbound.persistence;
 
 public class InventoryStockRow {
 

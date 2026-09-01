@@ -1,4 +1,4 @@
-package io.github.ande1922.moduvera.reference.inventory.infrastructure.messaging;
+package io.github.ande1922.moduvera.reference.inventory.adapter.outbound.messaging;
 
 import io.github.ande1922.moduvera.context.Actor;
 import io.github.ande1922.moduvera.context.ActorType;

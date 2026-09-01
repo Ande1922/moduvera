@@ -1,4 +1,4 @@
-package io.github.ande1922.moduvera.reference.inventory.infrastructure.messaging;
+package io.github.ande1922.moduvera.reference.inventory.adapter.outbound.messaging;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
