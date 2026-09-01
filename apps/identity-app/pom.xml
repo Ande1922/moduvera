@@ -5,7 +5,7 @@
     <groupId>io.github.ande1922.moduvera</groupId>
     <artifactId>moduvera-parent</artifactId>
     <version>0.1.0-SNAPSHOT</version>
-    <relativePath>../../pom.xml</relativePath>
+    <relativePath>../../framework/parent/pom.xml</relativePath>
   </parent>
   <artifactId>identity-app</artifactId>
   <name>Moduvera :: App :: Identity</name>

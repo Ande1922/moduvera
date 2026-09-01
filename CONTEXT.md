@@ -39,7 +39,7 @@ _Avoid_: 全后端单体、绕过身份的内部 Demo、无外部依赖的单进
 当前资格证据由同一套公共 HTTP 黑盒步骤覆盖五 App 微服务 Golden Path 与业务核心模块化单体；两次运行只切换 App 集合、Gateway 前缀策略和目标地址，并继续使用同一 Kafka、Outbox/Inbox、可信消息上下文及恢复语义。重复投递由两种装配各自的真实 Kafka App integration test 注入并验证，不为测试向生产 HTTP 面增加入口。
 
 **服务 API（Service API）**:
-业务服务向其他业务服务承诺支持的、与传输协议无关的内部调用能力、请求、结果及跨服务消息；它可由 Local 或 Remote 适配器实现，但不定义浏览器侧公共 HTTP 路由。
+业务服务向其他业务服务承诺支持的、与传输协议无关的直接调用能力及跨服务消息契约。直接调用能力可由 Local 或 Remote 适配器实现；只提供异步消息入口的命令只发布消息契约，不因此要求一个同形的同步 Java 接口。Service API 不定义浏览器侧公共 HTTP 路由。
 _Avoid_: Feign API、Controller API、Contract 模块
 
 **入站适配器（Inbound Adapter）**:

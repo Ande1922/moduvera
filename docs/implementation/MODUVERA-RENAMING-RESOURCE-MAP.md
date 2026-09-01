@@ -17,11 +17,14 @@ landed in the working tree.
 | `platform-parent` | `moduvera-parent` |
 | `platform-dependencies` | `moduvera-bom` |
 
-All reactor modules now resolve to these coordinates:
+The root POM is now a reactor-only aggregator, while the reusable build Parent
+and standalone consumer BOM live under `framework/parent/` and
+`framework/bom/`. Reactor modules resolve to these coordinates:
 
 | Area | Final coordinates |
 | --- | --- |
-| root | `io.github.ande1922.moduvera:moduvera-parent` |
+| reactor root | `io.github.ande1922.moduvera:moduvera-reactor` |
+| build Parent | `io.github.ande1922.moduvera:moduvera-parent` |
 | BOM | `io.github.ande1922.moduvera:moduvera-bom` |
 | foundation | `moduvera-kernel`, `moduvera-lock-core`, `moduvera-object-storage-api`, `moduvera-message-core`, `moduvera-database-migration` under `io.github.ande1922.moduvera` |
 | adapters | `io.github.ande1922.moduvera:moduvera-lock-local` |

@@ -9,7 +9,7 @@ This repository is an executable Spring Boot 4.1.1/JDK 26 platform scaffold plus
 Requirements: JDK 26, Docker with Compose, and `uv`. Then run:
 
 ```bash
-scripts/reference-product/verify.sh
+verification/reference-product/harness/verify.sh
 ```
 
 That one command builds and verifies the reactor once, then runs the same public-HTTP-only black-box contract first against five App Assemblies and then against Gateway + Identity + `app-monolith`. Only topology configuration changes the target App set, Order target address and Gateway prefix policy. It proves:
@@ -23,17 +23,17 @@ That one command builds and verifies the reactor once, then runs the same public
 - order creation while Kafka is unavailable, followed by the topology's business App restart and eventual recovery;
 - identical external `/api/identity/v1/...` and `/api/order/v1/...` URLs, native success bodies, RFC 9457 errors, external `Location`, correlation and hidden internal/Actuator routes in both topologies.
 
-The harness uses ports 58080-58085, PostgreSQL 55432 and Kafka 59092 by default; all can be overridden with `REFERENCE_*_PORT`. Each topology runs against fresh isolated dependencies and tears them down. Run only one topology with `scripts/reference-product/verify.sh microservices` or `scripts/reference-product/verify.sh business-core-monolith`. After a successful build, `REFERENCE_SKIP_BUILD=1` skips the Maven phase. To inspect the selected topology after acceptance, use:
+The harness uses ports 58080-58085, PostgreSQL 55432 and Kafka 59092 by default; all can be overridden with `REFERENCE_*_PORT`. Each topology runs against fresh isolated dependencies and tears them down. Run only one topology with `verification/reference-product/harness/verify.sh microservices` or `verification/reference-product/harness/verify.sh business-core-monolith`. After a successful build, `REFERENCE_SKIP_BUILD=1` skips the Maven phase. To inspect the selected topology after acceptance, use:
 
 ```bash
-REFERENCE_KEEP_RUNNING=1 REFERENCE_SKIP_BUILD=1 scripts/reference-product/verify.sh business-core-monolith
+REFERENCE_KEEP_RUNNING=1 REFERENCE_SKIP_BUILD=1 verification/reference-product/harness/verify.sh business-core-monolith
 ```
 
 The local fixture users are `alice/alice-password` (`tenant-a`), `bob/bob-password` (`tenant-b`) and `viewer/viewer-password` (read-only in `tenant-a`). These credentials and the Compose assets are for local development/acceptance only and are not a production deployment reference.
 
 ## Smaller consumer example
 
-[`examples/simple-notes-demo`](./examples/simple-notes-demo/README.md) is the minimal external-consumer-style example. It has its own Spring Boot parent, imports the platform BOM, declares the relevant Starters directly, and proves Web, JWT, PostgreSQL/MyBatis-Plus, migration, durable messaging, Kafka retry and DLQ behavior through real infrastructure.
+[`examples/simple-notes-demo`](./examples/simple-notes-demo/README.md) is the minimal external-consumer-style example. It has its own Spring Boot parent, imports the Moduvera BOM, declares the relevant Starters directly, and proves Web, JWT, PostgreSQL/MyBatis-Plus, migration, durable messaging, Kafka retry and DLQ behavior through real infrastructure.
 
 ## How the scaffold is used
 

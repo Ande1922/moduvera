@@ -6,8 +6,8 @@ This is the only current status source for the repository. Status is based on ex
 
 | Artifact/capability | Supported behavior | Evidence boundary |
 |---|---|---|
-| `moduvera-bom` | Version management for platform and governed third-party coordinates | versionless BOM smoke and independent-parent Notes consumer |
-| `moduvera-kernel` | coded errors, execution/tenant/actor/initiator context, authorization, identifiers, paging and `TransactionBoundary`, separated by package | framework-free tests plus architecture rules; platform/virtual-thread snapshot propagation tests |
+| `moduvera-bom` | Version management for framework and governed third-party coordinates | versionless BOM smoke and independent-parent Notes consumer |
+| `moduvera-kernel` | coded errors, execution/tenant/actor/initiator context, authorization, identifiers, paging and `TransactionBoundary`, separated by package | framework-free tests plus architecture rules; framework and virtual-thread snapshot propagation tests |
 | `moduvera-web-spring-boot-starter` | native success bodies, validation, correlation and RFC 9457 errors | starter contract tests, Notes HTTP and dual-topology public black box |
 | `moduvera-auth-resource-server-autoconfigure` | signed JWT issuer/audience checks, USER/SERVICE tenant rules, fail-closed context lifecycle and 401/403 responses | signed-token App tests, virtual-thread HTTP and public Gateway flow |
 | `moduvera-data-mybatis-plus-spring-boot-starter` | MyBatis-Plus 3.5.17, context-derived tenant enforcement and one READ_COMMITTED top-level transaction boundary | PostgreSQL consumer Apps/Notes and real MySQL repository TCK |
@@ -23,7 +23,7 @@ The supported database default is PostgreSQL. MySQL is supported as a compatibil
 - `examples/simple-notes-demo`: small independent-parent consumer showing direct BOM/Starter use with HTTP, JWT, PostgreSQL, Kafka and DLQ.
 - `gateway-app`, `identity-app`, `catalog-app`, `order-app`, `inventory-app`: a separate-process reference product using opaque sessions, internal JWTs, real HTTP, durable messaging and asynchronous order fulfillment.
 - `gateway-app`, `identity-app`, `app-monolith`: a focused business-core modular-monolith topology reusing the same service-owned HTTP/message adapters, Local `CatalogApi`, and Kafka Outbox/Inbox flow.
-- `scripts/reference-product/verify.sh`: topology-parameterized local acceptance harness that runs one public HTTP contract against both supported topologies, including concurrent tenant isolation and Kafka/App stop-recovery. Its Compose assets are not production deployment guidance.
+- `verification/reference-product/harness/verify.sh`: topology-parameterized local acceptance harness that runs one public HTTP contract against both supported topologies, including concurrent tenant isolation and Kafka/App stop-recovery. Its Compose assets are not production deployment guidance.
 
 ## Incubating
 

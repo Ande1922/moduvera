@@ -6,7 +6,7 @@ This document describes ownership and dependency direction only. Current support
 
 ```text
 foundation contracts
-    ├── technical starters/adapters
+    ├── technical `framework/starters` and `framework/adapters`
     └── provider-owned service APIs
              ↓
 business service implementations
@@ -18,7 +18,7 @@ testing may depend on public seams; production never depends on test support
 
 App Assemblies are the only classpath composition roots. Business Services own reusable inbound adapter semantics; App Assemblies select and activate them with runtime capabilities and configuration. A multi-service App also assigns each service's `/api/{service}` External Route Prefix to its public Controllers, while leaving internal Controllers unchanged. A Compose file used by local acceptance does not turn the repository into a production deployment design.
 
-## Platform artifacts
+## Framework artifacts
 
 - `moduvera-bom`: dependency-management BOM; it installs nothing.
 - `moduvera-kernel`: framework-light package seams for API values, errors, context, authorization, identifiers and transaction contracts.
@@ -57,7 +57,7 @@ Each `*-api` owns protocol-neutral Commands, Queries and Views. Each `*-service`
 - `inventory-app`: Kafka-only business entry plus a health endpoint, Inventory persistence and result Outbox assembly.
 - `app-monolith`: supported focused Catalog/Order/Inventory business-core composition under ADR 0022 and ADR 0027. It selects the Local `CatalogApi`, keeps Order/Inventory collaboration on the same Kafka Outbox/Inbox path, and prefixes each service's public Controllers according to ADR 0029. The separate Gateway therefore forwards the stable Order external path without stripping the service name; Gateway and Identity remain separate Apps in this topology.
 
-The service-to-service security chain is USER JWT at Order, then an audience-scoped SERVICE JWT for Order→Catalog with the original initiator preserved. Catalog derives the tenant from the trusted `Tenant-Id` service header under the platform SERVICE-token rule.
+The service-to-service security chain is USER JWT at Order, then an audience-scoped SERVICE JWT for Order→Catalog with the original initiator preserved. Catalog derives the tenant from the trusted `Tenant-Id` service header under the framework SERVICE-token rule.
 
 ## Verification topology
 

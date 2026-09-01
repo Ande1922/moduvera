@@ -2,18 +2,39 @@
 
 ## Project Structure & Module Organization
 
-This is a Java 26, Spring Boot 4.1 multi-module Maven repository. Shared contracts and infrastructure live in `foundation/`; reusable Spring Boot integrations are in `starters/`; concrete implementations belong in `adapters/`. Each capability under `services/<name>/` separates protocol-neutral `<name>-api` contracts from application, domain, and service-owned adapters in `<name>-service`. Runnable assemblies are under `apps/`, including the five-service topology and `app-monolith`. Put shared test utilities and architecture rules in `testing/`, examples in `examples/`, deployment assets in `deployment/`, and design decisions in `docs/adr/`. Follow Maven layout: `src/main/java`, `src/main/resources`, and `src/test/java`.
+This is a Java 26, Spring Boot 4.1 multi-module Maven repository. The root `pom.xml` is the repository reactor only. Reusable framework artifacts live under `framework/`: internal build conventions in `framework/parent/`, the standalone consumer BOM in `framework/bom/`, shared contracts and infrastructure in `framework/foundation/`, Spring Boot integrations in `framework/starters/`, concrete implementations in `framework/adapters/`, and shared test utilities and architecture rules in `framework/testing/`. Each capability under `services/<name>/` separates protocol-neutral `<name>-api` contracts from application, domain, and service-owned adapters in `<name>-service`. Runnable assemblies are under `apps/`, including the five-service topology and `app-monolith`. Verification assets live under `verification/`, examples in `examples/`, and design decisions in `docs/adr/`. Follow Maven layout: `src/main/java`, `src/main/resources`, and `src/test/java`.
 
 ## Build, Test, and Development Commands
 
 - `./mvnw clean verify` builds the full reactor and runs unit, integration, architecture, formatting, PMD, and JaCoCo checks.
 - `./mvnw -pl services/order/order-service -am test` tests one module plus required dependencies during focused development.
-- `./mvnw spotless:apply` removes unused imports and normalizes Java/POM whitespace before review.
-- `scripts/reference-product/verify.sh [microservices|business-core-monolith]` runs the public HTTP acceptance contract. It requires JDK 26, Docker Compose, and `uv`; omit the argument to verify both topologies.
+- `./mvnw -pl '!framework/bom,!framework/testing/moduvera-bom-smoke,!examples/simple-notes-demo,!:moduvera-reactor' spotless:apply` removes unused imports and normalizes Java/POM whitespace in Parent-managed modules before review.
+- `verification/reference-product/harness/verify.sh [microservices|business-core-monolith]` runs the public HTTP acceptance contract. It requires JDK 26, Docker Compose, and `uv`; omit the argument to verify both topologies.
 
 ## Coding Style & Naming Conventions
 
-Use four-space Java indentation, `UpperCamelCase` types, `lowerCamelCase` members, and `UPPER_SNAKE_CASE` constants. Keep packages below `io.github.ande1922.moduvera`. Place transport-neutral interfaces and records in API modules; keep HTTP, persistence, and messaging details behind service or platform seams. Compilation treats selected warnings as errors. Run Spotless and honor the focused rules in `config/pmd/ruleset.xml`.
+Use four-space Java indentation, `UpperCamelCase` types, `lowerCamelCase` members, and `UPPER_SNAKE_CASE` constants. Keep packages below `io.github.ande1922.moduvera`. Place transport-neutral interfaces and records in API modules; keep HTTP, persistence, and messaging details behind service or framework seams. Compilation treats selected warnings as errors. Run Spotless and honor the focused rules in `config/pmd/ruleset.xml`.
+
+## Integration Contracts & Adapter Seams
+
+- For an asynchronous-only capability, publish provider-owned, versioned command and event records in the provider's API module, and let the message inbound adapter invoke the Application Service. Add a Java `*Api` method only when a supported direct local or remote call exists; a message handler alone does not justify a synchronous interface.
+- Treat transport adaptation and model conversion as separate decisions. Adapters own envelope, routing, authentication, validation, status, and error mechanics. Before adding a transport/application Mapper or duplicate DTO, identify the observable difference in meaning, invariants, shape, serialization, or versioning that it protects; reuse the protocol-neutral contract type when no such difference exists.
+- Keep API modules independent of transport frameworks. Publish canonical kind, type, and destination values with the provider-owned message contract, while the consumer keeps its consumer ID, allowed source, execution Actor, and permissions as local policy. Broker authentication and destination ACLs are part of trusted-producer verification; envelope source matching alone is not authentication.
+- Before changing Service API, HTTP/message DTO, or inbound-adapter seams, read ADR 0004, ADR 0021, and ADR 0031 in `docs/adr/` and preserve their stated applicability conditions.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs use local Markdown under `.scratch/<feature-slug>/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Triage uses the canonical `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, and `wontfix` states. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This is a single-context repository with `CONTEXT.md` and system-wide ADRs under `docs/adr/`. See `docs/agents/domain.md`.
 
 ## Testing Guidelines
 
