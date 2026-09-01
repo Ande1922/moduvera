@@ -1,15 +1,25 @@
 package io.github.ande1922.moduvera.reference.app.catalog;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.github.ande1922.moduvera.context.Actor;
+import io.github.ande1922.moduvera.context.ActorType;
+import io.github.ande1922.moduvera.context.ExecutionContext;
+import io.github.ande1922.moduvera.context.ExecutionContextHolder;
+import io.github.ande1922.moduvera.context.MissingExecutionContextException;
+import io.github.ande1922.moduvera.context.TenantId;
+import io.github.ande1922.moduvera.reference.catalog.domain.Product;
+import io.github.ande1922.moduvera.reference.catalog.domain.ProductRepository;
 import java.math.BigDecimal;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Instant;
+import java.util.Currency;
 import java.util.List;
-import io.github.ande1922.moduvera.context.ExecutionContextHolder;
+import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -56,6 +66,9 @@ class CatalogApplicationIT {
     @Autowired
     private JdbcTemplate jdbc;
 
+    @Autowired
+    private ProductRepository products;
+
     @BeforeEach
     void seedProducts() {
         jdbc.update("DELETE FROM catalog_product");
@@ -101,6 +114,71 @@ class CatalogApplicationIT {
         assertThat(tenantB.body()).isEqualTo("tenant-b:true:corr-virtual-b");
     }
 
+    @Test
+    void persistsReloadsAndAuditsProductsThroughTheProductionRepository() {
+        var product = new Product(
+                300, "Espresso", new BigDecimal("26.50"), Currency.getInstance("CNY"), 4);
+
+        ExecutionContextHolder.run(context("tenant-a", "catalog-writer"), () -> products.save(product));
+        Product reloaded = ExecutionContextHolder.call(
+                context("tenant-a", "catalog-reader"),
+                () -> products.findById(300).orElseThrow());
+
+        assertThat(reloaded).isNotSameAs(product);
+        assertThat(reloaded.id()).isEqualTo(300);
+        assertThat(reloaded.name()).isEqualTo("Espresso");
+        assertThat(reloaded.price()).isEqualByComparingTo("26.50");
+        assertThat(reloaded.currency()).isEqualTo(Currency.getInstance("CNY"));
+        assertThat(reloaded.version()).isEqualTo(4);
+
+        Map<String, Object> audit = jdbc.queryForMap(
+                """
+                SELECT created_at, created_by, updated_at, updated_by
+                  FROM catalog_product
+                 WHERE tenant_id = 'tenant-a' AND product_id = 300
+                """);
+        assertThat(audit)
+                .containsEntry("created_by", "catalog-writer")
+                .containsEntry("updated_by", "catalog-writer");
+        assertThat(audit.get("created_at")).isNotNull();
+        assertThat(audit.get("updated_at")).isNotNull();
+    }
+
+    @Test
+    void selectsProductsUsingOnlyTheCurrentTenantContext() {
+        var tenantAProduct = new Product(
+                301, "Coffee", new BigDecimal("18.00"), Currency.getInstance("CNY"), 3);
+        var tenantBProduct = new Product(
+                301, "Tea", new BigDecimal("12.00"), Currency.getInstance("CNY"), 2);
+
+        ExecutionContextHolder.run(context("tenant-a", "writer-a"), () -> products.save(tenantAProduct));
+        ExecutionContextHolder.run(context("tenant-b", "writer-b"), () -> products.save(tenantBProduct));
+
+        Product tenantA = ExecutionContextHolder.call(
+                context("tenant-a", "reader-a"), () -> products.findById(301).orElseThrow());
+        Product tenantB = ExecutionContextHolder.call(
+                context("tenant-b", "reader-b"), () -> products.findById(301).orElseThrow());
+        var tenantC = ExecutionContextHolder.call(
+                context("tenant-c", "reader-c"), () -> products.findById(301));
+
+        assertThat(tenantA.name()).isEqualTo("Coffee");
+        assertThat(tenantA.version()).isEqualTo(3);
+        assertThat(tenantB.name()).isEqualTo("Tea");
+        assertThat(tenantB.version()).isEqualTo(2);
+        assertThat(tenantC).isEmpty();
+    }
+
+    @Test
+    void failsClosedWithoutTenantContextAtTheProductionRepositorySeam() {
+        var product = new Product(
+                302, "Context Required", new BigDecimal("1.00"), Currency.getInstance("CNY"), 0);
+
+        assertThatThrownBy(() -> products.findById(302))
+                .isInstanceOf(MissingExecutionContextException.class);
+        assertThatThrownBy(() -> products.save(product))
+                .isInstanceOf(MissingExecutionContextException.class);
+    }
+
     private HttpResponse<String> get(long productId, String token, String tenantId, String correlationId)
             throws Exception {
         HttpRequest.Builder request = HttpRequest.newBuilder()
@@ -137,6 +215,11 @@ class CatalogApplicationIT {
                 productId,
                 name,
                 price);
+    }
+
+    private static ExecutionContext context(String tenantId, String actorId) {
+        return ExecutionContext.initiatedBy(
+                new TenantId(tenantId), new Actor(ActorType.USER, actorId), "corr-" + tenantId + '-' + actorId);
     }
 
     @TestConfiguration(proxyBeanMethods = false)

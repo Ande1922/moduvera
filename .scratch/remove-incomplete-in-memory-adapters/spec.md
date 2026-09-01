@@ -1,4 +1,4 @@
-Status: ready-for-agent
+Status: resolved
 
 # 移除不完整的 InMemory Adapter 并以真实运行时实现验证基础设施语义
 

@@ -17,7 +17,6 @@ import io.github.ande1922.moduvera.message.MessageKind;
 import io.github.ande1922.moduvera.message.MessageType;
 import io.github.ande1922.moduvera.message.NonRetryableMessageException;
 import io.github.ande1922.moduvera.message.SerializedMessage;
-import io.github.ande1922.moduvera.message.inbox.memory.InMemoryInboxRepository;
 import java.net.URI;
 import java.time.Clock;
 import java.time.Instant;
@@ -34,7 +33,7 @@ class ReliableMessageConsumerTest {
     private final KafkaMessageMapper mapper = new KafkaMessageMapper();
     private final ReliableMessageConsumerFactory factory = new ReliableMessageConsumerFactory(
             mapper,
-            new InMemoryInboxRepository(),
+            (tenantId, consumerId, messageId, processedAt) -> true,
             new DirectTransactionBoundary(),
             Clock.fixed(Instant.parse("2026-08-30T00:00:00Z"), ZoneOffset.UTC));
 
