@@ -4,15 +4,12 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 
 /**
- * Compatibility aggregate for applications that need every Catalog capability.
+ * Compatibility facade for applications that still select the Catalog business module by its
+ * service-level identity.
  *
  * @deprecated import the required Catalog configuration slices explicitly.
  */
 @Deprecated(forRemoval = true)
 @Configuration(proxyBeanMethods = false)
-@Import({
-    CatalogApplicationConfiguration.class,
-    CatalogPersistenceConfiguration.class,
-    CatalogInternalHttpConfiguration.class
-})
+@Import(io.github.ande1922.moduvera.reference.catalog.catalog.CatalogModuleConfiguration.class)
 public class CatalogModuleConfiguration {}

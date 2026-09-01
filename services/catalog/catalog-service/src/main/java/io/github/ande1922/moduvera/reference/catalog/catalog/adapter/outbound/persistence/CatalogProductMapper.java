@@ -1,4 +1,4 @@
-package io.github.ande1922.moduvera.reference.catalog.infrastructure.persistence;
+package io.github.ande1922.moduvera.reference.catalog.catalog.adapter.outbound.persistence;
 
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
@@ -15,8 +15,7 @@ public interface CatalogProductMapper {
              WHERE tenant_id = #{tenantId}
                AND product_id = #{productId}
             """)
-    CatalogProductRow findById(
-            @Param("tenantId") String tenantId, @Param("productId") long productId);
+    CatalogProductRow findById(@Param("tenantId") String tenantId, @Param("productId") long productId);
 
     @Insert(value = """
             INSERT INTO catalog_product (

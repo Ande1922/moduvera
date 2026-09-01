@@ -1,4 +1,4 @@
-package io.github.ande1922.moduvera.reference.catalog.domain;
+package io.github.ande1922.moduvera.reference.catalog.catalog.domain;
 
 import java.util.Optional;
 

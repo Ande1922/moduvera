@@ -1,4 +1,4 @@
-package io.github.ande1922.moduvera.reference.catalog.application;
+package io.github.ande1922.moduvera.reference.catalog.catalog.application;
 
 import io.github.ande1922.moduvera.error.CodedException;
 import io.github.ande1922.moduvera.error.ErrorCode;

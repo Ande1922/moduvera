@@ -1,19 +1,19 @@
-package io.github.ande1922.moduvera.reference.catalog.application;
+package io.github.ande1922.moduvera.reference.catalog.catalog.application;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.ande1922.moduvera.authorization.PermissionDeniedException;
 import io.github.ande1922.moduvera.authorization.UseCaseAuthorizer;
-import io.github.ande1922.moduvera.reference.catalog.api.GetProductQuery;
-import io.github.ande1922.moduvera.reference.catalog.api.ProductSnapshot;
-import io.github.ande1922.moduvera.reference.catalog.domain.Product;
-import io.github.ande1922.moduvera.reference.catalog.domain.ProductRepository;
 import io.github.ande1922.moduvera.context.Actor;
 import io.github.ande1922.moduvera.context.ActorType;
 import io.github.ande1922.moduvera.context.ExecutionContext;
 import io.github.ande1922.moduvera.context.ExecutionContextHolder;
 import io.github.ande1922.moduvera.context.TenantId;
+import io.github.ande1922.moduvera.reference.catalog.api.GetProductQuery;
+import io.github.ande1922.moduvera.reference.catalog.api.ProductSnapshot;
+import io.github.ande1922.moduvera.reference.catalog.catalog.domain.Product;
+import io.github.ande1922.moduvera.reference.catalog.catalog.domain.ProductRepository;
 import java.math.BigDecimal;
 import java.util.Currency;
 import java.util.Optional;
