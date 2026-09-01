@@ -18,10 +18,21 @@ import io.github.ande1922.moduvera.message.MessageType;
 import io.github.ande1922.moduvera.message.SerializedMessage;
 import io.github.ande1922.moduvera.message.outbox.MessageTransport;
 import io.github.ande1922.moduvera.message.outbox.OutboxWorker;
+import io.github.ande1922.moduvera.messaging.kafka.migration.ModuveraMessagingMigrationConfiguration;
+import io.github.ande1922.moduvera.migration.MigrationDefinition;
+import io.github.ande1922.moduvera.migration.autoconfigure.ModuveraDatabaseMigrationMode;
+import io.github.ande1922.moduvera.migration.autoconfigure.ModuveraDatabaseMigrationProperties;
+import io.github.ande1922.moduvera.reference.order.OrderModuleConfiguration;
+import io.github.ande1922.moduvera.reference.order.adapter.inbound.http.OrderHttpInboundConfiguration;
+import io.github.ande1922.moduvera.reference.order.adapter.inbound.messaging.InventoryResultInboundConfiguration;
+import io.github.ande1922.moduvera.reference.order.adapter.outbound.http.CatalogHttpClient;
+import io.github.ande1922.moduvera.reference.order.adapter.outbound.http.RemoteCatalogApiConfiguration;
+import io.github.ande1922.moduvera.reference.order.adapter.outbound.messaging.OutboxReserveInventoryPublisher;
+import io.github.ande1922.moduvera.reference.order.adapter.outbound.messaging.ReserveInventoryPublicationConfiguration;
+import io.github.ande1922.moduvera.reference.order.adapter.outbound.persistence.OrderPersistenceConfiguration;
 import io.github.ande1922.moduvera.reference.order.application.ReserveInventoryPublisher;
 import io.github.ande1922.moduvera.reference.order.domain.OrderRepository;
-import io.github.ande1922.moduvera.reference.order.infrastructure.http.CatalogHttpClient;
-import io.github.ande1922.moduvera.reference.order.infrastructure.messaging.OutboxReserveInventoryPublisher;
+import io.github.ande1922.moduvera.reference.order.migration.OrderMigrationConfiguration;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
@@ -146,6 +157,12 @@ class OrderApplicationIT {
     @Autowired
     private ApplicationContext applicationContext;
 
+    @Autowired
+    private List<MigrationDefinition> migrationDefinitions;
+
+    @Autowired
+    private ModuveraDatabaseMigrationProperties migrationProperties;
+
     @BeforeEach
     void cleanDatabase() {
         jdbc.update("DELETE FROM moduvera_message_outbox");
@@ -196,6 +213,25 @@ class OrderApplicationIT {
         assertThat(applicationContext.getBeansOfType(CatalogApi.class).values())
                 .singleElement()
                 .isInstanceOf(CatalogHttpClient.class);
+    }
+
+    @Test
+    void explicitlyComposesTheOrderRuntimeSlicesAndStartupMigrations() {
+        assertThat(applicationContext.getBeansOfType(OrderModuleConfiguration.class)).hasSize(1);
+        assertThat(applicationContext.getBeansOfType(OrderHttpInboundConfiguration.class)).hasSize(1);
+        assertThat(applicationContext.getBeansOfType(InventoryResultInboundConfiguration.class))
+                .hasSize(1);
+        assertThat(applicationContext.getBeansOfType(RemoteCatalogApiConfiguration.class)).hasSize(1);
+        assertThat(applicationContext.getBeansOfType(OrderPersistenceConfiguration.class)).hasSize(1);
+        assertThat(applicationContext.getBeansOfType(ReserveInventoryPublicationConfiguration.class))
+                .hasSize(1);
+        assertThat(applicationContext.getBeansOfType(OrderMigrationConfiguration.class)).hasSize(1);
+        assertThat(applicationContext.getBeansOfType(ModuveraMessagingMigrationConfiguration.class))
+                .hasSize(1);
+        assertThat(migrationDefinitions)
+                .extracting(definition -> definition.component().value())
+                .containsExactlyInAnyOrder("order", "messaging");
+        assertThat(migrationProperties.getMode()).isEqualTo(ModuveraDatabaseMigrationMode.STARTUP);
     }
 
     @Test
