@@ -85,6 +85,12 @@ class CurrentScaffoldArchitectureTest {
         ModuveraArchitectureRules.BUSINESS_MESSAGE_CONSUMERS_BELONG_TO_PROVIDER_INBOUND.check(CURRENT_CLASSES);
     }
 
+    @Test
+    void asyncOnlyInventoryReservationUsesTheDirectApplicationServicePath() {
+        ModuveraArchitectureRules.ASYNC_ONLY_INVENTORY_RESERVATION_DOES_NOT_USE_SYNCHRONOUS_SERVICE_API
+                .check(CURRENT_CLASSES);
+    }
+
     private static void assertImported(String className) {
         assertTrue(CURRENT_CLASSES.contain(className), () -> "Architecture classpath is missing " + className);
     }
