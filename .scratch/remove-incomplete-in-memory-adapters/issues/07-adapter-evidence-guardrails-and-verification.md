@@ -4,7 +4,7 @@
 
 **Blocked by:** 02 — 让 Outbox Relay 使用运行时存储并移除内存 Outbox；03 — 用 JDBC Inbox 验证原子去重并移除内存 Inbox；04 — 让 Catalog 测试分层并移除内存 Product Repository；05 — 让 Order 测试分层并移除内存 Order 协作者；06 — 让 Inventory 测试分层并移除内存 Store
 
-**Status:** ready-for-agent
+**Status:** claimed
 
 - [ ] 仓库测试指导明确：基础设施语义由生产 Adapter 与真实组件证明，Application 编排可使用测试源码内的窄 mock、scripted stub、lambda 或 recording spy。
 - [ ] 指导说明未来内存运行时 Adapter 需要真实受支持消费者并通过同等适用契约证据，不以类名规则一概禁止所有未来 `InMemory` 实现。
