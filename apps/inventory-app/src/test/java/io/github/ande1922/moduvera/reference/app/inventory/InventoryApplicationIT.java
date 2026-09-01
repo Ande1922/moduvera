@@ -9,6 +9,7 @@ import io.github.ande1922.moduvera.context.ExecutionContext;
 import io.github.ande1922.moduvera.context.ExecutionContextHolder;
 import io.github.ande1922.moduvera.context.Initiator;
 import io.github.ande1922.moduvera.context.TenantId;
+import io.github.ande1922.moduvera.reference.inventory.api.InventoryReservationResult;
 import io.github.ande1922.moduvera.reference.inventory.api.ReserveInventoryCommand;
 import io.github.ande1922.moduvera.reference.inventory.api.ReserveInventoryLine;
 import io.github.ande1922.moduvera.reference.inventory.application.InventoryResultPublisher;
@@ -26,15 +27,25 @@ import io.github.ande1922.moduvera.message.publication.DurablePublication;
 import io.github.ande1922.moduvera.messaging.kafka.KafkaMessageMapper;
 import java.net.URI;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Properties;
 import java.util.Set;
-import java.util.function.Consumer;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
+import org.apache.kafka.clients.admin.Admin;
+import org.apache.kafka.clients.admin.AdminClientConfig;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.common.serialization.ByteArrayDeserializer;
+import org.apache.kafka.common.serialization.StringDeserializer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -46,6 +57,8 @@ import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.messaging.Message;
+import org.springframework.messaging.MessageHeaders;
+import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.junit.jupiter.Container;
@@ -65,6 +78,7 @@ class InventoryApplicationIT {
             new PostgreSQLContainer(System.getProperty("postgresql.test.image", "postgres:18.6"));
 
     private static final String RESERVE_TOPIC = "inventory-reserve-" + UUID.randomUUID();
+    private static final String RESULT_TOPIC = "inventory-result-" + UUID.randomUUID();
 
     @Container
     @SuppressWarnings("deprecation")
@@ -76,10 +90,11 @@ class InventoryApplicationIT {
         properties.add("spring.datasource.url", POSTGRES::getJdbcUrl);
         properties.add("spring.datasource.username", POSTGRES::getUsername);
         properties.add("spring.datasource.password", POSTGRES::getPassword);
-        properties.add("moduvera.messaging.kafka.relay-enabled", () -> false);
+        properties.add("moduvera.messaging.kafka.relay-enabled", () -> true);
         properties.add("spring.cloud.stream.kafka.binder.brokers", KAFKA::getBootstrapServers);
         properties.add("spring.cloud.stream.bindings.reserveInventory-in-0.destination", () -> RESERVE_TOPIC);
         properties.add("spring.cloud.stream.bindings.reserveInventory-in-0.group", () -> "inventory-it");
+        properties.add("spring.cloud.stream.bindings.inventoryResult-out-0.destination", () -> RESULT_TOPIC);
         properties.add("spring.cloud.stream.bindings.reserveInventoryTest-out-0.destination", () -> RESERVE_TOPIC);
         properties.add(
                 "spring.cloud.stream.bindings.reserveInventoryTest-out-0.producer.use-native-encoding",
@@ -129,8 +144,12 @@ class InventoryApplicationIT {
     @Qualifier("reserveInventory")
     private Consumer<Message<byte[]>> consumer;
 
+    @Autowired
+    private AtomicReference<ExecutionContext> observedContext;
+
     @BeforeEach
     void cleanAndSeed() {
+        observedContext.set(null);
         jdbc.update("DELETE FROM moduvera_message_outbox");
         jdbc.update("DELETE FROM moduvera_message_inbox");
         jdbc.update("DELETE FROM inventory_reservation_result");
@@ -141,17 +160,22 @@ class InventoryApplicationIT {
     }
 
     @Test
-    void reservesMultipleRowsOnceAndPublishesOneResult() throws Exception {
+    void reservesMultipleRowsOnceAndPublishesOneResultThroughKafka() throws Exception {
         ReserveInventoryCommand command = command(
                 "reserve-order-42",
                 42,
                 List.of(new ReserveInventoryLine(8, 3), new ReserveInventoryLine(7, 2)));
         SerializedMessage message = serialized(command, "tenant-a", "corr-success");
+        long consumedBefore = consumedReserveRecords();
+        assertThat(message.descriptor().actor().permissions())
+                .containsExactlyInAnyOrder("inventory:admin", "catalog:write");
 
         transport.send(message);
         eventually(() -> count("inventory_reservation_result") == 1);
         transport.send(message);
-        eventually(() -> count("moduvera_message_inbox") == 1);
+        eventuallyConsumedReserveRecords(consumedBefore + 2);
+
+        List<SerializedMessage> results = kafkaResults("inventory-result:reserve-order-42");
 
         assertThat(available("tenant-a", 7)).isEqualTo(3);
         assertThat(available("tenant-a", 8)).isEqualTo(1);
@@ -159,6 +183,31 @@ class InventoryApplicationIT {
         assertThat(count("inventory_reservation_result")).isEqualTo(1);
         assertThat(count("moduvera_message_inbox")).isEqualTo(1);
         assertThat(count("moduvera_message_outbox")).isEqualTo(1);
+        assertThat(results).hasSize(1);
+        assertThat(results.getFirst().descriptor().kind()).isEqualTo(MessageKind.EVENT);
+        assertThat(results.getFirst().descriptor().type())
+                .isEqualTo(new MessageType(InventoryReservationResult.MESSAGE_TYPE));
+        assertThat(results.getFirst().descriptor().source())
+                .isEqualTo(URI.create("urn:moduvera:reference:inventory-service"));
+        assertThat(results.getFirst().descriptor().destination())
+                .isEqualTo(new Destination(InventoryReservationResult.DESTINATION));
+        assertThat(results.getFirst().descriptor().actor())
+                .isEqualTo(new Actor(ActorType.SERVICE, "inventory-service"));
+        assertThat(results.getFirst().descriptor().tenantId()).isEqualTo(new TenantId("tenant-a"));
+        assertThat(results.getFirst().descriptor().correlationId()).isEqualTo("corr-success");
+        assertThat(results.getFirst().descriptor().initiator())
+                .isEqualTo(new Initiator(ActorType.USER, "alice"));
+        assertThat(json.readTree(results.getFirst().payload()).required("commandId").asString())
+                .isEqualTo("reserve-order-42");
+        assertThat(observedContext.get())
+                .isEqualTo(new ExecutionContext(
+                        new TenantId("tenant-a"),
+                        new Actor(
+                                ActorType.SERVICE,
+                                "order-service",
+                                Set.of("inventory:reserve")),
+                        new Initiator(ActorType.USER, "alice"),
+                        "corr-success"));
         assertThat(jdbc.queryForObject(
                         "SELECT result_type FROM inventory_reservation_result", String.class))
                 .isEqualTo("RESERVED");
@@ -168,16 +217,22 @@ class InventoryApplicationIT {
     }
 
     @Test
-    void insufficientLineLeavesEveryStockRowUntouchedAndEmitsRejectedResult() throws Exception {
+    void insufficientLineThroughKafkaLeavesEveryStockRowUntouchedAndPublishesRejected()
+            throws Exception {
         ReserveInventoryCommand command = command(
                 "reserve-order-43",
                 43,
                 List.of(new ReserveInventoryLine(7, 2), new ReserveInventoryLine(8, 5)));
 
-        consumer.accept(messages.toSpringMessage(serialized(command, "tenant-a", "corr-rejected")));
+        transport.send(serialized(command, "tenant-a", "corr-rejected"));
+        eventually(() -> count("inventory_reservation_result") == 1);
+        List<SerializedMessage> results = kafkaResults("inventory-result:reserve-order-43");
 
         assertThat(available("tenant-a", 7)).isEqualTo(5);
         assertThat(available("tenant-a", 8)).isEqualTo(4);
+        assertThat(results).hasSize(1);
+        assertThat(json.readTree(results.getFirst().payload()).required("unavailableProductIds"))
+                .hasToString("[8]");
         assertThat(jdbc.queryForObject(
                         "SELECT result_type FROM inventory_reservation_result", String.class))
                 .isEqualTo("REJECTED");
@@ -187,6 +242,50 @@ class InventoryApplicationIT {
         assertThat(jdbc.queryForObject(
                         "SELECT convert_from(payload, 'UTF8') FROM moduvera_message_outbox", String.class))
                 .contains("unavailableProductIds").contains("8").doesNotContain("tenant-a");
+    }
+
+    @Test
+    void invalidContractIsRejectedBeforeInventoryApplicationBehavior() throws Exception {
+        ReserveInventoryCommand command =
+                command("invalid-contract", 45, List.of(new ReserveInventoryLine(7, 2)));
+        SerializedMessage valid = serialized(command, "tenant-a", "corr-invalid-contract");
+        List<SerializedMessage> invalid = List.of(
+                withContract(
+                        valid,
+                        MessageKind.EVENT,
+                        valid.descriptor().type(),
+                        valid.descriptor().source(),
+                        valid.descriptor().destination()),
+                withContract(
+                        valid,
+                        valid.descriptor().kind(),
+                        new MessageType("io.github.ande1922.moduvera.reference.inventory.reserve.v2"),
+                        valid.descriptor().source(),
+                        valid.descriptor().destination()),
+                withContract(
+                        valid,
+                        valid.descriptor().kind(),
+                        valid.descriptor().type(),
+                        URI.create("urn:moduvera:reference:untrusted-service"),
+                        valid.descriptor().destination()),
+                withContract(
+                        valid,
+                        valid.descriptor().kind(),
+                        valid.descriptor().type(),
+                        valid.descriptor().source(),
+                        new Destination("inventory.adjust")));
+
+        for (SerializedMessage message : invalid) {
+            assertThatThrownBy(() -> consumer.accept(messages.toSpringMessage(message)))
+                    .isInstanceOf(NonRetryableMessageException.class)
+                    .hasMessage("message does not match the expected inbound contract");
+        }
+
+        assertThat(available("tenant-a", 7)).isEqualTo(5);
+        assertThat(count("inventory_reservation_result")).isZero();
+        assertThat(count("moduvera_message_inbox")).isZero();
+        assertThat(count("moduvera_message_outbox")).isZero();
+        assertThat(observedContext.get()).isNull();
     }
 
     @Test
@@ -257,17 +356,45 @@ class InventoryApplicationIT {
         var descriptor = new MessageDescriptor(
                 new MessageId(command.commandId()),
                 MessageKind.ASYNC_COMMAND,
-                new MessageType("io.github.ande1922.moduvera.reference.inventory.reserve.v1"),
+                new MessageType(ReserveInventoryCommand.MESSAGE_TYPE),
                 URI.create("urn:moduvera:reference:order-service"),
-                new Destination("inventory.reserve"),
+                new Destination(ReserveInventoryCommand.DESTINATION),
                 Instant.parse("2026-08-30T00:00:00Z"),
                 new TenantId(tenantId),
-                new Actor(ActorType.SERVICE, "order-service", Set.of("inventory:reserve")),
+                new Actor(
+                        ActorType.SERVICE,
+                        "order-service",
+                        Set.of("inventory:admin", "catalog:write")),
                 correlationId,
                 null,
                 new Initiator(ActorType.USER, "alice"),
                 Long.toString(command.orderId()));
         return SerializedMessage.json(descriptor, json.writeValueAsString(command));
+    }
+
+    private static SerializedMessage withContract(
+            SerializedMessage original,
+            MessageKind kind,
+            MessageType type,
+            URI source,
+            Destination destination) {
+        MessageDescriptor descriptor = original.descriptor();
+        return new SerializedMessage(
+                new MessageDescriptor(
+                        descriptor.id(),
+                        kind,
+                        type,
+                        source,
+                        destination,
+                        descriptor.time(),
+                        descriptor.tenantId(),
+                        descriptor.actor(),
+                        descriptor.correlationId(),
+                        descriptor.causationId(),
+                        descriptor.initiator(),
+                        descriptor.partitionKey()),
+                original.contentType(),
+                original.payload());
     }
 
     private void reserveTogether(
@@ -311,6 +438,71 @@ class InventoryApplicationIT {
         return jdbc.queryForObject("SELECT COUNT(*) FROM " + table, Integer.class);
     }
 
+    private long consumedReserveRecords() throws Exception {
+        Properties properties = new Properties();
+        properties.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, KAFKA.getBootstrapServers());
+        try (Admin admin = Admin.create(properties)) {
+            return consumedReserveRecords(admin);
+        }
+    }
+
+    private void eventuallyConsumedReserveRecords(long expected) throws Exception {
+        Properties properties = new Properties();
+        properties.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, KAFKA.getBootstrapServers());
+        try (Admin admin = Admin.create(properties)) {
+            Instant deadline = Instant.now().plusSeconds(15);
+            while (consumedReserveRecords(admin) < expected) {
+                if (Instant.now().isAfter(deadline)) {
+                    throw new AssertionError(
+                            "inventory consumer did not commit " + expected + " records before timeout");
+                }
+                Thread.sleep(50);
+            }
+        }
+    }
+
+    private static long consumedReserveRecords(Admin admin) throws Exception {
+        return admin.listConsumerGroupOffsets("inventory-it")
+                .partitionsToOffsetAndMetadata()
+                .get(5, TimeUnit.SECONDS)
+                .entrySet()
+                .stream()
+                .filter(entry -> RESERVE_TOPIC.equals(entry.getKey().topic()))
+                .mapToLong(entry -> entry.getValue().offset())
+                .sum();
+    }
+
+    private List<SerializedMessage> kafkaResults(String messageId) {
+        Properties properties = new Properties();
+        properties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, KAFKA.getBootstrapServers());
+        properties.put(ConsumerConfig.GROUP_ID_CONFIG, "inventory-result-probe-" + UUID.randomUUID());
+        properties.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        properties.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
+        properties.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, ByteArrayDeserializer.class);
+        List<SerializedMessage> observed = new ArrayList<>();
+        try (var resultConsumer = new KafkaConsumer<String, byte[]>(properties)) {
+            resultConsumer.subscribe(List.of(RESULT_TOPIC));
+            Instant deadline = Instant.now().plusSeconds(10);
+            Instant quietDeadline = null;
+            while (Instant.now().isBefore(deadline)
+                    && (quietDeadline == null || Instant.now().isBefore(quietDeadline))) {
+                for (var record : resultConsumer.poll(Duration.ofMillis(200))) {
+                    SerializedMessage result = messages.fromSpringMessage(MessageBuilder
+                            .withPayload(record.value())
+                            .setHeader(
+                                    MessageHeaders.CONTENT_TYPE,
+                                    KafkaMessageMapper.STRUCTURED_CLOUD_EVENT)
+                            .build());
+                    if (messageId.equals(result.descriptor().id().value())) {
+                        observed.add(result);
+                        quietDeadline = Instant.now().plusSeconds(1);
+                    }
+                }
+            }
+        }
+        return observed;
+    }
+
     private static void eventually(java.util.function.BooleanSupplier condition) throws Exception {
         Instant deadline = Instant.now().plusSeconds(15);
         while (!condition.getAsBoolean()) {
@@ -333,12 +525,21 @@ class InventoryApplicationIT {
     static class TestOverrides {
 
         @Bean
+        AtomicReference<ExecutionContext> observedInventoryExecutionContext() {
+            return new AtomicReference<>();
+        }
+
+        @Bean
         @Primary
         InventoryResultPublisher failingResultPublisher(
-                DurablePublication outbox, ObjectMapper json, Clock clock) {
+                DurablePublication outbox,
+                ObjectMapper json,
+                Clock clock,
+                AtomicReference<ExecutionContext> observedContext) {
             var delegate = new OutboxInventoryResultPublisher(outbox, json, clock);
             var failures = new AtomicInteger();
             return result -> {
+                observedContext.set(ExecutionContextHolder.require());
                 delegate.publish(result);
                 if ("reserve-order-rollback".equals(result.commandId())
                         && failures.incrementAndGet() <= 3) {
