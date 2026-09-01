@@ -39,9 +39,13 @@ class ReserveInventoryCommandMessageHandlerTest {
     @Test
     void mapsSerializedPayloadAndInvokesInventoryUseCase() throws Exception {
         var published = new AtomicReference<InventoryReserved>();
+        var reservedCommand = new AtomicReference<ReserveInventoryCommand>();
         var expected = new InventoryReserved("reserve-order-42", 42, Instant.EPOCH);
         var service = new InventoryApplicationService(
-                (command, now) -> new ReservationDecision(expected, true),
+                (command, now) -> {
+                    reservedCommand.set(command);
+                    return new ReservationDecision(expected, true);
+                },
                 new UseCaseAuthorizer(),
                 Clock.fixed(Instant.EPOCH, ZoneOffset.UTC),
                 result -> published.set((InventoryReserved) result));
@@ -59,6 +63,7 @@ class ReserveInventoryCommandMessageHandlerTest {
         ExecutionContextHolder.run(
                 context, () -> handler.handle(serialized(json.writeValueAsString(command))));
 
+        assertThat(reservedCommand.get()).isEqualTo(command);
         assertThat(published.get()).isEqualTo(expected);
     }
 
