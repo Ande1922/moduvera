@@ -11,6 +11,15 @@
   <name>Moduvera :: Testing :: Support</name>
   <dependencies>
     <dependency>
+      <groupId>io.github.ande1922.moduvera</groupId>
+      <artifactId>moduvera-message-core</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter-api</artifactId>
+    </dependency>
+    <dependency>
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter</artifactId>
       <scope>test</scope>
