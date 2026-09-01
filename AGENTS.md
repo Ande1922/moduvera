@@ -38,7 +38,7 @@ This is a single-context repository with `CONTEXT.md` and system-wide ADRs under
 
 ## Testing Guidelines
 
-Use JUnit Jupiter; use Spring Boot tests and Testcontainers when infrastructure behavior matters, and ArchUnit for module-boundary rules. Name fast tests `*Test` and Failsafe integration tests `*IT`. Add a regression test for changed behavior and run the narrowest module test before `clean verify`. JaCoCo reports coverage during `verify`; no repository-wide numeric minimum is configured.
+Use JUnit Jupiter and ArchUnit for module-boundary rules. Verify infrastructure semantics through production runtime Adapters and real components, using Testcontainers when external infrastructure is required. Fast Domain and Application orchestration tests may use narrow mocks, scripted stubs, lambdas, or recording spies defined in test source; infrastructure claims remain with runtime Adapter evidence. Add an in-memory runtime Adapter to production source only for a real supported runtime consumer and qualify it with the same applicable contract evidence as other runtime Adapters. Name fast tests `*Test` and Failsafe integration tests `*IT`. Add a regression test for changed behavior and run the narrowest module test before `clean verify`. JaCoCo reports coverage during `verify`; no repository-wide numeric minimum is configured.
 
 ## Commit & Pull Request Guidelines
 
