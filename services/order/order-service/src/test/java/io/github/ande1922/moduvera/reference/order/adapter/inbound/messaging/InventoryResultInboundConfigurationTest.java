@@ -7,10 +7,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.github.ande1922.moduvera.authorization.UseCaseAuthorizer;
 import io.github.ande1922.moduvera.context.Actor;
 import io.github.ande1922.moduvera.context.ActorType;
+import io.github.ande1922.moduvera.context.ExecutionContext;
+import io.github.ande1922.moduvera.context.ExecutionContextHolder;
 import io.github.ande1922.moduvera.context.Initiator;
 import io.github.ande1922.moduvera.context.TenantId;
 import io.github.ande1922.moduvera.data.TransactionBoundary;
 import io.github.ande1922.moduvera.message.Destination;
+import io.github.ande1922.moduvera.message.InboundMessageContract;
 import io.github.ande1922.moduvera.message.MessageDescriptor;
 import io.github.ande1922.moduvera.message.MessageId;
 import io.github.ande1922.moduvera.message.MessageKind;
@@ -31,6 +34,8 @@ import io.github.ande1922.moduvera.reference.order.application.ReserveInventoryP
 import io.github.ande1922.moduvera.reference.order.domain.Order;
 import io.github.ande1922.moduvera.reference.order.domain.OrderLine;
 import io.github.ande1922.moduvera.reference.order.domain.OrderRepository;
+import io.github.ande1922.moduvera.testing.messaging.InboundMessageContractProbe;
+import io.github.ande1922.moduvera.testing.messaging.InboundMessageContractTck;
 import java.math.BigDecimal;
 import java.net.URI;
 import java.time.Clock;
@@ -39,7 +44,10 @@ import java.time.ZoneOffset;
 import java.util.Currency;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
@@ -47,11 +55,32 @@ import org.springframework.context.annotation.AnnotationConfigApplicationContext
 import org.springframework.messaging.Message;
 import tools.jackson.databind.ObjectMapper;
 
-class InventoryResultInboundConfigurationTest {
+class InventoryResultInboundConfigurationTest implements InboundMessageContractTck {
 
     private static final Instant NOW = Instant.parse("2026-08-30T00:00:01Z");
 
     private final KafkaMessageMapper mapper = new KafkaMessageMapper();
+
+    @Override
+    public InboundMessageContractProbe newInboundMessageContractProbe() {
+        var repository = new RecordingOrderRepository(pendingOrder());
+        var contract = inventoryResultContract();
+        var validMessage = message(
+                "contract-result-reserved",
+                "{\"commandId\":\"reserve-order-42\",\"orderId\":42,"
+                        + "\"reservedAt\":\"2026-08-30T00:00:01Z\"}");
+        return new InboundMessageContractProbe(
+                contract,
+                validMessage,
+                serialized -> deliver(repository, serialized),
+                repository::finds,
+                repository::observedContext,
+                () -> {
+                    assertThat(repository.requestedOrderId()).isEqualTo(42);
+                    assertThat(repository.order().status()).isEqualTo(OrderStatus.CONFIRMED);
+                    assertThat(repository.saves()).isEqualTo(1);
+                });
+    }
 
     @Test
     void registersTheNamedEventHandlerAndReliableSpringEndpoint() {
@@ -122,6 +151,12 @@ class InventoryResultInboundConfigurationTest {
         return context;
     }
 
+    private void deliver(RecordingOrderRepository repository, SerializedMessage serialized) {
+        try (var context = context(repository)) {
+            consumer(context).accept(mapper.toSpringMessage(serialized));
+        }
+    }
+
     @SuppressWarnings("unchecked")
     private static Consumer<Message<byte[]>> consumer(AnnotationConfigApplicationContext context) {
         return (Consumer<Message<byte[]>>) context.getBean("inventoryResult", Consumer.class);
@@ -157,6 +192,18 @@ class InventoryResultInboundConfigurationTest {
                 NOW);
     }
 
+    private static InboundMessageContract inventoryResultContract() {
+        return new InboundMessageContract(
+                MessageKind.valueOf(InventoryReservationResult.MESSAGE_KIND),
+                new MessageType(InventoryReservationResult.MESSAGE_TYPE),
+                URI.create("urn:moduvera:reference:inventory-service"),
+                new Destination(InventoryReservationResult.DESTINATION),
+                new Actor(
+                        ActorType.SERVICE,
+                        "inventory-service",
+                        Set.of("order:apply-inventory-result")));
+    }
+
     private static SerializedMessage message(String messageId, String payload) {
         return SerializedMessage.json(
                 new MessageDescriptor(
@@ -187,6 +234,9 @@ class InventoryResultInboundConfigurationTest {
 
         private final Order order;
         private final AtomicInteger saves = new AtomicInteger();
+        private final AtomicInteger finds = new AtomicInteger();
+        private final AtomicLong requestedOrderId = new AtomicLong();
+        private final AtomicReference<ExecutionContext> observedContext = new AtomicReference<>();
 
         private RecordingOrderRepository(Order order) {
             this.order = order;
@@ -194,6 +244,9 @@ class InventoryResultInboundConfigurationTest {
 
         @Override
         public Optional<Order> findById(long orderId) {
+            finds.incrementAndGet();
+            requestedOrderId.set(orderId);
+            observedContext.set(ExecutionContextHolder.require());
             return order.id() == orderId ? Optional.of(order) : Optional.empty();
         }
 
@@ -208,6 +261,18 @@ class InventoryResultInboundConfigurationTest {
 
         private int saves() {
             return saves.get();
+        }
+
+        private int finds() {
+            return finds.get();
+        }
+
+        private long requestedOrderId() {
+            return requestedOrderId.get();
+        }
+
+        private ExecutionContext observedContext() {
+            return observedContext.get();
         }
     }
 }
