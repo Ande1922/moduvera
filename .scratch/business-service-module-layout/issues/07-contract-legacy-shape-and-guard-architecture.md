@@ -1,0 +1,13 @@
+# 07 — 收缩旧形态并锁定模块与 Adapter 架构
+
+**What to build:** 在所有 App 已切换后删除迁移期间保留的旧配置路径和 generic `configuration`/`infrastructure` 形态，并用 Architecture Testkit 与架构文档锁定业务模块、Adapter 方向、迁移定义/执行分离和 App Assembly 装配职责。
+
+**Blocked by:** 06 — 用新配置切片重组业务核心模块化单体.
+
+**Status:** ready-for-agent
+
+- [ ] 三个 Business Service 不再包含 generic top-level `configuration` 或 `infrastructure` package，只保留规格明确允许且新 App 不导入的 deprecated compatibility facade。
+- [ ] 三个业务叶子 App 与业务核心模块化单体不再直接构造迁移执行器或复制组件资源元数据；Identity 与示例调用者仅作为兼容消费者保留，除非编译迁移必需。
+- [ ] 架构规则验证业务模块归属、Inbound/Outbound Adapter 方向、Application/Domain 对 Adapter 和传输框架独立、Module Configuration 不激活 Adapter，以及 App Assembly 不拥有业务映射。
+- [ ] 负例 fixtures、当前仓库架构测试与模块地图/产品架构文档同步更新，同时保留 ADR 允许的 compatibility 例外。
+
