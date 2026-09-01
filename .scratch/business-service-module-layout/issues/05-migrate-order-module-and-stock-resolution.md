@@ -4,7 +4,7 @@
 
 **Blocked by:** 03 — 迁移 Catalog 参考业务模块与 Catalog App; 04 — 迁移 Inventory 预留模块与 Inventory App.
 
-**Status:** ready-for-agent
+**Status:** claimed
 
 - [ ] Order Module Configuration 只构造协议中立的 Application Service，创建、查询和待库存消解继续共享同一 Order 模型与事务语义。
 - [ ] Application 不再暴露意图模糊的一方法 Inventory Result Handler 或能力接口；package-private Inventory Result Message Handler 实现 `EventMessageHandler`，保留合法 Mapper 所保护的结果序列化差异并直接调用 `OrderApplicationService.resolvePendingStock`。
