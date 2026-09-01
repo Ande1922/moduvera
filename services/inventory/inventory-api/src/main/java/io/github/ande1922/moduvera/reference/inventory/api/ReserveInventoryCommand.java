@@ -5,6 +5,11 @@ import java.util.List;
 
 public record ReserveInventoryCommand(String commandId, long orderId, List<ReserveInventoryLine> lines) {
 
+    public static final String MESSAGE_KIND = "ASYNC_COMMAND";
+    public static final String MESSAGE_TYPE =
+            "io.github.ande1922.moduvera.reference.inventory.reserve.v1";
+    public static final String DESTINATION = "inventory.reserve";
+
     public ReserveInventoryCommand {
         if (commandId == null || commandId.isBlank() || commandId.length() > 128) {
             throw new IllegalArgumentException("commandId must be 1-128 characters");

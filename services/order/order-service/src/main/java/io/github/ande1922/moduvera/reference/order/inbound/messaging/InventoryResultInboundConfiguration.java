@@ -2,6 +2,7 @@ package io.github.ande1922.moduvera.reference.order.inbound.messaging;
 
 import io.github.ande1922.moduvera.context.Actor;
 import io.github.ande1922.moduvera.context.ActorType;
+import io.github.ande1922.moduvera.reference.inventory.api.InventoryReservationResult;
 import io.github.ande1922.moduvera.message.Destination;
 import io.github.ande1922.moduvera.message.InboundMessageContract;
 import io.github.ande1922.moduvera.message.MessageKind;
@@ -28,10 +29,10 @@ public class InventoryResultInboundConfiguration {
         ReliableMessageConsumer consumer = consumers.forConsumer(
                 "order-inventory-result",
                 new InboundMessageContract(
-                        MessageKind.EVENT,
-                        new MessageType("io.github.ande1922.moduvera.reference.inventory.reservation-result.v1"),
+                        MessageKind.valueOf(InventoryReservationResult.MESSAGE_KIND),
+                        new MessageType(InventoryReservationResult.MESSAGE_TYPE),
                         URI.create("urn:moduvera:reference:inventory-service"),
-                        new Destination("order.inventory-result"),
+                        new Destination(InventoryReservationResult.DESTINATION),
                         new Actor(
                                 ActorType.SERVICE,
                                 "inventory-service",
