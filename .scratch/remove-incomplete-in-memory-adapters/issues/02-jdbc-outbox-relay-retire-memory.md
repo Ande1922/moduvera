@@ -4,7 +4,7 @@
 
 **Blocked by:** 01 — 用 JDBC Outbox 验证 Worker 与管理生命周期
 
-**Status:** ready-for-agent
+**Status:** claimed
 
 - [ ] Relay 使用生产 JDBC Outbox Store 验证一次唤醒连续排空多个批次以及并发 wake/poll 信号不会重叠执行 Worker。
 - [ ] 正常停止允许已开始的发送完成但不再 claim 新工作，强制停止保留未知结果的 in-flight claim 供 lease takeover。

@@ -4,7 +4,7 @@
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** claimed
 
 - [ ] 同一消费者对重复消息只提交一次业务变更，不同消费者可以独立处理同一消息，且隔离范围包含可信 Tenant Context。
 - [ ] Inbox 记录与本地业务变更在同一事务中提交；处理失败或事务回滚时，不留下会阻止后续重试的去重记录。
