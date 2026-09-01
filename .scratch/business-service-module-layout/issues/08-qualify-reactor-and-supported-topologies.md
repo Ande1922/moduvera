@@ -4,7 +4,7 @@
 
 **Blocked by:** 07 — 收缩旧形态并锁定模块与 Adapter 架构.
 
-**Status:** claimed
+**Status:** resolved
 
 - [x] 完整 Reactor 的编译、单元、集成、架构、格式化、PMD 和 JaCoCo 检查通过，并保留当前执行证据。
 - [x] 微服务 Golden Path 与业务核心模块化单体均通过未放宽的公共 HTTP 黑盒 harness。
@@ -23,4 +23,10 @@
 
 共享黑盒场景通过 Gateway 的公开 HTTP 路径验证了登录和鉴权、订单创建与查询、确认与拒绝两种库存结果、并发有界库存、跨 Tenant 不可见、RFC 9457 问题响应、原生成功响应、Correlation 传播及内部路由隔离。两种拓扑均通过异步轮询到终态和 Kafka 中断/恢复，提供最终一致性与 Outbox 恢复证据。全量 App 集成测试中的真实 Kafka 重复投递场景验证 Inbox 去重；Inventory 集成测试同时验证可信 Actor/Tenant/Initiator/Correlation 的传播和不可信生产者拒绝。
 
-没有环境失败或未执行的必需检查。现有支持矩阵未因本次重构缩水：PostgreSQL 继续承担两种拓扑的公共 HTTP、Kafka 端到端与故障恢复资格验证；MySQL 由 `clean verify` 中聚焦的 Repository、Tenant、Migration 和 durable-message persistence 兼容性测试覆盖，不声明 Gateway/Kafka 端到端或故障恢复支持。pytest 的 `2 deselected` 是 harness 使用 `-k public_order_fulfillment_reference_product` 只选择共享产品黑盒场景的预期结果；该 Python 模块另外两个本地契约单元测试未由这三个必需命令单独选择，它们不属于 Ticket 08 规定的拓扑验收矩阵，也不代表跳过任一拓扑验收。Ticket 状态保持 `claimed`，等待分支复核与集成后再标记完成。
+没有环境失败或未执行的必需检查。现有支持矩阵未因本次重构缩水：PostgreSQL 继续承担两种拓扑的公共 HTTP、Kafka 端到端与故障恢复资格验证；MySQL 由 `clean verify` 中聚焦的 Repository、Tenant、Migration 和 durable-message persistence 兼容性测试覆盖，不声明 Gateway/Kafka 端到端或故障恢复支持。pytest 的 `2 deselected` 是 harness 使用 `-k public_order_fulfillment_reference_product` 只选择共享产品黑盒场景的预期结果；该 Python 模块另外两个本地契约单元测试未由这三个必需命令单独选择，它们不属于 Ticket 08 规定的拓扑验收矩阵，也不代表跳过任一拓扑验收。
+
+## Answer
+
+- Qualification evidence: `33a00b0`, with support-matrix clarification `7eed450`; integrated by `342e865f5f8f4599dbe97db7b7e79fb1f3d8990c`.
+- Reviews: Standards PASS; Spec PASS. Both reviewers confirmed that the final diff only records Ticket 08 evidence, does not weaken the harness or tests, and accurately states the PostgreSQL end-to-end/MySQL compatibility boundary.
+- Verification: `./mvnw clean verify`, `verification/reference-product/harness/verify.sh microservices`, and `verification/reference-product/harness/verify.sh business-core-monolith` all passed with the detailed results and support limits recorded above.
