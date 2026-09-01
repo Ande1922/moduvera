@@ -38,6 +38,10 @@ spring:
           jwk-set-uri: ${IDENTITY_JWKS_URI:http://localhost:8081/oauth2/jwks}
           audiences: [order-service]
 moduvera:
+  database:
+    migration:
+      mode: startup
+      initialize: true
   reference:
     clients:
       catalog:

@@ -12,9 +12,9 @@ import io.github.ande1922.moduvera.context.TenantId;
 import io.github.ande1922.moduvera.reference.inventory.api.InventoryReservationResult;
 import io.github.ande1922.moduvera.reference.inventory.api.ReserveInventoryCommand;
 import io.github.ande1922.moduvera.reference.inventory.api.ReserveInventoryLine;
+import io.github.ande1922.moduvera.reference.inventory.adapter.outbound.messaging.OutboxInventoryResultPublisher;
+import io.github.ande1922.moduvera.reference.inventory.adapter.outbound.persistence.InventoryMapper;
 import io.github.ande1922.moduvera.reference.inventory.application.InventoryResultPublisher;
-import io.github.ande1922.moduvera.reference.inventory.infrastructure.messaging.OutboxInventoryResultPublisher;
-import io.github.ande1922.moduvera.reference.inventory.infrastructure.persistence.InventoryMapper;
 import io.github.ande1922.moduvera.message.Destination;
 import io.github.ande1922.moduvera.message.MessageDescriptor;
 import io.github.ande1922.moduvera.message.MessageId;
@@ -25,6 +25,13 @@ import io.github.ande1922.moduvera.message.SerializedMessage;
 import io.github.ande1922.moduvera.message.outbox.MessageTransport;
 import io.github.ande1922.moduvera.message.publication.DurablePublication;
 import io.github.ande1922.moduvera.messaging.kafka.KafkaMessageMapper;
+import io.github.ande1922.moduvera.messaging.kafka.migration.ModuveraMessagingMigrationConfiguration;
+import io.github.ande1922.moduvera.migration.MigrationDefinition;
+import io.github.ande1922.moduvera.reference.inventory.InventoryModuleConfiguration;
+import io.github.ande1922.moduvera.reference.inventory.adapter.inbound.messaging.ReserveInventoryCommandInboundConfiguration;
+import io.github.ande1922.moduvera.reference.inventory.adapter.outbound.messaging.InventoryResultPublicationConfiguration;
+import io.github.ande1922.moduvera.reference.inventory.adapter.outbound.persistence.InventoryPersistenceConfiguration;
+import io.github.ande1922.moduvera.reference.inventory.migration.InventoryMigrationConfiguration;
 import java.net.URI;
 import java.time.Clock;
 import java.time.Duration;
@@ -55,6 +62,7 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
+import org.springframework.context.ApplicationContext;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageHeaders;
@@ -129,6 +137,9 @@ class InventoryApplicationIT {
     private JdbcTemplate jdbc;
 
     @Autowired
+    private ApplicationContext context;
+
+    @Autowired
     private KafkaMessageMapper messages;
 
     @Autowired
@@ -157,6 +168,22 @@ class InventoryApplicationIT {
         stock("tenant-a", 7, 5);
         stock("tenant-a", 8, 4);
         stock("tenant-b", 7, 100);
+    }
+
+    @Test
+    void explicitlyComposesTheInventoryRuntimeSlicesAndMigrationDefinitions() {
+        assertThat(context.getBeansOfType(InventoryModuleConfiguration.class)).hasSize(1);
+        assertThat(context.getBeansOfType(ReserveInventoryCommandInboundConfiguration.class))
+                .hasSize(1);
+        assertThat(context.getBeansOfType(InventoryPersistenceConfiguration.class)).hasSize(1);
+        assertThat(context.getBeansOfType(InventoryResultPublicationConfiguration.class))
+                .hasSize(1);
+        assertThat(context.getBeansOfType(InventoryMigrationConfiguration.class)).hasSize(1);
+        assertThat(context.getBeansOfType(ModuveraMessagingMigrationConfiguration.class))
+                .hasSize(1);
+        assertThat(context.getBeansOfType(MigrationDefinition.class).values())
+                .extracting(definition -> definition.component().value())
+                .containsExactlyInAnyOrder("inventory", "messaging");
     }
 
     @Test

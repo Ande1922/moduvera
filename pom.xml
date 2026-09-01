@@ -20,6 +20,7 @@
     <module>framework/foundation/moduvera-database-migration</module>
     <module>framework/starters/moduvera-auth-resource-server-autoconfigure</module>
     <module>framework/starters/moduvera-data-mybatis-plus-spring-boot-starter</module>
+    <module>framework/starters/moduvera-database-migration-spring-boot-starter</module>
     <module>framework/starters/moduvera-messaging-kafka-spring-boot-starter</module>
     <module>framework/starters/moduvera-scheduler-spring-boot-starter</module>
     <module>framework/testing/moduvera-test-support</module>

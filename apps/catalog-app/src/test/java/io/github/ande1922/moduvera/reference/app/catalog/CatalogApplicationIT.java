@@ -9,8 +9,13 @@ import io.github.ande1922.moduvera.context.ExecutionContext;
 import io.github.ande1922.moduvera.context.ExecutionContextHolder;
 import io.github.ande1922.moduvera.context.MissingExecutionContextException;
 import io.github.ande1922.moduvera.context.TenantId;
-import io.github.ande1922.moduvera.reference.catalog.domain.Product;
-import io.github.ande1922.moduvera.reference.catalog.domain.ProductRepository;
+import io.github.ande1922.moduvera.migration.MigrationDefinition;
+import io.github.ande1922.moduvera.migration.autoconfigure.ModuveraDatabaseMigrationMode;
+import io.github.ande1922.moduvera.migration.autoconfigure.ModuveraDatabaseMigrationProperties;
+import io.github.ande1922.moduvera.reference.catalog.catalog.adapter.inbound.http.CatalogHttpController;
+import io.github.ande1922.moduvera.reference.catalog.catalog.adapter.outbound.persistence.MybatisCatalogProductRepository;
+import io.github.ande1922.moduvera.reference.catalog.catalog.domain.Product;
+import io.github.ande1922.moduvera.reference.catalog.catalog.domain.ProductRepository;
 import java.math.BigDecimal;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -69,6 +74,15 @@ class CatalogApplicationIT {
     @Autowired
     private ProductRepository products;
 
+    @Autowired
+    private CatalogHttpController controller;
+
+    @Autowired
+    private List<MigrationDefinition> migrationDefinitions;
+
+    @Autowired
+    private ModuveraDatabaseMigrationProperties migrationProperties;
+
     @BeforeEach
     void seedProducts() {
         jdbc.update("DELETE FROM catalog_product");
@@ -103,6 +117,16 @@ class CatalogApplicationIT {
         assertThat(jdbc.queryForObject(
                         "SELECT COUNT(*) FROM flyway_history_catalog WHERE success", Integer.class))
                 .isPositive();
+    }
+
+    @Test
+    void explicitlySelectsTheCatalogTopologyAndStartupMigrationPolicy() {
+        assertThat(products).isInstanceOf(MybatisCatalogProductRepository.class);
+        assertThat(controller).isNotNull();
+        assertThat(migrationDefinitions)
+                .extracting(definition -> definition.component().value())
+                .containsExactly("catalog");
+        assertThat(migrationProperties.getMode()).isEqualTo(ModuveraDatabaseMigrationMode.STARTUP);
     }
 
     @Test

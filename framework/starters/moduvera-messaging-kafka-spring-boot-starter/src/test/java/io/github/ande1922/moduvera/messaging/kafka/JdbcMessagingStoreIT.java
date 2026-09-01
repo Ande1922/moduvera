@@ -18,6 +18,7 @@ import io.github.ande1922.moduvera.message.MessageKind;
 import io.github.ande1922.moduvera.message.MessageType;
 import io.github.ande1922.moduvera.message.NonRetryableMessageException;
 import io.github.ande1922.moduvera.message.SerializedMessage;
+import io.github.ande1922.moduvera.message.handler.InboundMessageHandler;
 import io.github.ande1922.moduvera.message.inbox.InboxOutcome;
 import io.github.ande1922.moduvera.message.inbox.InboxTemplate;
 import io.github.ande1922.moduvera.message.outbox.MessageTransport;
@@ -551,21 +552,19 @@ class JdbcMessagingStoreIT {
     void commitsBusinessChangesOncePerTrustedTenantAndConsumerScope() {
         var mapper = new KafkaMessageMapper();
         var tenantA = inboxMessage("msg-inbox-scope", "tenant-a");
-        var inventory = inboxConsumers.forConsumer("inventory", inboxContract());
+        var inventory = inboxConsumers.forConsumer(
+                "inventory", inboxContract(), recordBusinessChange("inventory"));
 
-        assertThat(inventory.handle(
-                        mapper.toSpringMessage(tenantA), recordBusinessChange("inventory")))
+        assertThat(inventory.handle(mapper.toSpringMessage(tenantA)))
                 .isEqualTo(InboxOutcome.APPLIED);
-        assertThat(inventory.handle(
-                        mapper.toSpringMessage(tenantA), recordBusinessChange("inventory")))
+        assertThat(inventory.handle(mapper.toSpringMessage(tenantA)))
                 .isEqualTo(InboxOutcome.DUPLICATE);
         assertThat(inboxConsumers
-                        .forConsumer("audit", inboxContract())
-                        .handle(mapper.toSpringMessage(tenantA), recordBusinessChange("audit")))
+                        .forConsumer("audit", inboxContract(), recordBusinessChange("audit"))
+                        .handle(mapper.toSpringMessage(tenantA)))
                 .isEqualTo(InboxOutcome.APPLIED);
-        assertThat(inventory.handle(
-                        mapper.toSpringMessage(inboxMessage("msg-inbox-scope", "tenant-b")),
-                        recordBusinessChange("inventory")))
+        assertThat(inventory.handle(mapper.toSpringMessage(
+                        inboxMessage("msg-inbox-scope", "tenant-b"))))
                 .isEqualTo(InboxOutcome.APPLIED);
 
         assertThat(businessScopes())
@@ -581,19 +580,20 @@ class JdbcMessagingStoreIT {
     void rollsBackInboxAndBusinessChangeTogetherSoTheMessageCanRetry() {
         var mapper = new KafkaMessageMapper();
         var serialized = inboxMessage("msg-inbox-retry", "tenant-a");
-        var consumer = inboxConsumers.forConsumer("inventory", inboxContract());
+        var failing = inboxConsumers.forConsumer("inventory", inboxContract(), message -> {
+            recordBusinessChange("inventory").handle(message);
+            throw new IllegalStateException("handler failed");
+        });
 
-        assertThatThrownBy(() -> consumer.handle(mapper.toSpringMessage(serialized), message -> {
-                    recordBusinessChange("inventory").accept(message);
-                    throw new IllegalStateException("handler failed");
-                }))
+        assertThatThrownBy(() -> failing.handle(mapper.toSpringMessage(serialized)))
                 .isInstanceOf(NonRetryableMessageException.class)
                 .hasCauseInstanceOf(IllegalStateException.class);
         assertThat(businessRecordCount("msg-inbox-retry")).isZero();
         assertThat(inboxRecordCount("msg-inbox-retry")).isZero();
 
-        assertThat(consumer.handle(
-                        mapper.toSpringMessage(serialized), recordBusinessChange("inventory")))
+        var retry = inboxConsumers.forConsumer(
+                "inventory", inboxContract(), recordBusinessChange("inventory"));
+        assertThat(retry.handle(mapper.toSpringMessage(serialized)))
                 .isEqualTo(InboxOutcome.APPLIED);
         assertThat(businessRecordCount("msg-inbox-retry")).isEqualTo(1);
         assertThat(inboxRecordCount("msg-inbox-retry")).isEqualTo(1);
@@ -625,7 +625,7 @@ class JdbcMessagingStoreIT {
         return new HashSet<>(ids(store.claim(10, Duration.ofSeconds(30)).orElseThrow()));
     }
 
-    private java.util.function.Consumer<SerializedMessage> recordBusinessChange(String consumerId) {
+    private InboundMessageHandler recordBusinessChange(String consumerId) {
         return serialized -> {
             var context = ExecutionContextHolder.require();
             assertThat(context.tenantId()).isEqualTo(serialized.descriptor().tenantId());

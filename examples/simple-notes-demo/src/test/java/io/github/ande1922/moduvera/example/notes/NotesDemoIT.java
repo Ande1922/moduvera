@@ -27,6 +27,7 @@ import io.github.ande1922.moduvera.message.publication.DurablePublication;
 import io.github.ande1922.moduvera.message.outbox.PublicationObserver;
 import io.github.ande1922.moduvera.messaging.kafka.KafkaMessageMapper;
 import io.github.ande1922.moduvera.messaging.kafka.OutboxRelay;
+import io.github.ande1922.moduvera.messaging.kafka.ReliableInboundEndpoint;
 import io.github.ande1922.moduvera.messaging.kafka.ReliableMessageConsumerFactory;
 import java.time.Clock;
 import java.time.Instant;
@@ -42,7 +43,6 @@ import java.util.UUID;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
@@ -478,20 +478,20 @@ class NotesDemoIT {
         }
 
         @Bean
-        Consumer<Message<byte[]>> alwaysFail(
+        ReliableInboundEndpoint alwaysFail(
                 ReliableMessageConsumerFactory factory, AtomicInteger retryAttempts) {
-            var consumer = factory.forConsumer(
+            return factory.forConsumer(
                     "failure-probe",
                     new InboundMessageContract(
                             MessageKind.EVENT,
                             new MessageType("io.github.ande1922.moduvera.example.notes.failure.v1"),
                             URI.create("urn:test:notes"),
                             new Destination("failure.events"),
-                            new Actor(ActorType.SERVICE, "notes-test")));
-            return message -> consumer.handle(message, ignored -> {
-                retryAttempts.incrementAndGet();
-                throw new IllegalStateException("retryable failure");
-            });
+                            new Actor(ActorType.SERVICE, "notes-test")),
+                    ignored -> {
+                        retryAttempts.incrementAndGet();
+                        throw new IllegalStateException("retryable failure");
+                    });
         }
 
         @Bean

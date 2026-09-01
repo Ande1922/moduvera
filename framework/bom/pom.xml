@@ -102,6 +102,11 @@
       </dependency>
       <dependency>
         <groupId>${project.groupId}</groupId>
+        <artifactId>moduvera-database-migration-spring-boot-starter</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>${project.groupId}</groupId>
         <artifactId>moduvera-messaging-kafka-spring-boot-starter</artifactId>
         <version>${project.version}</version>
       </dependency>
