@@ -16,8 +16,10 @@ import io.github.ande1922.moduvera.message.MessageKind;
 import io.github.ande1922.moduvera.message.MessageType;
 import io.github.ande1922.moduvera.message.NonRetryableMessageException;
 import io.github.ande1922.moduvera.message.SerializedMessage;
+import io.github.ande1922.moduvera.message.handler.CommandMessageHandler;
 import io.github.ande1922.moduvera.message.inbox.InboxRepository;
 import io.github.ande1922.moduvera.messaging.kafka.KafkaMessageMapper;
+import io.github.ande1922.moduvera.messaging.kafka.ReliableInboundEndpoint;
 import io.github.ande1922.moduvera.messaging.kafka.ReliableMessageConsumerFactory;
 import io.github.ande1922.moduvera.reference.inventory.api.InventoryReserved;
 import io.github.ande1922.moduvera.reference.inventory.api.ReserveInventoryCommand;
@@ -42,6 +44,17 @@ import tools.jackson.databind.ObjectMapper;
 class ReserveInventoryCommandInboundConfigurationTest {
 
     private final KafkaMessageMapper mapper = new KafkaMessageMapper();
+
+    @Test
+    void registersTheNamedCommandHandlerAndReliableSpringEndpoint() {
+        try (var context = context(service(ignored -> {}))) {
+            assertThat(context.getBean("reserveInventoryCommandMessageHandler"))
+                    .isInstanceOf(CommandMessageHandler.class);
+            assertThat(context.getBean("reserveInventory"))
+                    .isInstanceOf(ReliableInboundEndpoint.class)
+                    .isInstanceOf(Consumer.class);
+        }
+    }
 
     @Test
     void publicConsumerAcceptsTheCurrentInventoryV1Command() {
@@ -69,6 +82,18 @@ class ReserveInventoryCommandInboundConfigurationTest {
         }
 
         assertThat(invocations.get()).isZero();
+    }
+
+    @Test
+    void commandHandlerClassifiesMalformedPayloadAsNonRetryable() {
+        try (var context = context(service(ignored -> {}))) {
+            var handler = context.getBean(
+                    "reserveInventoryCommandMessageHandler", CommandMessageHandler.class);
+
+            assertThatThrownBy(() -> handler.handle(message("{}")))
+                    .isInstanceOf(NonRetryableMessageException.class)
+                    .hasMessage("invalid reserve inventory command");
+        }
     }
 
     @Test
@@ -104,6 +129,10 @@ class ReserveInventoryCommandInboundConfigurationTest {
         context.registerBean(InventoryApplicationService.class, () -> service);
         context.registerBean(ObjectMapper.class, () -> new ObjectMapper());
         context.registerBean(ReliableMessageConsumerFactory.class, this::consumerFactory);
+        context.registerBean(
+                "anotherCommandMessageHandler",
+                CommandMessageHandler.class,
+                () -> ignored -> {});
         context.register(ReserveInventoryCommandInboundConfiguration.class);
         context.refresh();
         return context;

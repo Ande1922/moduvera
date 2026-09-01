@@ -250,7 +250,7 @@ public final class ModuveraArchitectureRules {
                             .resideInAnyPackage(
                                     "org.springframework.messaging..",
                                     "io.github.ande1922.moduvera.message.InboundMessageContract",
-                                    "io.github.ande1922.moduvera.messaging.kafka.ReliableMessageConsumer",
+                                    "io.github.ande1922.moduvera.messaging.kafka.ReliableInboundEndpoint",
                                     "io.github.ande1922.moduvera.messaging.kafka.ReliableMessageConsumerFactory"))
                     .and(noClasses()
                             .that()
