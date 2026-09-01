@@ -1,5 +1,6 @@
-package io.github.ande1922.moduvera.reference.catalog.domain;
+package io.github.ande1922.moduvera.reference.catalog.catalog.domain;
 
+import io.github.ande1922.moduvera.reference.catalog.api.ProductSnapshot;
 import java.math.BigDecimal;
 import java.util.Currency;
 import java.util.Objects;
@@ -12,12 +13,7 @@ public final class Product {
     private final Currency currency;
     private final long version;
 
-    public Product(
-            long id,
-            String name,
-            BigDecimal price,
-            Currency currency,
-            long version) {
+    public Product(long id, String name, BigDecimal price, Currency currency, long version) {
         if (id <= 0 || version < 0) {
             throw new IllegalArgumentException("product identity must be positive and version must not be negative");
         }
@@ -54,7 +50,7 @@ public final class Product {
         return version;
     }
 
-    public io.github.ande1922.moduvera.reference.catalog.api.ProductSnapshot snapshot() {
-        return new io.github.ande1922.moduvera.reference.catalog.api.ProductSnapshot(id, name, price, currency, version);
+    public ProductSnapshot snapshot() {
+        return new ProductSnapshot(id, name, price, currency, version);
     }
 }

@@ -1,4 +1,4 @@
-package io.github.ande1922.moduvera.reference.catalog.infrastructure.persistence;
+package io.github.ande1922.moduvera.reference.catalog.catalog.adapter.outbound.persistence;
 
 import java.math.BigDecimal;
 import java.time.Instant;

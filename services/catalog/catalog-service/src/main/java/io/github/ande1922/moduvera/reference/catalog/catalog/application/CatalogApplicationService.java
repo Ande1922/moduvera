@@ -1,11 +1,11 @@
-package io.github.ande1922.moduvera.reference.catalog.application;
+package io.github.ande1922.moduvera.reference.catalog.catalog.application;
 
 import io.github.ande1922.moduvera.authorization.PermissionCode;
 import io.github.ande1922.moduvera.authorization.UseCaseAuthorizer;
 import io.github.ande1922.moduvera.reference.catalog.api.CatalogApi;
 import io.github.ande1922.moduvera.reference.catalog.api.GetProductQuery;
 import io.github.ande1922.moduvera.reference.catalog.api.ProductSnapshot;
-import io.github.ande1922.moduvera.reference.catalog.domain.ProductRepository;
+import io.github.ande1922.moduvera.reference.catalog.catalog.domain.ProductRepository;
 
 public final class CatalogApplicationService implements CatalogApi {
 

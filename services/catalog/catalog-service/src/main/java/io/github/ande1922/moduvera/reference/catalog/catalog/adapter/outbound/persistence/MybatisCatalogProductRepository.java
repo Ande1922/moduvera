@@ -1,8 +1,8 @@
-package io.github.ande1922.moduvera.reference.catalog.infrastructure.persistence;
+package io.github.ande1922.moduvera.reference.catalog.catalog.adapter.outbound.persistence;
 
-import io.github.ande1922.moduvera.reference.catalog.domain.Product;
-import io.github.ande1922.moduvera.reference.catalog.domain.ProductRepository;
 import io.github.ande1922.moduvera.context.ExecutionContextHolder;
+import io.github.ande1922.moduvera.reference.catalog.catalog.domain.Product;
+import io.github.ande1922.moduvera.reference.catalog.catalog.domain.ProductRepository;
 import java.time.Clock;
 import java.util.Currency;
 import java.util.Optional;

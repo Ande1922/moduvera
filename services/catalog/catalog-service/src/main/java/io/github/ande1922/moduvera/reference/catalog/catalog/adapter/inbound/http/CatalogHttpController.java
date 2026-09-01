@@ -1,4 +1,4 @@
-package io.github.ande1922.moduvera.reference.catalog.inbound.http;
+package io.github.ande1922.moduvera.reference.catalog.catalog.adapter.inbound.http;
 
 import io.github.ande1922.moduvera.reference.catalog.api.CatalogApi;
 import io.github.ande1922.moduvera.reference.catalog.api.GetProductQuery;

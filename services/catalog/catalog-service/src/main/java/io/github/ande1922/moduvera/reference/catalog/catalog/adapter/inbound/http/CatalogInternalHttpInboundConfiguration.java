@@ -1,9 +1,8 @@
-package io.github.ande1922.moduvera.reference.catalog;
+package io.github.ande1922.moduvera.reference.catalog.catalog.adapter.inbound.http;
 
 import io.github.ande1922.moduvera.authorization.PermissionDeniedException;
 import io.github.ande1922.moduvera.reference.catalog.api.CatalogApi;
-import io.github.ande1922.moduvera.reference.catalog.application.ProductNotFoundException;
-import io.github.ande1922.moduvera.reference.catalog.inbound.http.CatalogHttpController;
+import io.github.ande1922.moduvera.reference.catalog.catalog.application.ProductNotFoundException;
 import io.github.ande1922.moduvera.web.ProblemStatusContributor;
 import java.util.Optional;
 import org.springframework.context.annotation.Bean;
@@ -11,7 +10,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpStatus;
 
 @Configuration(proxyBeanMethods = false)
-public class CatalogInternalHttpConfiguration {
+public class CatalogInternalHttpInboundConfiguration {
 
     @Bean
     CatalogHttpController catalogHttpController(CatalogApi catalog) {
