@@ -19,9 +19,6 @@ import tools.jackson.databind.ObjectMapper;
 
 public final class OutboxReserveInventoryPublisher implements ReserveInventoryPublisher {
 
-    public static final Destination DESTINATION = new Destination("inventory.reserve");
-    public static final MessageType TYPE = new MessageType("io.github.ande1922.moduvera.reference.inventory.reserve.v1");
-
     private final DurablePublication outbox;
     private final ObjectMapper json;
     private final Clock clock;
@@ -37,10 +34,10 @@ public final class OutboxReserveInventoryPublisher implements ReserveInventoryPu
         var context = ExecutionContextHolder.require();
         var descriptor = new MessageDescriptor(
                 new MessageId(command.commandId()),
-                MessageKind.ASYNC_COMMAND,
-                TYPE,
+                MessageKind.valueOf(ReserveInventoryCommand.MESSAGE_KIND),
+                new MessageType(ReserveInventoryCommand.MESSAGE_TYPE),
                 URI.create("urn:moduvera:reference:order-service"),
-                DESTINATION,
+                new Destination(ReserveInventoryCommand.DESTINATION),
                 clock.instant(),
                 context.tenantId(),
                 new Actor(ActorType.SERVICE, "order-service"),

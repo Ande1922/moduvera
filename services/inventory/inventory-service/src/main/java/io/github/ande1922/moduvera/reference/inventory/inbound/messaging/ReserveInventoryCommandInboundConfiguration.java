@@ -2,7 +2,8 @@ package io.github.ande1922.moduvera.reference.inventory.inbound.messaging;
 
 import io.github.ande1922.moduvera.context.Actor;
 import io.github.ande1922.moduvera.context.ActorType;
-import io.github.ande1922.moduvera.reference.inventory.api.InventoryApi;
+import io.github.ande1922.moduvera.reference.inventory.api.ReserveInventoryCommand;
+import io.github.ande1922.moduvera.reference.inventory.application.InventoryApplicationService;
 import io.github.ande1922.moduvera.message.Destination;
 import io.github.ande1922.moduvera.message.InboundMessageContract;
 import io.github.ande1922.moduvera.message.MessageKind;
@@ -22,7 +23,7 @@ public class ReserveInventoryCommandInboundConfiguration {
 
     @Bean
     ReserveInventoryCommandMessageHandler reserveInventoryCommandMessageHandler(
-            InventoryApi inventory, ObjectMapper json) {
+            InventoryApplicationService inventory, ObjectMapper json) {
         return new ReserveInventoryCommandMessageHandler(inventory, json);
     }
 
@@ -33,10 +34,10 @@ public class ReserveInventoryCommandInboundConfiguration {
         ReliableMessageConsumer consumer = consumers.forConsumer(
                 "inventory-reservation",
                 new InboundMessageContract(
-                        MessageKind.ASYNC_COMMAND,
-                        new MessageType("io.github.ande1922.moduvera.reference.inventory.reserve.v1"),
+                        MessageKind.valueOf(ReserveInventoryCommand.MESSAGE_KIND),
+                        new MessageType(ReserveInventoryCommand.MESSAGE_TYPE),
                         URI.create("urn:moduvera:reference:order-service"),
-                        new Destination("inventory.reserve"),
+                        new Destination(ReserveInventoryCommand.DESTINATION),
                         new Actor(
                                 ActorType.SERVICE,
                                 "order-service",

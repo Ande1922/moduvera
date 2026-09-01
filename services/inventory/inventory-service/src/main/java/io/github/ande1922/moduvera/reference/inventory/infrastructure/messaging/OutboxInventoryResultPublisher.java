@@ -19,9 +19,6 @@ import tools.jackson.databind.ObjectMapper;
 
 public final class OutboxInventoryResultPublisher implements InventoryResultPublisher {
 
-    public static final Destination DESTINATION = new Destination("order.inventory-result");
-    public static final MessageType TYPE = new MessageType("io.github.ande1922.moduvera.reference.inventory.reservation-result.v1");
-
     private final DurablePublication outbox;
     private final ObjectMapper json;
     private final Clock clock;
@@ -38,10 +35,10 @@ public final class OutboxInventoryResultPublisher implements InventoryResultPubl
         String messageId = "inventory-result:" + result.commandId();
         var descriptor = new MessageDescriptor(
                 new MessageId(messageId),
-                MessageKind.EVENT,
-                TYPE,
+                MessageKind.valueOf(InventoryReservationResult.MESSAGE_KIND),
+                new MessageType(InventoryReservationResult.MESSAGE_TYPE),
                 URI.create("urn:moduvera:reference:inventory-service"),
-                DESTINATION,
+                new Destination(InventoryReservationResult.DESTINATION),
                 clock.instant(),
                 context.tenantId(),
                 new Actor(ActorType.SERVICE, "inventory-service"),

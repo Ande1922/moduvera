@@ -3,7 +3,11 @@ package io.github.ande1922.moduvera.architecture;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noMethods;
 
+import com.tngtech.archunit.base.DescribedPredicate;
 import com.tngtech.archunit.core.domain.JavaClass;
+import com.tngtech.archunit.core.domain.JavaMethod;
+import com.tngtech.archunit.core.domain.JavaModifier;
+import com.tngtech.archunit.core.domain.properties.HasModifiers;
 import com.tngtech.archunit.lang.CompositeArchRule;
 import com.tngtech.archunit.lang.ArchRule;
 
@@ -40,6 +44,32 @@ public final class ModuveraArchitectureRules {
             "org.springframework.web.bind.annotation.RequestMapping";
     private static final String REST_CONTROLLER =
             "org.springframework.web.bind.annotation.RestController";
+    private static final String RESERVE_INVENTORY_COMMAND =
+            "io.github.ande1922.moduvera.reference.inventory.api.ReserveInventoryCommand";
+    private static final DescribedPredicate<JavaClass> INVENTORY_RESERVATION_MESSAGE_ADAPTER =
+            JavaClass.Predicates.resideInAPackage(
+                            "io.github.ande1922.moduvera.reference.inventory.inbound.messaging..")
+                    .and(DescribedPredicate.describe(
+                            "depend on the provider-owned Reserve Inventory Command",
+                            javaClass -> javaClass.getDirectDependenciesFromSelf().stream()
+                                    .anyMatch(dependency -> dependency
+                                            .getTargetClass()
+                                            .getName()
+                                            .equals(RESERVE_INVENTORY_COMMAND))))
+                    .as("Inventory messaging inbound classes that consume the Reserve Inventory Command");
+    private static final DescribedPredicate<JavaMethod> SYNCHRONOUS_INVENTORY_RESERVATION_OPERATION =
+            DescribedPredicate.describe(
+                    "accept the provider-owned Reserve Inventory Command",
+                    method -> method.getRawParameterTypes().stream()
+                            .anyMatch(parameter -> parameter.getName().equals(RESERVE_INVENTORY_COMMAND)));
+    private static final DescribedPredicate<JavaClass> SYNCHRONOUS_INVENTORY_RESERVATION_INTERFACE =
+            JavaClass.Predicates.resideInAPackage(
+                            "io.github.ande1922.moduvera.reference.inventory.api..")
+                    .and(JavaClass.Predicates.INTERFACES)
+                    .and(HasModifiers.Predicates.modifier(JavaModifier.PUBLIC))
+                    .and(JavaClass.Predicates.containAnyMethodsThat(
+                            SYNCHRONOUS_INVENTORY_RESERVATION_OPERATION))
+                    .as("public Inventory API interfaces that expose synchronous inventory reservation");
 
     public static final ArchRule SERVICE_APIS_ARE_PROTOCOL_NEUTRAL = noClasses()
             .that()
@@ -54,6 +84,8 @@ public final class ModuveraArchitectureRules {
                     "org.apache.kafka..",
                     "org.apache.rocketmq..",
                     "tools.jackson..",
+                    "io.github.ande1922.moduvera.message..",
+                    "io.github.ande1922.moduvera.messaging..",
                     "io.github.ande1922.moduvera..inbound..",
                     "io.github.ande1922.moduvera..infrastructure..");
 
@@ -242,6 +274,13 @@ public final class ModuveraArchitectureRules {
                             .should()
                             .haveRawReturnType(java.util.function.Consumer.class))
                     .as("Business Service message Consumers and payload mappers must reside in the provider inbound.messaging package");
+
+    public static final ArchRule ASYNC_ONLY_INVENTORY_RESERVATION_DOES_NOT_USE_SYNCHRONOUS_SERVICE_API =
+            noClasses()
+                    .that(INVENTORY_RESERVATION_MESSAGE_ADAPTER)
+                    .should()
+                    .dependOnClassesThat(SYNCHRONOUS_INVENTORY_RESERVATION_INTERFACE)
+                    .as("the async-only Inventory reservation handler must invoke the Application Service directly, not a synchronous public Service API");
 
     private static CompositeArchRule withoutHttpMappingsIn(String... packages) {
         return CompositeArchRule.of(noClasses()
