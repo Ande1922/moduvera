@@ -4,7 +4,7 @@
 
 **Blocked by:** 06 — 用新配置切片重组业务核心模块化单体.
 
-**Status:** ready-for-agent
+**Status:** claimed
 
 - [ ] 三个 Business Service 不再包含 generic top-level `configuration` 或 `infrastructure` package，只保留规格明确允许且新 App 不导入的 deprecated compatibility facade。
 - [ ] 所有消息入口迁移到绑定具体 `InboundMessageHandler` 的 `ReliableInboundEndpoint` 后，删除过渡期 deprecated、未绑定的 `ReliableMessageConsumer` 兼容入口，并证明生产装配不存在旧路径引用。
