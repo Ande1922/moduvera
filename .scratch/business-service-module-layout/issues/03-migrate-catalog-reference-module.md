@@ -4,10 +4,9 @@
 
 **Blocked by:** 02 — 提供通用启动迁移运行时与消息平台定义; External — 完成并集成“移除不完整的 InMemory Adapter”规格.
 
-**Status:** ready-for-agent
+**Status:** claimed
 
 - [ ] Catalog Module Configuration 只构造协议中立的 Application Service，不激活 HTTP、Persistence、Migration 或运行环境实现。
 - [ ] Internal HTTP 位于 Inbound Adapter，MyBatis Persistence 位于 Outbound Adapter；Persistence 配置不再执行迁移。
 - [ ] Catalog 发布无副作用的 PostgreSQL/MySQL Migration Definition，独立 Catalog App 显式选择 Module、Adapters、Definition 与 startup 策略。
 - [ ] 配置切片、Catalog App 集成及既有业务测试证明未选择的 Adapter 不出现，公共行为保持兼容；规格允许的 deprecated facade 继续可用但不被新 App 导入。
-
