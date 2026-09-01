@@ -88,7 +88,28 @@ class CurrentScaffoldArchitectureTest {
     }
 
     @Test
+    void businessServiceClassesBelongToExplicitOwnedSurfaces() {
+        Set<String> businessServiceClasses = CURRENT_CLASSES.stream()
+                .map(javaClass -> javaClass.getName())
+                .filter(className -> className.startsWith("io.github.ande1922.moduvera.reference.catalog.")
+                        || className.startsWith("io.github.ande1922.moduvera.reference.inventory.")
+                        || className.startsWith("io.github.ande1922.moduvera.reference.order."))
+                .collect(Collectors.toSet());
+
+        assertTrue(businessServiceClasses.contains(
+                "io.github.ande1922.moduvera.reference.catalog.catalog.CatalogModuleConfiguration"));
+        assertTrue(businessServiceClasses.contains(
+                "io.github.ande1922.moduvera.reference.inventory.InventoryModuleConfiguration"));
+        assertTrue(businessServiceClasses.contains(
+                "io.github.ande1922.moduvera.reference.order.OrderModuleConfiguration"));
+        assertTrue(businessServiceClasses.contains(RESERVE_INVENTORY_COMMAND_MESSAGE_HANDLER));
+        assertTrue(businessServiceClasses.contains(INVENTORY_RESULT_MESSAGE_HANDLER));
+        ModuveraArchitectureRules.BUSINESS_SERVICE_CLASSES_HAVE_EXPLICIT_OWNERS.check(CURRENT_CLASSES);
+    }
+
+    @Test
     void businessModulesAndAdapterDirectionsStayExplicit() {
+        ModuveraArchitectureRules.BUSINESS_CORE_DOES_NOT_DEPEND_ON_ADAPTERS.check(CURRENT_CLASSES);
         ModuveraArchitectureRules.BUSINESS_ADAPTER_DIRECTIONS_DO_NOT_CROSS.check(CURRENT_CLASSES);
         ModuveraArchitectureRules.MODULE_CONFIGURATIONS_DO_NOT_ACTIVATE_ADAPTERS
                 .check(CURRENT_CLASSES);
@@ -146,6 +167,9 @@ class CurrentScaffoldArchitectureTest {
         assertTrue(dependencies.contains("io.github.ande1922.moduvera.context.ExecutionContextHolder"));
         assertTrue(dependencies.contains(
                 "io.github.ande1922.moduvera.message.handler.InboundMessageHandler"));
+        assertTrue(dependencies.contains("io.github.ande1922.moduvera.message.NonRetryableMessageException"));
+        assertTrue(dependencies.contains("java.lang.Thread"));
+        assertTrue(dependencies.contains("java.time.Duration"));
     }
 
     @Test

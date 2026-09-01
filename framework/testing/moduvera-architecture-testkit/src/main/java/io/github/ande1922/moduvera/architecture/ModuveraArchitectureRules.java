@@ -67,6 +67,14 @@ public final class ModuveraArchitectureRules {
         "io.github.ande1922.moduvera.reference.inventory.application..",
         "io.github.ande1922.moduvera.reference.order.application.."
     };
+    private static final String[] BUSINESS_CORE_PACKAGES = {
+        "io.github.ande1922.moduvera.reference.catalog.catalog.application..",
+        "io.github.ande1922.moduvera.reference.catalog.catalog.domain..",
+        "io.github.ande1922.moduvera.reference.inventory.application..",
+        "io.github.ande1922.moduvera.reference.inventory.domain..",
+        "io.github.ande1922.moduvera.reference.order.application..",
+        "io.github.ande1922.moduvera.reference.order.domain.."
+    };
     private static final String REQUEST_MAPPING =
             "org.springframework.web.bind.annotation.RequestMapping";
     private static final String REST_CONTROLLER =
@@ -77,6 +85,8 @@ public final class ModuveraArchitectureRules {
             "io.github.ande1922.moduvera.message.handler.CommandMessageHandler";
     private static final String EVENT_MESSAGE_HANDLER =
             "io.github.ande1922.moduvera.message.handler.EventMessageHandler";
+    private static final String INBOUND_MESSAGE_HANDLER =
+            "io.github.ande1922.moduvera.message.handler.InboundMessageHandler";
     static final String MESSAGING_MIGRATION_CONFIGURATION =
             "io.github.ande1922.moduvera.messaging.kafka.migration.ModuveraMessagingMigrationConfiguration";
     static final DescribedPredicate<JavaClass> INVENTORY_RESERVATION_MESSAGE_ADAPTER =
@@ -113,7 +123,7 @@ public final class ModuveraArchitectureRules {
                                     && !javaClass.getName().equals(MESSAGING_MIGRATION_CONFIGURATION)));
     private static final DescribedPredicate<JavaClass> RELIABLE_INBOUND_MECHANIC =
             DescribedPredicate.describe(
-                    "Inbox, trusted-context or reliable-endpoint mechanics",
+                    "Inbox, retry, trusted-context or reliable-endpoint mechanics",
                     javaClass -> javaClass.getPackageName()
                                     .startsWith("io.github.ande1922.moduvera.message.inbox")
                             || javaClass.getName()
@@ -121,7 +131,12 @@ public final class ModuveraArchitectureRules {
                             || javaClass.getName()
                                     .equals("io.github.ande1922.moduvera.messaging.kafka.ReliableInboundEndpoint")
                             || javaClass.getName()
-                                    .equals("io.github.ande1922.moduvera.messaging.kafka.ReliableMessageConsumerFactory"));
+                                    .equals("io.github.ande1922.moduvera.messaging.kafka.ReliableMessageConsumerFactory")
+                            || javaClass.getName().equals("java.lang.Thread")
+                            || javaClass.getName().equals("java.time.Duration")
+                            || javaClass.getName().equals("java.util.concurrent.TimeUnit")
+                            || residesIn(javaClass, "org.springframework.retry")
+                            || residesIn(javaClass, "reactor.util.retry"));
     private static final DescribedPredicate<JavaClass> APP_ASSEMBLY_MIGRATION_EXECUTOR =
             DescribedPredicate.describe(
                     "migration execution rather than a selected migration definition",
@@ -134,6 +149,30 @@ public final class ModuveraArchitectureRules {
                     "a deprecated Business Service configuration facade",
                     javaClass -> javaClass.getName()
                             .equals("io.github.ande1922.moduvera.reference.catalog.CatalogModuleConfiguration"));
+    private static final DescribedPredicate<JavaClass> IMPLEMENTS_INBOUND_MESSAGE_HANDLER =
+            DescribedPredicate.describe(
+                    "implement InboundMessageHandler",
+                    javaClass -> javaClass.isAssignableTo(INBOUND_MESSAGE_HANDLER));
+    private static final DescribedPredicate<JavaClass> BUSINESS_INBOUND_MESSAGE_HANDLER =
+            JavaClass.Predicates.resideInAnyPackage(BUSINESS_SERVICE_PACKAGES)
+                    .and(IMPLEMENTS_INBOUND_MESSAGE_HANDLER)
+                    .as("Business Service classes that implement InboundMessageHandler");
+    private static final DescribedPredicate<JavaClass> BUSINESS_MESSAGING_HANDLER =
+            JavaClass.Predicates.resideInAnyPackage(BUSINESS_MESSAGING_INBOUND_PACKAGES)
+                    .and(IMPLEMENTS_INBOUND_MESSAGE_HANDLER)
+                    .as("Business Service messaging classes that implement InboundMessageHandler");
+    private static final ArchCondition<JavaClass> HAVE_EXPLICIT_BUSINESS_OWNER =
+            new ArchCondition<>("belong to an explicit Business Module, API, migration slice or compatibility facade") {
+                @Override
+                public void check(JavaClass item, ConditionEvents events) {
+                    boolean owned = hasExplicitBusinessOwner(item);
+                    events.add(new SimpleConditionEvent(
+                            item,
+                            owned,
+                            item.getName()
+                                    + " must belong to an explicit Business Module, API, migration slice or compatibility facade"));
+                }
+            };
     private static final ArchCondition<JavaClass> IMPLEMENT_COMMAND_OR_EVENT_HANDLER =
             new ArchCondition<>("implement CommandMessageHandler or EventMessageHandler") {
                 @Override
@@ -259,19 +298,39 @@ public final class ModuveraArchitectureRules {
             .resideInAnyPackage(BUSINESS_GENERIC_TOP_LEVEL_PACKAGES)
             .as("Business Services must use module and adapter ownership instead of top-level configuration or infrastructure packages");
 
+    public static final ArchRule BUSINESS_SERVICE_CLASSES_HAVE_EXPLICIT_OWNERS = classes()
+            .that()
+            .resideInAnyPackage(BUSINESS_SERVICE_PACKAGES)
+            .should(HAVE_EXPLICIT_BUSINESS_OWNER)
+            .as("Every Business Service class must belong to an explicit owned surface");
+
+    public static final ArchRule BUSINESS_CORE_DOES_NOT_DEPEND_ON_ADAPTERS = noClasses()
+            .that()
+            .resideInAnyPackage(BUSINESS_CORE_PACKAGES)
+            .should()
+            .dependOnClassesThat()
+            .resideInAnyPackage(BUSINESS_ADAPTER_PACKAGES)
+            .as("Business Application and Domain code must depend on ports rather than concrete Adapters");
+
+    public static final ArchRule BUSINESS_INBOUND_ADAPTERS_DO_NOT_DEPEND_ON_OUTBOUND = noClasses()
+            .that()
+            .resideInAnyPackage(BUSINESS_INBOUND_ADAPTER_PACKAGES)
+            .should()
+            .dependOnClassesThat()
+            .resideInAnyPackage(BUSINESS_OUTBOUND_ADAPTER_PACKAGES)
+            .as("Inbound business Adapters must collaborate with Outbound Adapters through core ports");
+
+    public static final ArchRule BUSINESS_OUTBOUND_ADAPTERS_DO_NOT_DEPEND_ON_INBOUND = noClasses()
+            .that()
+            .resideInAnyPackage(BUSINESS_OUTBOUND_ADAPTER_PACKAGES)
+            .should()
+            .dependOnClassesThat()
+            .resideInAnyPackage(BUSINESS_INBOUND_ADAPTER_PACKAGES)
+            .as("Outbound business Adapters must not depend on Inbound Adapters");
+
     public static final ArchRule BUSINESS_ADAPTER_DIRECTIONS_DO_NOT_CROSS =
-            CompositeArchRule.of(noClasses()
-                            .that()
-                            .resideInAnyPackage(BUSINESS_INBOUND_ADAPTER_PACKAGES)
-                            .should()
-                            .dependOnClassesThat()
-                            .resideInAnyPackage(BUSINESS_OUTBOUND_ADAPTER_PACKAGES))
-                    .and(noClasses()
-                            .that()
-                            .resideInAnyPackage(BUSINESS_OUTBOUND_ADAPTER_PACKAGES)
-                            .should()
-                            .dependOnClassesThat()
-                            .resideInAnyPackage(BUSINESS_INBOUND_ADAPTER_PACKAGES))
+            CompositeArchRule.of(BUSINESS_INBOUND_ADAPTERS_DO_NOT_DEPEND_ON_OUTBOUND)
+                    .and(BUSINESS_OUTBOUND_ADAPTERS_DO_NOT_DEPEND_ON_INBOUND)
                     .as("Inbound and Outbound business Adapters must collaborate through protocol-neutral application or domain seams");
 
     public static final ArchRule MODULE_CONFIGURATIONS_DO_NOT_ACTIVATE_ADAPTERS = noClasses()
@@ -357,6 +416,13 @@ public final class ModuveraArchitectureRules {
             .beMetaAnnotatedWith(REST_CONTROLLER)
             .as("Business Service HTTP Controllers must reside in the provider inbound.http package");
 
+    public static final ArchRule BUSINESS_MESSAGE_HANDLERS_BELONG_TO_PROVIDER_INBOUND = classes()
+            .that(BUSINESS_INBOUND_MESSAGE_HANDLER)
+            .should()
+            .resideInAnyPackage(BUSINESS_MESSAGING_INBOUND_PACKAGES)
+            .as("Business InboundMessageHandler implementations must reside in provider adapter.inbound.messaging packages")
+            .allowEmptyShould(true);
+
     public static final ArchRule BUSINESS_MESSAGE_INBOUND_BELONGS_TO_PROVIDER_ADAPTER =
             CompositeArchRule.of(noClasses()
                             .that()
@@ -391,22 +457,30 @@ public final class ModuveraArchitectureRules {
                                             BUSINESS_MESSAGING_INBOUND_PACKAGES)))
                             .should()
                             .haveRawReturnType(java.util.function.Consumer.class))
+                    .and(BUSINESS_MESSAGE_HANDLERS_BELONG_TO_PROVIDER_INBOUND)
                     .as("Business Service message endpoints, handlers and payload mappers must reside in the provider adapter.inbound.messaging package");
 
+    public static final ArchRule BUSINESS_MESSAGE_HANDLERS_ARE_CLASSIFIED = classes()
+            .that(BUSINESS_MESSAGING_HANDLER)
+            .should(IMPLEMENT_COMMAND_OR_EVENT_HANDLER)
+            .as("Concrete business Message Handlers must declare Command or Event semantics");
+
+    public static final ArchRule BUSINESS_MESSAGE_HANDLERS_ARE_PACKAGE_PRIVATE = noClasses()
+            .that(BUSINESS_MESSAGING_HANDLER)
+            .should()
+            .bePublic()
+            .as("Concrete business Message Handlers must be package-private");
+
+    public static final ArchRule BUSINESS_MESSAGE_HANDLERS_HAVE_EXPLICIT_NAMES = classes()
+            .that(BUSINESS_MESSAGING_HANDLER)
+            .should()
+            .haveSimpleNameEndingWith("MessageHandler")
+            .as("Concrete business Message Handlers must use an explicit MessageHandler name");
+
     public static final ArchRule BUSINESS_MESSAGE_HANDLERS_ARE_CLASSIFIED_AND_PACKAGE_PRIVATE =
-            CompositeArchRule.of(classes()
-                            .that()
-                            .resideInAnyPackage(BUSINESS_MESSAGING_INBOUND_PACKAGES)
-                            .and()
-                            .haveSimpleNameEndingWith("MessageHandler")
-                            .should(IMPLEMENT_COMMAND_OR_EVENT_HANDLER))
-                    .and(noClasses()
-                            .that()
-                            .resideInAnyPackage(BUSINESS_MESSAGING_INBOUND_PACKAGES)
-                            .and()
-                            .haveSimpleNameEndingWith("MessageHandler")
-                            .should()
-                            .bePublic())
+            CompositeArchRule.of(BUSINESS_MESSAGE_HANDLERS_ARE_CLASSIFIED)
+                    .and(BUSINESS_MESSAGE_HANDLERS_ARE_PACKAGE_PRIVATE)
+                    .and(BUSINESS_MESSAGE_HANDLERS_HAVE_EXPLICIT_NAMES)
                     .as("Concrete business Message Handlers must be package-private and classified as Command or Event handlers");
 
     public static final ArchRule APPLICATION_SERVICES_DO_NOT_IMPLEMENT_MESSAGE_HANDLERS = noClasses()
@@ -418,10 +492,7 @@ public final class ModuveraArchitectureRules {
             .as("Application Services expose business use cases and must not implement transport Message Handler interfaces");
 
     public static final ArchRule BUSINESS_MESSAGE_HANDLERS_DO_NOT_OWN_RELIABILITY = noClasses()
-            .that()
-            .resideInAnyPackage(BUSINESS_MESSAGING_INBOUND_PACKAGES)
-            .and()
-            .haveSimpleNameEndingWith("MessageHandler")
+            .that(BUSINESS_MESSAGING_HANDLER)
             .should()
             .dependOnClassesThat(RELIABLE_INBOUND_MECHANIC)
             .as("ReliableInboundEndpoint owns Inbox, retry and trusted-context mechanics outside concrete business Message Handlers");
@@ -456,6 +527,30 @@ public final class ModuveraArchitectureRules {
     private static boolean residesIn(JavaClass javaClass, String packageName) {
         return javaClass.getPackageName().equals(packageName)
                 || javaClass.getPackageName().startsWith(packageName + ".");
+    }
+
+    private static boolean hasExplicitBusinessOwner(JavaClass javaClass) {
+        String className = javaClass.getName();
+        return className.equals("io.github.ande1922.moduvera.reference.catalog.CatalogModuleConfiguration")
+                || startsWithPackage(className, "io.github.ande1922.moduvera.reference.catalog.api")
+                || startsWithPackage(className, "io.github.ande1922.moduvera.reference.catalog.catalog")
+                || startsWithPackage(className, "io.github.ande1922.moduvera.reference.catalog.migration")
+                || className.equals("io.github.ande1922.moduvera.reference.inventory.InventoryModuleConfiguration")
+                || startsWithPackage(className, "io.github.ande1922.moduvera.reference.inventory.api")
+                || startsWithPackage(className, "io.github.ande1922.moduvera.reference.inventory.application")
+                || startsWithPackage(className, "io.github.ande1922.moduvera.reference.inventory.domain")
+                || startsWithPackage(className, "io.github.ande1922.moduvera.reference.inventory.adapter")
+                || startsWithPackage(className, "io.github.ande1922.moduvera.reference.inventory.migration")
+                || className.equals("io.github.ande1922.moduvera.reference.order.OrderModuleConfiguration")
+                || startsWithPackage(className, "io.github.ande1922.moduvera.reference.order.api")
+                || startsWithPackage(className, "io.github.ande1922.moduvera.reference.order.application")
+                || startsWithPackage(className, "io.github.ande1922.moduvera.reference.order.domain")
+                || startsWithPackage(className, "io.github.ande1922.moduvera.reference.order.adapter")
+                || startsWithPackage(className, "io.github.ande1922.moduvera.reference.order.migration");
+    }
+
+    private static boolean startsWithPackage(String className, String packageName) {
+        return className.startsWith(packageName + ".");
     }
 
     private ModuveraArchitectureRules() {}
