@@ -4,7 +4,7 @@
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** claimed
 
 - [ ] Inventory Application 使用测试源码内的脚本化 Store 决策验证授权、重复命令结果映射以及只在创建新结果时发布集成事实。
 - [ ] 测试替身不重新实现库存扣减、行锁、幂等、Tenant Context 隔离或并发算法。
