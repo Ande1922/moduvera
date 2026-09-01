@@ -15,6 +15,7 @@ import io.github.ande1922.moduvera.reference.inventory.api.ReserveInventoryLine;
 import io.github.ande1922.moduvera.reference.inventory.adapter.outbound.messaging.OutboxInventoryResultPublisher;
 import io.github.ande1922.moduvera.reference.inventory.adapter.outbound.persistence.InventoryMapper;
 import io.github.ande1922.moduvera.reference.inventory.application.InventoryResultPublisher;
+import io.github.ande1922.moduvera.testing.ProgressBarrier;
 import io.github.ande1922.moduvera.message.Destination;
 import io.github.ande1922.moduvera.message.MessageDescriptor;
 import io.github.ande1922.moduvera.message.MessageId;
@@ -193,14 +194,18 @@ class InventoryApplicationIT {
                 42,
                 List.of(new ReserveInventoryLine(8, 3), new ReserveInventoryLine(7, 2)));
         SerializedMessage message = serialized(command, "tenant-a", "corr-success");
-        long consumedBefore = consumedReserveRecords();
+        ProgressBarrier consumed = ProgressBarrier.capture(this::consumedReserveRecords);
         assertThat(message.descriptor().actor().permissions())
                 .containsExactlyInAnyOrder("inventory:admin", "catalog:write");
 
         transport.send(message);
         eventually(() -> count("inventory_reservation_result") == 1);
         transport.send(message);
-        eventuallyConsumedReserveRecords(consumedBefore + 2);
+        consumed.awaitAdvanceBy(
+                2,
+                Duration.ofSeconds(15),
+                Duration.ofMillis(50),
+                () -> "consumer=inventory-it, topic=" + RESERVE_TOPIC);
 
         List<SerializedMessage> results = kafkaResults("inventory-result:reserve-order-42");
 
@@ -465,26 +470,14 @@ class InventoryApplicationIT {
         return jdbc.queryForObject("SELECT COUNT(*) FROM " + table, Integer.class);
     }
 
-    private long consumedReserveRecords() throws Exception {
+    private long consumedReserveRecords() {
         Properties properties = new Properties();
         properties.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, KAFKA.getBootstrapServers());
         try (Admin admin = Admin.create(properties)) {
             return consumedReserveRecords(admin);
-        }
-    }
-
-    private void eventuallyConsumedReserveRecords(long expected) throws Exception {
-        Properties properties = new Properties();
-        properties.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, KAFKA.getBootstrapServers());
-        try (Admin admin = Admin.create(properties)) {
-            Instant deadline = Instant.now().plusSeconds(15);
-            while (consumedReserveRecords(admin) < expected) {
-                if (Instant.now().isAfter(deadline)) {
-                    throw new AssertionError(
-                            "inventory consumer did not commit " + expected + " records before timeout");
-                }
-                Thread.sleep(50);
-            }
+        } catch (Exception failure) {
+            throw new IllegalStateException(
+                    "could not observe inventory consumer progress for " + RESERVE_TOPIC, failure);
         }
     }
 

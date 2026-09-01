@@ -21,6 +21,7 @@ Use four-space Java indentation, `UpperCamelCase` types, `lowerCamelCase` member
 - Treat transport adaptation and model conversion as separate decisions. Adapters own envelope, routing, authentication, validation, status, and error mechanics. Before adding a transport/application Mapper or duplicate DTO, identify the observable difference in meaning, invariants, shape, serialization, or versioning that it protects; reuse the protocol-neutral contract type when no such difference exists.
 - Keep API modules independent of transport frameworks. Publish canonical kind, type, and destination values with the provider-owned message contract, while the consumer keeps its consumer ID, allowed source, execution Actor, and permissions as local policy. Broker authentication and destination ACLs are part of trusted-producer verification; envelope source matching alone is not authentication.
 - Before changing Service API, HTTP/message DTO, or inbound-adapter seams, read ADR 0004, ADR 0021, and ADR 0031 in `docs/adr/` and preserve their stated applicability conditions.
+- Verification: When adding or changing provider message identities, asynchronous-only commands, message inbound consumers, or asynchronous negative assertions, follow [the message-contract verification workflow](docs/agents/message-contract-verification.md).
 
 ## Agent skills
 

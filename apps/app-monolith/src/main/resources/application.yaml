@@ -57,6 +57,8 @@ moduvera:
     migration:
       mode: startup
       initialize: true
+  identifier:
+    worker-id: ${MODUVERA_IDENTIFIER_WORKER_ID}
   messaging:
     kafka:
       consumer-bindings: [reserveInventory-in-0, inventoryResult-in-0]

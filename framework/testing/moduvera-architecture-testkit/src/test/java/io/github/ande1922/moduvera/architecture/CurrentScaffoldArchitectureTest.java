@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
 import com.tngtech.archunit.core.importer.ImportOption;
+import io.github.ande1922.moduvera.reference.inventory.api.ReserveInventoryCommand;
 import java.util.Set;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
@@ -183,7 +184,8 @@ class CurrentScaffoldArchitectureTest {
                 selectedAdapters.contains(RESERVE_INVENTORY_COMMAND_MESSAGE_HANDLER),
                 () -> "Inventory reservation rule did not select the current handler: "
                         + selectedAdapters);
-        ModuveraArchitectureRules.ASYNC_ONLY_INVENTORY_RESERVATION_DOES_NOT_USE_SYNCHRONOUS_SERVICE_API
+        ModuveraArchitectureRules.asyncOnlyCapabilityDoesNotExposeSynchronousServiceApi(
+                        ReserveInventoryCommand.class)
                 .check(CURRENT_CLASSES);
     }
 

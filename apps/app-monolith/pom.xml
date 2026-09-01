@@ -80,6 +80,12 @@
       </exclusions>
     </dependency>
     <dependency>
+      <groupId>io.github.ande1922.moduvera</groupId>
+      <artifactId>moduvera-test-support</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-testcontainers</artifactId>
       <scope>test</scope>

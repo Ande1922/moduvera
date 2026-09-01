@@ -157,7 +157,7 @@ start_order() {
     ORDER_DATABASE_USERNAME=orders ORDER_DATABASE_PASSWORD=order-reference \
     "IDENTITY_ISSUER_URI=http://localhost:$IDENTITY_PORT" "IDENTITY_JWKS_URI=http://localhost:$IDENTITY_PORT/oauth2/jwks" \
     "IDENTITY_BASE_URL=http://localhost:$IDENTITY_PORT" ORDER_SERVICE_ID=order-service ORDER_SERVICE_SECRET=order-secret \
-    "CATALOG_BASE_URL=http://localhost:$CATALOG_PORT" "${COMMON_KAFKA[@]}"
+    "CATALOG_BASE_URL=http://localhost:$CATALOG_PORT" MODUVERA_IDENTIFIER_WORKER_ID=1 "${COMMON_KAFKA[@]}"
   wait_http order "http://localhost:$ORDER_PORT/actuator/health"
 }
 
@@ -173,7 +173,7 @@ start_monolith() {
     "SERVER_PORT=$MONOLITH_PORT" "BUSINESS_DATABASE_URL=jdbc:postgresql://localhost:$POSTGRES_PORT/orders" \
     BUSINESS_DATABASE_USERNAME=orders BUSINESS_DATABASE_PASSWORD=order-reference \
     "IDENTITY_ISSUER_URI=http://localhost:$IDENTITY_PORT" "IDENTITY_JWKS_URI=http://localhost:$IDENTITY_PORT/oauth2/jwks" \
-    "${COMMON_KAFKA[@]}"
+    MODUVERA_IDENTIFIER_WORKER_ID=1 "${COMMON_KAFKA[@]}"
   wait_http monolith "http://localhost:$MONOLITH_PORT/actuator/health"
 }
 

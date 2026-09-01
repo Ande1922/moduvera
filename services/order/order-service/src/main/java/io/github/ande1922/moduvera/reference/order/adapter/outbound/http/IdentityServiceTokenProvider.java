@@ -2,6 +2,9 @@ package io.github.ande1922.moduvera.reference.order.adapter.outbound.http;
 
 import io.github.ande1922.moduvera.context.ExecutionContextHolder;
 import java.net.URI;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.web.client.RestClient;
@@ -14,27 +17,39 @@ public final class IdentityServiceTokenProvider implements InternalAccessTokenPr
     private final String serviceId;
     private final String serviceSecret;
     private final String audience;
+    private final ServiceTokenCache tokens;
 
     public IdentityServiceTokenProvider(
             RestClient.Builder builder,
             URI identityBaseUri,
             String serviceId,
             String serviceSecret,
-            String audience) {
+            String audience,
+            Clock clock,
+            Duration refreshSkew,
+            int tokenCacheMaxEntries) {
         this.identity = builder.baseUrl(identityBaseUri.toString()).build();
         this.serviceId = requireConfiguration(serviceId, "serviceId");
         this.serviceSecret = requireConfiguration(serviceSecret, "serviceSecret");
         this.audience = requireConfiguration(audience, "audience");
+        this.tokens = new ServiceTokenCache(clock, refreshSkew, tokenCacheMaxEntries);
     }
 
     @Override
     public String accessToken() {
         var context = ExecutionContextHolder.require();
-        var request = new ServiceTokenRequest(
-                context.tenantId().value(),
+        var key = new ServiceTokenCache.Key(
+                serviceId,
                 audience,
-                context.initiator().type().name(),
+                context.tenantId().value(),
+                context.initiator().type(),
                 context.initiator().subjectId());
+        return tokens.accessToken(key, () -> requestToken(key));
+    }
+
+    private ServiceTokenCache.Token requestToken(ServiceTokenCache.Key key) {
+        var request = new ServiceTokenRequest(
+                key.tenantId(), key.audience(), key.initiatorType().name(), key.initiatorId());
         try {
             TokenResponse response = identity.post()
                     .uri("/internal/api/v1/service-token")
@@ -47,10 +62,13 @@ public final class IdentityServiceTokenProvider implements InternalAccessTokenPr
                                         + httpResponse.getStatusCode().value());
                     })
                     .body(TokenResponse.class);
-            if (response == null || response.accessToken() == null || response.accessToken().isBlank()) {
+            if (response == null
+                    || response.accessToken() == null
+                    || response.accessToken().isBlank()
+                    || response.expiresAt() == null) {
                 throw new CatalogCallException("Identity returned an empty service token");
             }
-            return response.accessToken();
+            return new ServiceTokenCache.Token(response.accessToken(), response.expiresAt());
         } catch (CatalogCallException failure) {
             throw failure;
         } catch (RestClientException failure) {
@@ -74,5 +92,5 @@ public final class IdentityServiceTokenProvider implements InternalAccessTokenPr
     private record ServiceTokenRequest(
             String tenantId, String audience, String initiatorType, String initiatorId) {}
 
-    private record TokenResponse(String accessToken) {}
+    private record TokenResponse(String accessToken, Instant expiresAt) {}
 }

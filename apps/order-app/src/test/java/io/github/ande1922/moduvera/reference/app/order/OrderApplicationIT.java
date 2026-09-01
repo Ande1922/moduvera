@@ -97,6 +97,7 @@ class OrderApplicationIT {
         properties.add("spring.datasource.url", POSTGRES::getJdbcUrl);
         properties.add("spring.datasource.username", POSTGRES::getUsername);
         properties.add("spring.datasource.password", POSTGRES::getPassword);
+        properties.add("moduvera.identifier.worker-id", () -> 1);
         properties.add("moduvera.reference.clients.catalog.base-url", () -> "http://localhost:" + CATALOG.getAddress().getPort());
         properties.add("moduvera.reference.clients.identity.base-url", () -> "http://localhost:" + CATALOG.getAddress().getPort());
         properties.add("moduvera.reference.clients.identity.service-id", () -> "order-service");
@@ -426,7 +427,10 @@ class OrderApplicationIT {
                 && body.contains("\"initiatorType\":\"USER\"")
                 && body.contains("\"initiatorId\":\"alice\"");
         respond(exchange, trusted ? 200 : 401,
-                trusted ? "{\"accessToken\":\"catalog-service-token\"}" : "{\"status\":401}");
+                trusted
+                        ? "{\"accessToken\":\"catalog-service-token\",\"expiresAt\":\""
+                                + Instant.now().plusSeconds(300) + "\"}"
+                        : "{\"status\":401}");
     }
 
     private static String basic(String serviceId, String secret) {

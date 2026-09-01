@@ -41,10 +41,12 @@ import io.github.ande1922.moduvera.reference.order.application.OrderApplicationS
 import io.github.ande1922.moduvera.reference.order.application.ReserveInventoryPublisher;
 import io.github.ande1922.moduvera.reference.order.domain.OrderRepository;
 import io.github.ande1922.moduvera.reference.order.migration.OrderMigrationConfiguration;
+import io.github.ande1922.moduvera.testing.ProgressBarrier;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -99,6 +101,7 @@ class ModuveraMonolithApplicationIT {
         properties.add("spring.datasource.url", POSTGRES::getJdbcUrl);
         properties.add("spring.datasource.username", POSTGRES::getUsername);
         properties.add("spring.datasource.password", POSTGRES::getPassword);
+        properties.add("moduvera.identifier.worker-id", () -> 1);
         properties.add("moduvera.messaging.kafka.relay-enabled", () -> false);
         properties.add("moduvera.messaging.kafka.failure-backoff", () -> "0ms");
         properties.add("spring.cloud.stream.kafka.binder.brokers", KAFKA::getBootstrapServers);
@@ -245,10 +248,16 @@ class ModuveraMonolithApplicationIT {
         int stockAfterConfirmation = available(100);
         String commandId = "reserve-order-" + confirmed;
         String replayBarrierId = "replay-barrier-" + confirmed;
+        ProgressBarrier replayProcessed =
+                ProgressBarrier.capture(() -> inboxMessageCount(replayBarrierId));
         transport.send(reserveMessage(confirmed, 100, 2, "corr-confirm"));
         transport.send(reserveMessage(
                 replayBarrierId, commandId, confirmed, 100, 2, "corr-confirm"));
-        eventually(() -> inboxMessageCount(replayBarrierId) == 1);
+        replayProcessed.awaitAdvanceBy(
+                1,
+                Duration.ofSeconds(15),
+                Duration.ofMillis(50),
+                () -> "inboxMessageId=" + replayBarrierId);
         assertThat(available(100)).isEqualTo(stockAfterConfirmation);
         assertThat(reservationCount(confirmed)).isEqualTo(1);
         assertThat(count("moduvera_message_outbox")).isEqualTo(outboxAfterConfirmation);

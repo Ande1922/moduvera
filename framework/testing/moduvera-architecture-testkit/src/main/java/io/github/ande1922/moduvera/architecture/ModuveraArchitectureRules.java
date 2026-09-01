@@ -8,7 +8,6 @@ import com.tngtech.archunit.base.DescribedPredicate;
 import com.tngtech.archunit.core.domain.JavaClass;
 import com.tngtech.archunit.core.domain.JavaMethod;
 import com.tngtech.archunit.core.domain.JavaModifier;
-import com.tngtech.archunit.core.domain.properties.HasModifiers;
 import com.tngtech.archunit.lang.ArchCondition;
 import com.tngtech.archunit.lang.ArchRule;
 import com.tngtech.archunit.lang.CompositeArchRule;
@@ -100,19 +99,6 @@ public final class ModuveraArchitectureRules {
                                             .getName()
                                             .equals(RESERVE_INVENTORY_COMMAND))))
                     .as("Inventory messaging inbound classes that consume the Reserve Inventory Command");
-    private static final DescribedPredicate<JavaMethod> SYNCHRONOUS_INVENTORY_RESERVATION_OPERATION =
-            DescribedPredicate.describe(
-                    "accept the provider-owned Reserve Inventory Command",
-                    method -> method.getRawParameterTypes().stream()
-                            .anyMatch(parameter -> parameter.getName().equals(RESERVE_INVENTORY_COMMAND)));
-    private static final DescribedPredicate<JavaClass> SYNCHRONOUS_INVENTORY_RESERVATION_INTERFACE =
-            JavaClass.Predicates.resideInAPackage(
-                            "io.github.ande1922.moduvera.reference.inventory.api..")
-                    .and(JavaClass.Predicates.INTERFACES)
-                    .and(HasModifiers.Predicates.modifier(JavaModifier.PUBLIC))
-                    .and(JavaClass.Predicates.containAnyMethodsThat(
-                            SYNCHRONOUS_INVENTORY_RESERVATION_OPERATION))
-                    .as("public Inventory API interfaces that expose synchronous inventory reservation");
     private static final DescribedPredicate<JavaClass> APP_ASSEMBLY_TRANSPORT_MECHANIC =
             DescribedPredicate.describe(
                     "transport mechanics other than the explicit messaging platform migration definition",
@@ -496,12 +482,54 @@ public final class ModuveraArchitectureRules {
             .dependOnClassesThat(RELIABLE_INBOUND_MECHANIC)
             .as("ReliableInboundEndpoint owns Inbox, retry and trusted-context mechanics outside concrete business Message Handlers");
 
-    public static final ArchRule ASYNC_ONLY_INVENTORY_RESERVATION_DOES_NOT_USE_SYNCHRONOUS_SERVICE_API =
-            noClasses()
-                    .that(INVENTORY_RESERVATION_MESSAGE_ADAPTER)
-                    .should()
-                    .dependOnClassesThat(SYNCHRONOUS_INVENTORY_RESERVATION_INTERFACE)
-                    .as("the async-only Inventory reservation handler must invoke the Application Service directly, not a synchronous public Service API");
+    public static ArchRule asyncOnlyCapabilityDoesNotExposeSynchronousServiceApi(
+            Class<?> commandType) {
+        String commandName = commandType.getName();
+        String providerApiPackage = providerApiPackage(commandType);
+        DescribedPredicate<JavaMethod> acceptsCommand = DescribedPredicate.describe(
+                "accept the asynchronous-only command " + commandName,
+                method -> method.getParameterTypes().stream()
+                        .flatMap(parameter -> parameter.getAllInvolvedRawTypes().stream())
+                        .anyMatch(parameter -> parameter.getName().equals(commandName)));
+        ArchCondition<JavaClass> notExposeSynchronousServiceApi = new ArchCondition<>(
+                "not expose the asynchronous-only command " + commandName
+                        + " through a public Service API interface") {
+            @Override
+            public void check(JavaClass javaClass, ConditionEvents events) {
+                if (!javaClass.isInterface()
+                        || !javaClass.getModifiers().contains(JavaModifier.PUBLIC)) {
+                    return;
+                }
+                javaClass.getMethods().stream()
+                        .filter(acceptsCommand::test)
+                        .forEach(method -> events.add(SimpleConditionEvent.violated(
+                                javaClass,
+                                method.getFullName()
+                                        + " exposes asynchronous-only command "
+                                        + commandName)));
+            }
+        };
+        return classes()
+                .that()
+                .resideInAPackage(providerApiPackage + "..")
+                .should(notExposeSynchronousServiceApi)
+                .as("an asynchronous-only command must not be exposed through a synchronous public Service API");
+    }
+
+    private static String providerApiPackage(Class<?> commandType) {
+        String packageName = commandType.getPackageName();
+        String marker = ".api";
+        int markerIndex = packageName.indexOf(marker);
+        boolean completeSegment = markerIndex >= 0
+                && (markerIndex + marker.length() == packageName.length()
+                        || packageName.charAt(markerIndex + marker.length()) == '.');
+        if (!completeSegment) {
+            throw new IllegalArgumentException(
+                    "asynchronous-only command must reside below a provider api package: "
+                            + commandType.getName());
+        }
+        return packageName.substring(0, markerIndex + marker.length());
+    }
 
     private static CompositeArchRule withoutHttpMappingsIn(String... packages) {
         return CompositeArchRule.of(noClasses()

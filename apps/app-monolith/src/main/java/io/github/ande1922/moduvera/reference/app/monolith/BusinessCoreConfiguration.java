@@ -64,7 +64,7 @@ class BusinessCoreConfiguration {
     }
 
     @Bean
-    IdentifierGenerator orderIdentifiers(@Value("${moduvera.identifier.worker-id:1}") long workerId) {
+    IdentifierGenerator orderIdentifiers(@Value("${moduvera.identifier.worker-id}") long workerId) {
         return new SnowflakeIdentifierGenerator(workerId);
     }
 

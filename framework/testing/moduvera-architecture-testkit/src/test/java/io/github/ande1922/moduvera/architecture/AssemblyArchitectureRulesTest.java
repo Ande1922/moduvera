@@ -1,8 +1,13 @@
 package io.github.ande1922.moduvera.architecture;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.github.ande1922.moduvera.architecturefixture.shipping.api.ShipOrderCommand;
+import io.github.ande1922.moduvera.architecturefixture.shipping.api.ShippingBatchService;
+import io.github.ande1922.moduvera.architecturefixture.shipping.api.ShippingLookupService;
+import io.github.ande1922.moduvera.architecturefixture.shipping.api.ShippingReservationService;
 import io.github.ande1922.moduvera.reference.app.gateway.architecturefixture.GatewayBusinessControllerViolation;
 import io.github.ande1922.moduvera.reference.app.catalog.architecturefixture.LeafAppMigrationExecutorViolation;
 import io.github.ande1922.moduvera.reference.app.catalog.architecturefixture.LeafAppCompatibilityFacadeViolation;
@@ -12,20 +17,13 @@ import io.github.ande1922.moduvera.reference.app.monolith.architecturefixture.Mo
 import io.github.ande1922.moduvera.reference.app.order.architecturefixture.LeafAppBusinessMapper;
 import io.github.ande1922.moduvera.reference.app.order.architecturefixture.LeafAppMessageHandlerViolation;
 import io.github.ande1922.moduvera.reference.catalog.api.architecturefixture.TransportApiViolation;
-import io.github.ande1922.moduvera.reference.inventory.api.architecturefixture.InventoryAllocationGateway;
-import io.github.ande1922.moduvera.reference.inventory.api.architecturefixture.InventoryLookupService;
-import io.github.ande1922.moduvera.reference.inventory.api.architecturefixture.InventoryReservationService;
 import io.github.ande1922.moduvera.reference.inventory.api.architecturefixture.MessageCoreApiViolation;
 import io.github.ande1922.moduvera.reference.inventory.api.architecturefixture.MessagingStarterApiViolation;
 import io.github.ande1922.moduvera.reference.inventory.architecturefixture.MisplacedInventoryEventProcessor;
 import io.github.ande1922.moduvera.reference.inventory.architecturefixture.MisplacedInventoryMessageHandler;
-import io.github.ande1922.moduvera.reference.inventory.adapter.inbound.messaging.architecturefixture.InventoryCommandListener;
-import io.github.ande1922.moduvera.reference.inventory.adapter.inbound.messaging.architecturefixture.InventoryReservationInboundAdapter;
 import io.github.ande1922.moduvera.reference.inventory.adapter.inbound.messaging.architecturefixture.PublicInventoryEventMessageHandler;
 import io.github.ande1922.moduvera.reference.inventory.adapter.inbound.messaging.architecturefixture.RenamedInventoryEventProcessor;
 import io.github.ande1922.moduvera.reference.inventory.adapter.inbound.messaging.architecturefixture.ReliabilityOwningCommandMessageHandler;
-import io.github.ande1922.moduvera.reference.inventory.adapter.inbound.messaging.architecturefixture.ReservationCommandConsumer;
-import io.github.ande1922.moduvera.reference.inventory.adapter.inbound.messaging.architecturefixture.ReservationInventoryLookup;
 import io.github.ande1922.moduvera.reference.inventory.adapter.inbound.messaging.architecturefixture.RetryingInventoryEventProcessor;
 import io.github.ande1922.moduvera.reference.inventory.adapter.inbound.messaging.architecturefixture.UnclassifiedInventoryProcessor;
 import io.github.ande1922.moduvera.reference.inventory.adapter.inbound.http.architecturefixture.InboundDependsOnOutboundViolation;
@@ -194,34 +192,35 @@ class AssemblyArchitectureRulesTest {
     }
 
     @Test
-    void rejectsRenamedInboundAdaptersForAsyncOnlyInventoryReservation() {
+    void rejectsSynchronousServiceApisForAnyRegisteredAsyncOnlyCapability() {
+        ArchRule rule = ModuveraArchitectureRules
+                .asyncOnlyCapabilityDoesNotExposeSynchronousServiceApi(ShipOrderCommand.class);
         assertViolation(
-                ModuveraArchitectureRules.ASYNC_ONLY_INVENTORY_RESERVATION_DOES_NOT_USE_SYNCHRONOUS_SERVICE_API,
-                InventoryReservationInboundAdapter.class);
+                rule,
+                ShipOrderCommand.class,
+                ShippingReservationService.class);
+        assertViolation(
+                rule,
+                ShipOrderCommand.class,
+                ShippingBatchService.class);
     }
 
     @Test
-    void rejectsRenamedSynchronousInterfacesForAsyncOnlyInventoryReservation() {
-        assertViolation(
-                ModuveraArchitectureRules.ASYNC_ONLY_INVENTORY_RESERVATION_DOES_NOT_USE_SYNCHRONOUS_SERVICE_API,
-                ReservationCommandConsumer.class,
-                InventoryReservationService.class);
-    }
-
-    @Test
-    void rejectsSynchronousReservationInterfacesWithDifferentReturnTypes() {
-        assertViolation(
-                ModuveraArchitectureRules.ASYNC_ONLY_INVENTORY_RESERVATION_DOES_NOT_USE_SYNCHRONOUS_SERVICE_API,
-                InventoryCommandListener.class,
-                InventoryAllocationGateway.class);
-    }
-
-    @Test
-    void allowsUnrelatedDirectInventoryApis() {
+    void allowsUnrelatedDirectServiceApis() {
         assertNoViolation(
-                ModuveraArchitectureRules.ASYNC_ONLY_INVENTORY_RESERVATION_DOES_NOT_USE_SYNCHRONOUS_SERVICE_API,
-                ReservationInventoryLookup.class,
-                InventoryLookupService.class);
+                ModuveraArchitectureRules.asyncOnlyCapabilityDoesNotExposeSynchronousServiceApi(
+                        ShipOrderCommand.class),
+                ShipOrderCommand.class,
+                ShippingLookupService.class);
+    }
+
+    @Test
+    void rejectsAsyncOnlyCommandsOutsideAProviderApiPackage() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> ModuveraArchitectureRules
+                        .asyncOnlyCapabilityDoesNotExposeSynchronousServiceApi(
+                                AssemblyArchitectureRulesTest.class));
     }
 
     @Test

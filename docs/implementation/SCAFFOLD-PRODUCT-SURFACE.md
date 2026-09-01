@@ -27,25 +27,27 @@ The supported database default is PostgreSQL. MySQL is supported as a compatibil
 
 ## Incubating
 
-- `moduvera-lock-core`, `moduvera-lock-local` and `moduvera-scheduler-spring-boot-starter`: tested local behavior, but no distributed lock adapter and no reference-product consumer.
-- `moduvera-object-storage-api`: contract only; no S3 adapter or business consumer.
+- `moduvera-lock-core`, `moduvera-lock-local` and `moduvera-scheduler-spring-boot-starter`: tested local behavior, but no reference-product consumer. Their public surfaces are frozen until a real business use case supplies requirements.
 - `moduvera-architecture-testkit`: repository-internal gate; not yet an external testing product.
 
 ## Planned
 
-- governed observability and HTTP-client Starters;
-- cache and Redisson distributed-lock adapters;
-- S3-compatible object-storage adapter;
+- governed observability;
+- migration of the existing Catalog and Identity callers to Spring Boot HTTP Service Client Groups; no framework HTTP-client Starter before another independent consumer justifies one;
 - PostgreSQL-native AI/vector capability qualification when a real Agent/RAG use case exists;
-- production identity signing-key storage, rotation and multi-instance operation.
 
 ## Deferred
 
 - jOOQ and equal multi-ORM support;
 - RabbitMQ, RocketMQ or equal multi-broker support;
 - generic Saga/workflow/distributed-transaction runtime;
+- reusable cache policy and distributed-lock/scheduler expansion until real business consumers establish their contracts;
 - automatic multi-level cache, sharding, read/write splitting, XA and RLS-by-default;
 - Kubernetes/Helm/release or production deployment templates.
+
+The reference `identity-app` intentionally uses ephemeral signing keys as Demo evidence. Production IAM key storage, rotation and multi-instance operation are outside the current scaffold product boundary.
+
+The previous object-storage API has been withdrawn and is removed rather than carried as an unverified contract. A future consumer must redefine its storage boundary from concrete business semantics.
 
 ## Promotion rule
 

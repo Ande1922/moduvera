@@ -42,6 +42,8 @@ moduvera:
     migration:
       mode: startup
       initialize: true
+  identifier:
+    worker-id: ${MODUVERA_IDENTIFIER_WORKER_ID}
   reference:
     clients:
       catalog:
