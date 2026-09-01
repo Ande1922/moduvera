@@ -1,26 +1,26 @@
 package io.github.ande1922.moduvera.reference.app.monolith;
 
 import io.github.ande1922.moduvera.authorization.UseCaseAuthorizer;
-import io.github.ande1922.moduvera.reference.catalog.CatalogApplicationConfiguration;
-import io.github.ande1922.moduvera.reference.catalog.CatalogInternalHttpConfiguration;
-import io.github.ande1922.moduvera.reference.catalog.CatalogPersistenceConfiguration;
 import io.github.ande1922.moduvera.identifier.IdentifierGenerator;
 import io.github.ande1922.moduvera.identifier.SnowflakeIdentifierGenerator;
-import io.github.ande1922.moduvera.reference.inventory.configuration.InventoryApplicationConfiguration;
-import io.github.ande1922.moduvera.reference.inventory.configuration.InventoryPersistenceConfiguration;
-import io.github.ande1922.moduvera.reference.inventory.inbound.messaging.ReserveInventoryCommandInboundConfiguration;
-import io.github.ande1922.moduvera.migration.DatabaseComponent;
-import io.github.ande1922.moduvera.migration.DatabaseMigrator;
-import io.github.ande1922.moduvera.migration.MigrationPlan;
-import io.github.ande1922.moduvera.reference.order.configuration.OrderApplicationConfiguration;
-import io.github.ande1922.moduvera.reference.order.configuration.OrderPersistenceConfiguration;
-import io.github.ande1922.moduvera.reference.order.inbound.http.OrderHttpController;
-import io.github.ande1922.moduvera.reference.order.inbound.http.OrderHttpInboundConfiguration;
-import io.github.ande1922.moduvera.reference.order.inbound.messaging.InventoryResultInboundConfiguration;
+import io.github.ande1922.moduvera.messaging.kafka.migration.ModuveraMessagingMigrationConfiguration;
+import io.github.ande1922.moduvera.reference.catalog.catalog.CatalogModuleConfiguration;
+import io.github.ande1922.moduvera.reference.catalog.catalog.adapter.inbound.http.CatalogInternalHttpInboundConfiguration;
+import io.github.ande1922.moduvera.reference.catalog.catalog.adapter.outbound.persistence.CatalogPersistenceOutboundConfiguration;
+import io.github.ande1922.moduvera.reference.catalog.migration.CatalogMigrationConfiguration;
+import io.github.ande1922.moduvera.reference.inventory.InventoryModuleConfiguration;
+import io.github.ande1922.moduvera.reference.inventory.adapter.inbound.messaging.ReserveInventoryCommandInboundConfiguration;
+import io.github.ande1922.moduvera.reference.inventory.adapter.outbound.messaging.InventoryResultPublicationConfiguration;
+import io.github.ande1922.moduvera.reference.inventory.adapter.outbound.persistence.InventoryPersistenceConfiguration;
+import io.github.ande1922.moduvera.reference.inventory.migration.InventoryMigrationConfiguration;
+import io.github.ande1922.moduvera.reference.order.OrderModuleConfiguration;
+import io.github.ande1922.moduvera.reference.order.adapter.inbound.http.OrderHttpController;
+import io.github.ande1922.moduvera.reference.order.adapter.inbound.http.OrderHttpInboundConfiguration;
+import io.github.ande1922.moduvera.reference.order.adapter.inbound.messaging.InventoryResultInboundConfiguration;
+import io.github.ande1922.moduvera.reference.order.adapter.outbound.messaging.ReserveInventoryPublicationConfiguration;
+import io.github.ande1922.moduvera.reference.order.adapter.outbound.persistence.OrderPersistenceConfiguration;
+import io.github.ande1922.moduvera.reference.order.migration.OrderMigrationConfiguration;
 import java.time.Clock;
-import java.util.List;
-import javax.sql.DataSource;
-import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -37,16 +37,22 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 @Configuration(proxyBeanMethods = false)
 @Import({
-    CatalogApplicationConfiguration.class,
-    CatalogPersistenceConfiguration.class,
-    CatalogInternalHttpConfiguration.class,
-    OrderApplicationConfiguration.class,
+    CatalogModuleConfiguration.class,
+    CatalogPersistenceOutboundConfiguration.class,
+    CatalogInternalHttpInboundConfiguration.class,
+    CatalogMigrationConfiguration.class,
+    OrderModuleConfiguration.class,
     OrderPersistenceConfiguration.class,
+    ReserveInventoryPublicationConfiguration.class,
     OrderHttpInboundConfiguration.class,
     InventoryResultInboundConfiguration.class,
-    InventoryApplicationConfiguration.class,
+    OrderMigrationConfiguration.class,
+    InventoryModuleConfiguration.class,
     InventoryPersistenceConfiguration.class,
-    ReserveInventoryCommandInboundConfiguration.class
+    InventoryResultPublicationConfiguration.class,
+    ReserveInventoryCommandInboundConfiguration.class,
+    InventoryMigrationConfiguration.class,
+    ModuveraMessagingMigrationConfiguration.class
 })
 class BusinessCoreConfiguration {
 
@@ -83,15 +89,6 @@ class BusinessCoreConfiguration {
     @Bean
     OrderPublicLocationAdvice orderPublicLocationAdvice() {
         return new OrderPublicLocationAdvice();
-    }
-
-    @Bean
-    SmartInitializingSingleton orderMigration(DataSource dataSource) {
-        return () -> new DatabaseMigrator(dataSource)
-                .migrate(new MigrationPlan(
-                        new DatabaseComponent("order"),
-                        List.of("classpath:db/migration/order"),
-                        true));
     }
 
     @ControllerAdvice(assignableTypes = OrderHttpController.class)

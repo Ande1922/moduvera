@@ -2,12 +2,6 @@ package io.github.ande1922.moduvera.reference.app.monolith;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import io.github.ande1922.moduvera.reference.catalog.api.CatalogApi;
-import io.github.ande1922.moduvera.reference.catalog.application.CatalogApplicationService;
-import io.github.ande1922.moduvera.reference.inventory.api.ReserveInventoryCommand;
-import io.github.ande1922.moduvera.reference.inventory.api.ReserveInventoryLine;
-import io.github.ande1922.moduvera.reference.inventory.application.InventoryApplicationService;
-import io.github.ande1922.moduvera.reference.inventory.inbound.messaging.ReserveInventoryCommandInboundConfiguration;
 import io.github.ande1922.moduvera.message.Destination;
 import io.github.ande1922.moduvera.message.MessageDescriptor;
 import io.github.ande1922.moduvera.message.MessageId;
@@ -16,9 +10,37 @@ import io.github.ande1922.moduvera.message.MessageType;
 import io.github.ande1922.moduvera.message.SerializedMessage;
 import io.github.ande1922.moduvera.message.outbox.MessageTransport;
 import io.github.ande1922.moduvera.message.outbox.OutboxWorker;
+import io.github.ande1922.moduvera.migration.MigrationDefinition;
+import io.github.ande1922.moduvera.reference.catalog.api.CatalogApi;
+import io.github.ande1922.moduvera.reference.catalog.catalog.CatalogModuleConfiguration;
+import io.github.ande1922.moduvera.reference.catalog.catalog.adapter.inbound.http.CatalogInternalHttpInboundConfiguration;
+import io.github.ande1922.moduvera.reference.catalog.catalog.adapter.outbound.persistence.CatalogPersistenceOutboundConfiguration;
+import io.github.ande1922.moduvera.reference.catalog.catalog.application.CatalogApplicationService;
+import io.github.ande1922.moduvera.reference.catalog.catalog.domain.ProductRepository;
+import io.github.ande1922.moduvera.reference.catalog.migration.CatalogMigrationConfiguration;
+import io.github.ande1922.moduvera.reference.inventory.InventoryModuleConfiguration;
+import io.github.ande1922.moduvera.reference.inventory.adapter.inbound.messaging.ReserveInventoryCommandInboundConfiguration;
+import io.github.ande1922.moduvera.reference.inventory.adapter.outbound.messaging.InventoryResultPublicationConfiguration;
+import io.github.ande1922.moduvera.reference.inventory.adapter.outbound.persistence.InventoryPersistenceConfiguration;
+import io.github.ande1922.moduvera.reference.inventory.api.ReserveInventoryCommand;
+import io.github.ande1922.moduvera.reference.inventory.api.ReserveInventoryLine;
+import io.github.ande1922.moduvera.reference.inventory.application.InventoryApplicationService;
+import io.github.ande1922.moduvera.reference.inventory.application.InventoryResultPublisher;
+import io.github.ande1922.moduvera.reference.inventory.domain.InventoryStore;
+import io.github.ande1922.moduvera.reference.inventory.migration.InventoryMigrationConfiguration;
+import io.github.ande1922.moduvera.reference.order.OrderModuleConfiguration;
+import io.github.ande1922.moduvera.reference.order.adapter.inbound.http.OrderHttpInboundConfiguration;
+import io.github.ande1922.moduvera.reference.order.adapter.inbound.messaging.InventoryResultInboundConfiguration;
+import io.github.ande1922.moduvera.reference.order.adapter.outbound.http.CatalogHttpClient;
+import io.github.ande1922.moduvera.reference.order.adapter.outbound.http.InternalAccessTokenProvider;
+import io.github.ande1922.moduvera.reference.order.adapter.outbound.http.RemoteCatalogApiConfiguration;
+import io.github.ande1922.moduvera.reference.order.adapter.outbound.messaging.ReserveInventoryPublicationConfiguration;
+import io.github.ande1922.moduvera.reference.order.adapter.outbound.persistence.OrderPersistenceConfiguration;
 import io.github.ande1922.moduvera.reference.order.api.OrderApi;
 import io.github.ande1922.moduvera.reference.order.application.OrderApplicationService;
-import io.github.ande1922.moduvera.reference.order.infrastructure.http.CatalogHttpClient;
+import io.github.ande1922.moduvera.reference.order.application.ReserveInventoryPublisher;
+import io.github.ande1922.moduvera.reference.order.domain.OrderRepository;
+import io.github.ande1922.moduvera.reference.order.migration.OrderMigrationConfiguration;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -140,6 +162,20 @@ class ModuveraMonolithApplicationIT {
     @Order(1)
     void composesLocalCatalogAndOrderApisWithTheAsynchronousInventoryInboundAdapter()
             throws Exception {
+        assertThat(context.getBeansOfType(CatalogModuleConfiguration.class)).hasSize(1);
+        assertThat(context.getBeansOfType(CatalogPersistenceOutboundConfiguration.class)).hasSize(1);
+        assertThat(context.getBeansOfType(CatalogInternalHttpInboundConfiguration.class)).hasSize(1);
+        assertThat(context.getBeansOfType(CatalogMigrationConfiguration.class)).hasSize(1);
+        assertThat(context.getBeansOfType(OrderModuleConfiguration.class)).hasSize(1);
+        assertThat(context.getBeansOfType(OrderPersistenceConfiguration.class)).hasSize(1);
+        assertThat(context.getBeansOfType(ReserveInventoryPublicationConfiguration.class)).hasSize(1);
+        assertThat(context.getBeansOfType(OrderHttpInboundConfiguration.class)).hasSize(1);
+        assertThat(context.getBeansOfType(InventoryResultInboundConfiguration.class)).hasSize(1);
+        assertThat(context.getBeansOfType(OrderMigrationConfiguration.class)).hasSize(1);
+        assertThat(context.getBeansOfType(InventoryModuleConfiguration.class)).hasSize(1);
+        assertThat(context.getBeansOfType(InventoryPersistenceConfiguration.class)).hasSize(1);
+        assertThat(context.getBeansOfType(InventoryResultPublicationConfiguration.class)).hasSize(1);
+        assertThat(context.getBeansOfType(InventoryMigrationConfiguration.class)).hasSize(1);
         assertThat(context.getBeansOfType(CatalogApi.class).values())
                 .singleElement()
                 .isInstanceOf(CatalogApplicationService.class);
@@ -147,10 +183,21 @@ class ModuveraMonolithApplicationIT {
                 .singleElement()
                 .isInstanceOf(OrderApplicationService.class);
         assertThat(context.getBeansOfType(InventoryApplicationService.class)).hasSize(1);
+        assertThat(context.getBeansOfType(ProductRepository.class)).hasSize(1);
+        assertThat(context.getBeansOfType(OrderRepository.class)).hasSize(1);
+        assertThat(context.getBeansOfType(InventoryStore.class)).hasSize(1);
+        assertThat(context.getBeansOfType(ReserveInventoryPublisher.class)).hasSize(1);
+        assertThat(context.getBeansOfType(InventoryResultPublisher.class)).hasSize(1);
         assertThat(context.getBeansOfType(ReserveInventoryCommandInboundConfiguration.class))
                 .hasSize(1);
         assertThat(context.getBean("reserveInventory")).isInstanceOf(Consumer.class);
+        assertThat(context.getBean("inventoryResult")).isInstanceOf(Consumer.class);
         assertThat(context.getBeansOfType(CatalogHttpClient.class)).isEmpty();
+        assertThat(context.getBeansOfType(InternalAccessTokenProvider.class)).isEmpty();
+        assertThat(context.getBeansOfType(RemoteCatalogApiConfiguration.class)).isEmpty();
+        assertThat(context.getBeansOfType(MigrationDefinition.class).values())
+                .extracting(definition -> definition.component().value())
+                .containsExactlyInAnyOrder("catalog", "order", "inventory", "messaging");
 
         HttpResponse<String> created = postOrder(100, 1, "corr-prefix");
         assertThat(created.statusCode()).isEqualTo(201);
@@ -172,6 +219,15 @@ class ModuveraMonolithApplicationIT {
         assertThat(count("flyway_history_order")).isPositive();
         assertThat(count("flyway_history_inventory")).isPositive();
         assertThat(count("flyway_history_messaging")).isPositive();
+        assertThat(jdbc.queryForList(
+                        "SELECT component_name FROM moduvera_database_components ORDER BY component_name",
+                        String.class))
+                .containsExactly("catalog", "inventory", "messaging", "order");
+        assertThat(migrationScripts("catalog")).containsExactly("V1__create_catalog.sql");
+        assertThat(migrationScripts("order")).containsExactly("V1__create_order.sql");
+        assertThat(migrationScripts("inventory")).containsExactly("V1__create_inventory.sql");
+        assertThat(migrationScripts("messaging"))
+                .containsExactly("V1__create_moduvera_messaging.sql");
     }
 
     @Test
@@ -353,6 +409,13 @@ class ModuveraMonolithApplicationIT {
 
     private int count(String table) {
         return jdbc.queryForObject("SELECT COUNT(*) FROM " + table, Integer.class);
+    }
+
+    private List<String> migrationScripts(String component) {
+        return jdbc.queryForList(
+                "SELECT script FROM flyway_history_" + component
+                        + " WHERE type = 'SQL' AND success ORDER BY installed_rank",
+                String.class);
     }
 
     private void product(String tenantId, long productId, String name, String price) {
