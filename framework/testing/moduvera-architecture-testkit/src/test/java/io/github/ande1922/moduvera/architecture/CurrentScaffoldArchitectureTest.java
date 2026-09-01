@@ -1,14 +1,21 @@
 package io.github.ande1922.moduvera.architecture;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
 import com.tngtech.archunit.core.importer.ImportOption;
+import java.util.Set;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
 
 class CurrentScaffoldArchitectureTest {
 
+    private static final String INVENTORY_APPLICATION =
+            "io.github.ande1922.moduvera.reference.app.inventory.InventoryApplication";
+    private static final String RESERVE_INVENTORY_COMMAND_MESSAGE_HANDLER =
+            "io.github.ande1922.moduvera.reference.inventory.adapter.inbound.messaging.ReserveInventoryCommandMessageHandler";
     private static final JavaClasses CURRENT_CLASSES = new ClassFileImporter()
             .withImportOption(new ImportOption.DoNotIncludeTests())
             .importPackages("io.github.ande1922.moduvera");
@@ -16,12 +23,12 @@ class CurrentScaffoldArchitectureTest {
     @Test
     void architectureClasspathContainsAssembliesAndInboundOwners() {
         assertImported("io.github.ande1922.moduvera.reference.app.catalog.CatalogApplication");
-        assertImported("io.github.ande1922.moduvera.reference.app.inventory.InventoryApplication");
+        assertImported(INVENTORY_APPLICATION);
         assertImported("io.github.ande1922.moduvera.reference.app.order.OrderApplication");
         assertImported("io.github.ande1922.moduvera.reference.app.gateway.GatewayApplication");
         assertImported("io.github.ande1922.moduvera.reference.app.monolith.ModuveraMonolithApplication");
         assertImported("io.github.ande1922.moduvera.reference.catalog.inbound.http.CatalogHttpController");
-        assertImported("io.github.ande1922.moduvera.reference.inventory.inbound.messaging.ReserveInventoryCommandInboundConfiguration");
+        assertImported(RESERVE_INVENTORY_COMMAND_MESSAGE_HANDLER);
         assertImported("io.github.ande1922.moduvera.reference.order.inbound.http.OrderHttpController");
         assertImported("io.github.ande1922.moduvera.reference.order.inbound.messaging.InventoryResultInboundConfiguration");
     }
@@ -80,6 +87,20 @@ class CurrentScaffoldArchitectureTest {
     }
 
     @Test
+    void inventoryAppSelectsOnlyThePublicMessagingPlatformDefinition() {
+        Set<String> messagingKafkaDependencies = CURRENT_CLASSES.get(INVENTORY_APPLICATION)
+                .getDirectDependenciesFromSelf().stream()
+                .map(dependency -> dependency.getTargetClass().getName())
+                .filter(className -> className.startsWith(
+                        "io.github.ande1922.moduvera.messaging.kafka."))
+                .collect(Collectors.toSet());
+
+        assertEquals(
+                Set.of(ModuveraArchitectureRules.MESSAGING_MIGRATION_CONFIGURATION),
+                messagingKafkaDependencies);
+    }
+
+    @Test
     void businessInboundAdaptersBelongToTheirProvidingService() {
         ModuveraArchitectureRules.BUSINESS_HTTP_CONTROLLERS_BELONG_TO_PROVIDER_INBOUND.check(CURRENT_CLASSES);
         ModuveraArchitectureRules.BUSINESS_MESSAGE_CONSUMERS_BELONG_TO_PROVIDER_INBOUND.check(CURRENT_CLASSES);
@@ -87,6 +108,15 @@ class CurrentScaffoldArchitectureTest {
 
     @Test
     void asyncOnlyInventoryReservationUsesTheDirectApplicationServicePath() {
+        Set<String> selectedAdapters = CURRENT_CLASSES.stream()
+                .filter(ModuveraArchitectureRules.INVENTORY_RESERVATION_MESSAGE_ADAPTER)
+                .map(javaClass -> javaClass.getName())
+                .collect(Collectors.toSet());
+
+        assertTrue(
+                selectedAdapters.contains(RESERVE_INVENTORY_COMMAND_MESSAGE_HANDLER),
+                () -> "Inventory reservation rule did not select the current handler: "
+                        + selectedAdapters);
         ModuveraArchitectureRules.ASYNC_ONLY_INVENTORY_RESERVATION_DOES_NOT_USE_SYNCHRONOUS_SERVICE_API
                 .check(CURRENT_CLASSES);
     }

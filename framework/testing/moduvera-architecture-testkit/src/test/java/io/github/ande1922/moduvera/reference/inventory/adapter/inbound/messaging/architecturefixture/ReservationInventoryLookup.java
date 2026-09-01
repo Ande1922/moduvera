@@ -1,4 +1,4 @@
-package io.github.ande1922.moduvera.reference.inventory.inbound.messaging.architecturefixture;
+package io.github.ande1922.moduvera.reference.inventory.adapter.inbound.messaging.architecturefixture;
 
 import io.github.ande1922.moduvera.reference.inventory.api.ReserveInventoryCommand;
 import io.github.ande1922.moduvera.reference.inventory.api.architecturefixture.InventoryLookupService;

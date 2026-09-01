@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.ande1922.moduvera.reference.app.gateway.architecturefixture.GatewayBusinessControllerViolation;
 import io.github.ande1922.moduvera.reference.app.inventory.architecturefixture.LeafAppBusinessCallbackViolation;
+import io.github.ande1922.moduvera.reference.app.inventory.architecturefixture.LeafAppReliableEndpointViolation;
 import io.github.ande1922.moduvera.reference.app.monolith.architecturefixture.MonolithBusinessControllerViolation;
 import io.github.ande1922.moduvera.reference.app.order.architecturefixture.LeafAppMessageHandlerViolation;
 import io.github.ande1922.moduvera.reference.catalog.api.architecturefixture.TransportApiViolation;
@@ -14,10 +15,10 @@ import io.github.ande1922.moduvera.reference.inventory.api.architecturefixture.I
 import io.github.ande1922.moduvera.reference.inventory.api.architecturefixture.MessageCoreApiViolation;
 import io.github.ande1922.moduvera.reference.inventory.api.architecturefixture.MessagingStarterApiViolation;
 import io.github.ande1922.moduvera.reference.inventory.architecturefixture.MisplacedInventoryMessageHandler;
-import io.github.ande1922.moduvera.reference.inventory.inbound.messaging.architecturefixture.InventoryCommandListener;
-import io.github.ande1922.moduvera.reference.inventory.inbound.messaging.architecturefixture.InventoryReservationInboundAdapter;
-import io.github.ande1922.moduvera.reference.inventory.inbound.messaging.architecturefixture.ReservationCommandConsumer;
-import io.github.ande1922.moduvera.reference.inventory.inbound.messaging.architecturefixture.ReservationInventoryLookup;
+import io.github.ande1922.moduvera.reference.inventory.adapter.inbound.messaging.architecturefixture.InventoryCommandListener;
+import io.github.ande1922.moduvera.reference.inventory.adapter.inbound.messaging.architecturefixture.InventoryReservationInboundAdapter;
+import io.github.ande1922.moduvera.reference.inventory.adapter.inbound.messaging.architecturefixture.ReservationCommandConsumer;
+import io.github.ande1922.moduvera.reference.inventory.adapter.inbound.messaging.architecturefixture.ReservationInventoryLookup;
 import io.github.ande1922.moduvera.reference.order.application.architecturefixture.TransportApplicationViolation;
 import io.github.ande1922.moduvera.reference.order.architecturefixture.MisplacedOrderController;
 import com.tngtech.archunit.core.domain.JavaClasses;
@@ -45,6 +46,13 @@ class AssemblyArchitectureRulesTest {
         assertViolation(
                 ModuveraArchitectureRules.APP_ASSEMBLIES_ONLY_ASSEMBLE_INBOUND_ADAPTERS,
                 MonolithBusinessControllerViolation.class);
+    }
+
+    @Test
+    void rejectsReliableTransportMechanicsInAppAssemblies() {
+        assertViolation(
+                ModuveraArchitectureRules.APP_ASSEMBLIES_ONLY_ASSEMBLE_INBOUND_ADAPTERS,
+                LeafAppReliableEndpointViolation.class);
     }
 
     @Test
