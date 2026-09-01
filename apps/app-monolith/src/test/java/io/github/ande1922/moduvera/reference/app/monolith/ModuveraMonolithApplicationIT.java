@@ -185,11 +185,17 @@ class ModuveraMonolithApplicationIT {
         eventuallyStatus(confirmed, "CONFIRMED");
 
         int inboxAfterConfirmation = count("moduvera_message_inbox");
+        int outboxAfterConfirmation = count("moduvera_message_outbox");
         int stockAfterConfirmation = available(100);
+        String commandId = "reserve-order-" + confirmed;
+        String replayBarrierId = "replay-barrier-" + confirmed;
         transport.send(reserveMessage(confirmed, 100, 2, "corr-confirm"));
-        eventually(() -> count("moduvera_message_inbox") == inboxAfterConfirmation);
+        transport.send(reserveMessage(
+                replayBarrierId, commandId, confirmed, 100, 2, "corr-confirm"));
+        eventually(() -> inboxMessageCount(replayBarrierId) == 1);
         assertThat(available(100)).isEqualTo(stockAfterConfirmation);
         assertThat(reservationCount(confirmed)).isEqualTo(1);
+        assertThat(count("moduvera_message_outbox")).isEqualTo(outboxAfterConfirmation);
 
         String rejected = createOrder(200, 2, "corr-reject");
         publishNextOutboxMessage();
@@ -198,7 +204,7 @@ class ModuveraMonolithApplicationIT {
         eventuallyStatus(rejected, "REJECTED");
         assertThat(available(200)).isEqualTo(1);
 
-        assertThat(count("moduvera_message_inbox")).isEqualTo(inboxAfterConfirmation + 2);
+        assertThat(count("moduvera_message_inbox")).isEqualTo(inboxAfterConfirmation + 3);
         assertThat(jdbc.queryForObject(
                         "SELECT COUNT(*) FROM moduvera_message_outbox WHERE status = 'PUBLISHED'",
                         Integer.class))
@@ -285,8 +291,19 @@ class ModuveraMonolithApplicationIT {
     private SerializedMessage reserveMessage(
             String orderId, long productId, int quantity, String correlation) throws Exception {
         String commandId = "reserve-order-" + orderId;
+        return reserveMessage(commandId, commandId, orderId, productId, quantity, correlation);
+    }
+
+    private SerializedMessage reserveMessage(
+            String messageId,
+            String commandId,
+            String orderId,
+            long productId,
+            int quantity,
+            String correlation)
+            throws Exception {
         var descriptor = new MessageDescriptor(
-                new MessageId(commandId),
+                new MessageId(messageId),
                 MessageKind.valueOf(ReserveInventoryCommand.MESSAGE_KIND),
                 new MessageType(ReserveInventoryCommand.MESSAGE_TYPE),
                 URI.create("urn:moduvera:reference:order-service"),
@@ -312,6 +329,19 @@ class ModuveraMonolithApplicationIT {
                 "SELECT COUNT(*) FROM inventory_reservation_result WHERE order_id = ?",
                 Integer.class,
                 Long.parseLong(orderId));
+    }
+
+    private int inboxMessageCount(String messageId) {
+        return jdbc.queryForObject(
+                """
+                SELECT COUNT(*)
+                  FROM moduvera_message_inbox
+                 WHERE tenant_id = 'tenant-a'
+                   AND consumer_id = 'inventory-reservation'
+                   AND message_id = ?
+                """,
+                Integer.class,
+                messageId);
     }
 
     private int available(long productId) {
