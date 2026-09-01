@@ -4,7 +4,7 @@
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** claimed
 
 - [ ] Durable Publication 通过真实事务验证成功提交、回滚、只读或缺失事务以及 DataSource 绑定约束，发布信号只在业务与 Outbox 事务成功提交后产生。
 - [ ] Outbox Worker 依赖存储状态的断言通过生产 JDBC Outbox Store 和真实数据库验证，包括 claim、lease、fencing、重试次数、terminal 状态以及未知发送结果。

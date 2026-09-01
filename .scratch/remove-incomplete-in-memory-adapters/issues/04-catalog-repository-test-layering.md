@@ -4,7 +4,7 @@
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** claimed
 
 - [ ] Catalog Application 的授权、not-found 和 Product Snapshot 映射使用测试源码内的局部 stub 验证，不把该替身作为持久化或租户隔离证据。
 - [ ] 商品保存、重新加载、审计数据和当前 Tenant Context 隔离通过生产 MyBatis Repository 与真实数据库观察。

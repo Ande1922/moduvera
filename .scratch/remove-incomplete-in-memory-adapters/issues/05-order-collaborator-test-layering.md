@@ -4,7 +4,7 @@
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** claimed
 
 - [ ] 下单用例通过测试源码内的 recording Repository 和 recording Publisher 验证一次显式 Transaction Boundary、一个 PENDING_STOCK 订单以及一次库存预占命令发布。
 - [ ] recording 协作者只记录当前编排所需交互，不模拟持久化版本、数据库事务、Broker ACK 或完整 Repository 行为。
