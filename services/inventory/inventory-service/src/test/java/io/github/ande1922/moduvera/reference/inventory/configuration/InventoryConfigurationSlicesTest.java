@@ -4,8 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.ande1922.moduvera.authorization.UseCaseAuthorizer;
 import io.github.ande1922.moduvera.data.TransactionBoundary;
-import io.github.ande1922.moduvera.reference.inventory.api.InventoryApi;
-import io.github.ande1922.moduvera.reference.inventory.api.InventoryReserved;
 import io.github.ande1922.moduvera.reference.inventory.application.InventoryApplicationService;
 import io.github.ande1922.moduvera.reference.inventory.application.InventoryResultPublisher;
 import io.github.ande1922.moduvera.reference.inventory.domain.InventoryStore;
@@ -14,7 +12,6 @@ import io.github.ande1922.moduvera.message.inbox.InboxRepository;
 import io.github.ande1922.moduvera.messaging.kafka.KafkaMessageMapper;
 import io.github.ande1922.moduvera.messaging.kafka.ReliableMessageConsumerFactory;
 import java.time.Clock;
-import java.time.Instant;
 import java.util.function.Consumer;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
@@ -39,10 +36,13 @@ class InventoryConfigurationSlicesTest {
     }
 
     @Test
-    void messagingInboundSliceCanBeSelectedWithoutApplicationOrPersistence() {
+    void messagingInboundSliceUsesApplicationServiceWithoutPersistenceConfiguration() {
         try (var context = new AnnotationConfigApplicationContext()) {
-            context.registerBean(InventoryApi.class, () -> command -> new InventoryReserved(
-                    command.commandId(), command.orderId(), Instant.EPOCH));
+            context.registerBean(InventoryApplicationService.class, () -> new InventoryApplicationService(
+                    (command, now) -> null,
+                    new UseCaseAuthorizer(),
+                    Clock.systemUTC(),
+                    ignored -> {}));
             context.registerBean(ObjectMapper.class, () -> new ObjectMapper());
             context.registerBean(
                     ReliableMessageConsumerFactory.class,
@@ -52,7 +52,7 @@ class InventoryConfigurationSlicesTest {
             context.refresh();
 
             assertThat(context.getBeansOfType(Consumer.class)).hasSize(1);
-            assertThat(context.getBeansOfType(InventoryApplicationService.class)).isEmpty();
+            assertThat(context.getBeansOfType(InventoryApplicationService.class)).hasSize(1);
             assertThat(context.getBeansOfType(InventoryStore.class)).isEmpty();
         }
     }

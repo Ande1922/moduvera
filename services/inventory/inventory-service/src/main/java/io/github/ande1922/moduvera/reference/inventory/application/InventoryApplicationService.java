@@ -2,13 +2,12 @@ package io.github.ande1922.moduvera.reference.inventory.application;
 
 import io.github.ande1922.moduvera.authorization.PermissionCode;
 import io.github.ande1922.moduvera.authorization.UseCaseAuthorizer;
-import io.github.ande1922.moduvera.reference.inventory.api.InventoryApi;
 import io.github.ande1922.moduvera.reference.inventory.api.InventoryReservationResult;
 import io.github.ande1922.moduvera.reference.inventory.api.ReserveInventoryCommand;
 import io.github.ande1922.moduvera.reference.inventory.domain.InventoryStore;
 import java.time.Clock;
 
-public final class InventoryApplicationService implements InventoryApi {
+public final class InventoryApplicationService {
 
     public static final PermissionCode RESERVE = new PermissionCode("inventory:reserve");
 
@@ -28,7 +27,6 @@ public final class InventoryApplicationService implements InventoryApi {
         this.publisher = publisher;
     }
 
-    @Override
     public InventoryReservationResult reserve(ReserveInventoryCommand command) {
         authorizer.require(RESERVE);
         var decision = inventory.reserve(command, clock.instant());

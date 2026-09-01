@@ -2,8 +2,8 @@ package io.github.ande1922.moduvera.reference.inventory.inbound.messaging;
 
 import io.github.ande1922.moduvera.context.Actor;
 import io.github.ande1922.moduvera.context.ActorType;
-import io.github.ande1922.moduvera.reference.inventory.api.InventoryApi;
 import io.github.ande1922.moduvera.reference.inventory.api.ReserveInventoryCommand;
+import io.github.ande1922.moduvera.reference.inventory.application.InventoryApplicationService;
 import io.github.ande1922.moduvera.message.Destination;
 import io.github.ande1922.moduvera.message.InboundMessageContract;
 import io.github.ande1922.moduvera.message.MessageKind;
@@ -23,7 +23,7 @@ public class ReserveInventoryCommandInboundConfiguration {
 
     @Bean
     ReserveInventoryCommandMessageHandler reserveInventoryCommandMessageHandler(
-            InventoryApi inventory, ObjectMapper json) {
+            InventoryApplicationService inventory, ObjectMapper json) {
         return new ReserveInventoryCommandMessageHandler(inventory, json);
     }
 
