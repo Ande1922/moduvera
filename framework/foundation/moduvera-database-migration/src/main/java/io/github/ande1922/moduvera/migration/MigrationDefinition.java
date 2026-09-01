@@ -23,5 +23,8 @@ public record MigrationDefinition(
         if (locations.isEmpty() || locations.stream().anyMatch(String::isBlank)) {
             throw new IllegalArgumentException(dialect + " migration locations must be non-blank");
         }
+        if (locations.stream().distinct().count() != locations.size()) {
+            throw new IllegalArgumentException(dialect + " migration locations contain duplicates");
+        }
     }
 }

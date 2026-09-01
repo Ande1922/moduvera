@@ -5,7 +5,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 class MigrationDefinitionTest {
 
@@ -54,5 +58,27 @@ class MigrationDefinitionTest {
                         Map.of()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("postgresql");
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("duplicateLocations")
+    void rejectsDuplicateResourceLocationsWithinEachDialect(
+            String dialect, List<String> postgresqlLocations, List<String> mysqlLocations) {
+        assertThatThrownBy(() -> new MigrationDefinition(
+                        new DatabaseComponent("catalog"),
+                        postgresqlLocations,
+                        mysqlLocations,
+                        Map.of()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(dialect)
+                .hasMessageContaining("duplicate");
+    }
+
+    static Stream<Arguments> duplicateLocations() {
+        var postgresql = "classpath:db/catalog/postgresql";
+        var mysql = "classpath:db/catalog/mysql";
+        return Stream.of(
+                Arguments.of("postgresql", List.of(postgresql, postgresql), List.of(mysql)),
+                Arguments.of("mysql", List.of(postgresql), List.of(mysql, mysql)));
     }
 }
