@@ -8,6 +8,7 @@ import io.github.ande1922.moduvera.context.TenantId;
 import io.github.ande1922.moduvera.error.ErrorCode;
 import io.github.ande1922.moduvera.identifier.IdentifierGenerator;
 import io.github.ande1922.moduvera.message.MessageType;
+import io.github.ande1922.moduvera.migration.autoconfigure.ModuveraDatabaseMigrationMode;
 import org.junit.jupiter.api.Test;
 
 class ModuveraBomConsumerSmokeTest {
@@ -27,5 +28,6 @@ class ModuveraBomConsumerSmokeTest {
         assertThat(tenantId.value()).isEqualTo("tenant-a");
         assertThat(errorCode.value()).isEqualTo("notes.not-found");
         assertThat(identifiers.nextId()).isEqualTo(42L);
+        assertThat(ModuveraDatabaseMigrationMode.DISABLED.name()).isEqualTo("DISABLED");
     }
 }

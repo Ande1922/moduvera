@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import io.github.ande1922.moduvera.data.TransactionBoundary;
 import io.github.ande1922.moduvera.message.publication.DurablePublication;
 import io.github.ande1922.moduvera.message.publication.ImmediatePublication;
+import io.github.ande1922.moduvera.migration.MigrationDefinition;
 import io.github.ande1922.moduvera.messaging.kafka.autoconfigure.ModuveraMessagingKafkaAutoConfiguration;
 import java.util.Map;
 import java.util.function.Supplier;
@@ -62,6 +63,7 @@ class ModuveraMessagingKafkaAutoConfigurationTest {
                     assertThat(context).hasSingleBean(StreamBridgeMessageTransport.class);
                     assertThat(context).hasSingleBean(LocalOutboxWakeSignal.class);
                     assertThat(context).hasSingleBean(io.github.ande1922.moduvera.message.outbox.PublicationObserver.class);
+                    assertThat(context).doesNotHaveBean(MigrationDefinition.class);
                     assertThat(context).doesNotHaveBean(OutboxRelay.class);
                 });
     }

@@ -7,43 +7,17 @@
     <version>0.1.0-SNAPSHOT</version>
     <relativePath>../../parent/pom.xml</relativePath>
   </parent>
-  <artifactId>moduvera-messaging-kafka-spring-boot-starter</artifactId>
-  <name>Moduvera :: Starter :: Messaging Kafka</name>
+  <artifactId>moduvera-database-migration-spring-boot-starter</artifactId>
+  <name>Moduvera :: Starter :: Database Migration</name>
   <dependencies>
-    <dependency>
-      <groupId>io.github.ande1922.moduvera</groupId>
-      <artifactId>moduvera-message-core</artifactId>
-      <version>${project.version}</version>
-    </dependency>
     <dependency>
       <groupId>io.github.ande1922.moduvera</groupId>
       <artifactId>moduvera-database-migration</artifactId>
       <version>${project.version}</version>
     </dependency>
     <dependency>
-      <groupId>io.github.ande1922.moduvera</groupId>
-      <artifactId>moduvera-data-mybatis-plus-spring-boot-starter</artifactId>
-      <version>${project.version}</version>
-    </dependency>
-    <dependency>
-      <groupId>org.springframework.cloud</groupId>
-      <artifactId>spring-cloud-stream</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>org.springframework.cloud</groupId>
-      <artifactId>spring-cloud-stream-binder-kafka</artifactId>
-    </dependency>
-    <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-autoconfigure</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>org.springframework</groupId>
-      <artifactId>spring-jdbc</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>io.micrometer</groupId>
-      <artifactId>micrometer-core</artifactId>
     </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>
@@ -51,18 +25,23 @@
       <optional>true</optional>
     </dependency>
     <dependency>
-      <groupId>org.junit.jupiter</groupId>
-      <artifactId>junit-jupiter</artifactId>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.assertj</groupId>
-      <artifactId>assertj-core</artifactId>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+      <exclusions>
+        <exclusion>
+          <groupId>org.mockito</groupId>
+          <artifactId>mockito-core</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>org.mockito</groupId>
+          <artifactId>mockito-junit-jupiter</artifactId>
+        </exclusion>
+      </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework</groupId>
+      <artifactId>spring-jdbc</artifactId>
       <scope>test</scope>
     </dependency>
     <dependency>
@@ -118,15 +97,6 @@
       </properties>
       <build>
         <plugins>
-          <plugin>
-            <groupId>org.apache.maven.plugins</groupId>
-            <artifactId>maven-surefire-plugin</artifactId>
-            <configuration>
-              <environmentVariables>
-                <DOCKER_HOST>${docker.host}</DOCKER_HOST>
-              </environmentVariables>
-            </configuration>
-          </plugin>
           <plugin>
             <groupId>org.apache.maven.plugins</groupId>
             <artifactId>maven-failsafe-plugin</artifactId>
