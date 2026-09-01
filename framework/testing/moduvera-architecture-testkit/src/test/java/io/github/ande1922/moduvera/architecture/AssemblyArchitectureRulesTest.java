@@ -124,7 +124,9 @@ class AssemblyArchitectureRulesTest {
     void rejectsBusinessCoreDependenciesOnAdapters() {
         assertViolation(
                 ModuveraArchitectureRules.BUSINESS_CORE_DOES_NOT_DEPEND_ON_ADAPTERS,
-                ApplicationDependsOnAdapterViolation.class,
+                ApplicationDependsOnAdapterViolation.class);
+        assertViolation(
+                ModuveraArchitectureRules.BUSINESS_CORE_DOES_NOT_DEPEND_ON_ADAPTERS,
                 DomainDependsOnAdapterViolation.class);
     }
 

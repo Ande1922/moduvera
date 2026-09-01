@@ -133,7 +133,6 @@ public final class ModuveraArchitectureRules {
                             || javaClass.getName()
                                     .equals("io.github.ande1922.moduvera.messaging.kafka.ReliableMessageConsumerFactory")
                             || javaClass.getName().equals("java.lang.Thread")
-                            || javaClass.getName().equals("java.time.Duration")
                             || javaClass.getName().equals("java.util.concurrent.TimeUnit")
                             || residesIn(javaClass, "org.springframework.retry")
                             || residesIn(javaClass, "reactor.util.retry"));
