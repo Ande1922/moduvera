@@ -4,8 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.ande1922.moduvera.reference.catalog.api.CatalogApi;
 import io.github.ande1922.moduvera.reference.catalog.application.CatalogApplicationService;
-import io.github.ande1922.moduvera.reference.inventory.api.InventoryApi;
+import io.github.ande1922.moduvera.reference.inventory.api.ReserveInventoryCommand;
+import io.github.ande1922.moduvera.reference.inventory.api.ReserveInventoryLine;
 import io.github.ande1922.moduvera.reference.inventory.application.InventoryApplicationService;
+import io.github.ande1922.moduvera.reference.inventory.inbound.messaging.ReserveInventoryCommandInboundConfiguration;
 import io.github.ande1922.moduvera.message.Destination;
 import io.github.ande1922.moduvera.message.MessageDescriptor;
 import io.github.ande1922.moduvera.message.MessageId;
@@ -24,6 +26,7 @@ import java.net.http.HttpResponse;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import java.util.function.Consumer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
@@ -135,7 +138,7 @@ class ModuveraMonolithApplicationIT {
 
     @Test
     @Order(1)
-    void composesExactlyOneLocalBusinessApiAndPrefixesOnlyThePublicOrderController()
+    void composesLocalCatalogAndOrderApisWithTheAsynchronousInventoryInboundAdapter()
             throws Exception {
         assertThat(context.getBeansOfType(CatalogApi.class).values())
                 .singleElement()
@@ -143,9 +146,10 @@ class ModuveraMonolithApplicationIT {
         assertThat(context.getBeansOfType(OrderApi.class).values())
                 .singleElement()
                 .isInstanceOf(OrderApplicationService.class);
-        assertThat(context.getBeansOfType(InventoryApi.class).values())
-                .singleElement()
-                .isInstanceOf(InventoryApplicationService.class);
+        assertThat(context.getBeansOfType(InventoryApplicationService.class)).hasSize(1);
+        assertThat(context.getBeansOfType(ReserveInventoryCommandInboundConfiguration.class))
+                .hasSize(1);
+        assertThat(context.getBean("reserveInventory")).isInstanceOf(Consumer.class);
         assertThat(context.getBeansOfType(CatalogHttpClient.class)).isEmpty();
 
         HttpResponse<String> created = postOrder(100, 1, "corr-prefix");
@@ -181,11 +185,17 @@ class ModuveraMonolithApplicationIT {
         eventuallyStatus(confirmed, "CONFIRMED");
 
         int inboxAfterConfirmation = count("moduvera_message_inbox");
+        int outboxAfterConfirmation = count("moduvera_message_outbox");
         int stockAfterConfirmation = available(100);
+        String commandId = "reserve-order-" + confirmed;
+        String replayBarrierId = "replay-barrier-" + confirmed;
         transport.send(reserveMessage(confirmed, 100, 2, "corr-confirm"));
-        eventually(() -> count("moduvera_message_inbox") == inboxAfterConfirmation);
+        transport.send(reserveMessage(
+                replayBarrierId, commandId, confirmed, 100, 2, "corr-confirm"));
+        eventually(() -> inboxMessageCount(replayBarrierId) == 1);
         assertThat(available(100)).isEqualTo(stockAfterConfirmation);
         assertThat(reservationCount(confirmed)).isEqualTo(1);
+        assertThat(count("moduvera_message_outbox")).isEqualTo(outboxAfterConfirmation);
 
         String rejected = createOrder(200, 2, "corr-reject");
         publishNextOutboxMessage();
@@ -194,7 +204,7 @@ class ModuveraMonolithApplicationIT {
         eventuallyStatus(rejected, "REJECTED");
         assertThat(available(200)).isEqualTo(1);
 
-        assertThat(count("moduvera_message_inbox")).isEqualTo(inboxAfterConfirmation + 2);
+        assertThat(count("moduvera_message_inbox")).isEqualTo(inboxAfterConfirmation + 3);
         assertThat(jdbc.queryForObject(
                         "SELECT COUNT(*) FROM moduvera_message_outbox WHERE status = 'PUBLISHED'",
                         Integer.class))
@@ -281,12 +291,23 @@ class ModuveraMonolithApplicationIT {
     private SerializedMessage reserveMessage(
             String orderId, long productId, int quantity, String correlation) throws Exception {
         String commandId = "reserve-order-" + orderId;
+        return reserveMessage(commandId, commandId, orderId, productId, quantity, correlation);
+    }
+
+    private SerializedMessage reserveMessage(
+            String messageId,
+            String commandId,
+            String orderId,
+            long productId,
+            int quantity,
+            String correlation)
+            throws Exception {
         var descriptor = new MessageDescriptor(
-                new MessageId(commandId),
-                MessageKind.ASYNC_COMMAND,
-                new MessageType("io.github.ande1922.moduvera.reference.inventory.reserve.v1"),
+                new MessageId(messageId),
+                MessageKind.valueOf(ReserveInventoryCommand.MESSAGE_KIND),
+                new MessageType(ReserveInventoryCommand.MESSAGE_TYPE),
                 URI.create("urn:moduvera:reference:order-service"),
-                new Destination("inventory.reserve"),
+                new Destination(ReserveInventoryCommand.DESTINATION),
                 Instant.now(),
                 new io.github.ande1922.moduvera.context.TenantId("tenant-a"),
                 new io.github.ande1922.moduvera.context.Actor(
@@ -296,8 +317,10 @@ class ModuveraMonolithApplicationIT {
                 new io.github.ande1922.moduvera.context.Initiator(
                         io.github.ande1922.moduvera.context.ActorType.USER, "alice"),
                 orderId);
-        String payload = "{\"commandId\":\"" + commandId + "\",\"orderId\":" + orderId
-                + ",\"lines\":[{\"productId\":" + productId + ",\"quantity\":" + quantity + "}]}";
+        String payload = JSON.writeValueAsString(new ReserveInventoryCommand(
+                commandId,
+                Long.parseLong(orderId),
+                List.of(new ReserveInventoryLine(productId, quantity))));
         return SerializedMessage.json(descriptor, payload);
     }
 
@@ -306,6 +329,19 @@ class ModuveraMonolithApplicationIT {
                 "SELECT COUNT(*) FROM inventory_reservation_result WHERE order_id = ?",
                 Integer.class,
                 Long.parseLong(orderId));
+    }
+
+    private int inboxMessageCount(String messageId) {
+        return jdbc.queryForObject(
+                """
+                SELECT COUNT(*)
+                  FROM moduvera_message_inbox
+                 WHERE tenant_id = 'tenant-a'
+                   AND consumer_id = 'inventory-reservation'
+                   AND message_id = ?
+                """,
+                Integer.class,
+                messageId);
     }
 
     private int available(long productId) {
