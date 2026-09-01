@@ -57,19 +57,6 @@ public final class ReliableMessageConsumerFactory {
         this.maxBackoff = maxBackoff;
     }
 
-    /** @deprecated Bind one handler with {@link #forConsumer(String, InboundMessageContract, InboundMessageHandler)}. */
-    @Deprecated(forRemoval = true)
-    @SuppressWarnings("removal")
-    public ReliableMessageConsumer forConsumer(String consumerId, InboundMessageContract contract) {
-        return new ReliableMessageConsumer(
-                mapper,
-                new InboxTemplate(consumerId, repository, transactions, clock),
-                contract,
-                maxAttempts,
-                initialBackoff,
-                maxBackoff);
-    }
-
     public ReliableInboundEndpoint forConsumer(
             String consumerId, InboundMessageContract contract, InboundMessageHandler handler) {
         return new ReliableInboundEndpoint(
