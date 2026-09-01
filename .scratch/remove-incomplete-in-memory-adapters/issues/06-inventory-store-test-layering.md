@@ -4,10 +4,14 @@
 
 **Blocked by:** None — can start immediately.
 
-**Status:** claimed
+**Status:** resolved
 
-- [ ] Inventory Application 使用测试源码内的脚本化 Store 决策验证授权、重复命令结果映射以及只在创建新结果时发布集成事实。
-- [ ] 测试替身不重新实现库存扣减、行锁、幂等、Tenant Context 隔离或并发算法。
-- [ ] 足量库存的原子预占、任一条目不足时全拒、重复命令幂等、存储结果重建、并发竞争和租户隔离通过生产 MyBatis Store 与真实数据库验证。
-- [ ] 当前内存 Inventory Store 从生产源码和发布产物中移除，仓库内不再存在对它的引用。
-- [ ] Inventory 聚焦测试、业务 Repository 兼容性测试及 Inventory App integration test 保持通过，且不改变另一个规格负责的异步 Service API seam。
+- [x] Inventory Application 使用测试源码内的脚本化 Store 决策验证授权、重复命令结果映射以及只在创建新结果时发布集成事实。
+- [x] 测试替身不重新实现库存扣减、行锁、幂等、Tenant Context 隔离或并发算法。
+- [x] 足量库存的原子预占、任一条目不足时全拒、重复命令幂等、存储结果重建、并发竞争和租户隔离通过生产 MyBatis Store 与真实数据库验证。
+- [x] 当前内存 Inventory Store 从生产源码和发布产物中移除，仓库内不再存在对它的引用。
+- [x] Inventory 聚焦测试、业务 Repository 兼容性测试及 Inventory App integration test 保持通过，且不改变另一个规格负责的异步 Service API seam。
+
+## Answer
+
+已集成提交 `cca3d62`。Standards 审查通过；Spec 首轮发现外部异步前沿的 Handler 测试仍引用待删 Store，所属任务在 `e1d0849` 完成窄 lambda 修复后复审通过。合并态 15 模块 reactor 验证成功，包含消息 Failsafe 33、Order Service IT 5（MySQL 3）与 Inventory App IT 5。
