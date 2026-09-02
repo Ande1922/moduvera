@@ -4,8 +4,10 @@
 
 - **Accepted** — directly confirmed by the user or unambiguously confirmed by a later answer.
 - **Accepted, verify** — the direction is accepted, but supported status depends on a real Demo/TCK result.
+- **Incubating, frozen** — executable experiment retained without promotion or public-surface expansion until a real consumer establishes requirements.
 - **Provisional** — the assistant recommended it and the conversation continued, but the same round lacks explicit confirmation.
 - **Deferred** — explicitly postponed or removed from the first version.
+- **Withdrawn** — a previous proposal or public surface has been removed and must be redesigned from future consumer evidence.
 - **Open** — asked but unanswered.
 - **Superseded** — replaced by a later, stronger decision.
 
@@ -41,7 +43,6 @@
 | HTTP Client governance | Accepted | Boot Client Groups, Apache HC5, caller-owned timeout/concurrency/retry/circuit policy, one retry layer | Q307-Q328 |
 | Cross-service deadline | Deferred | No remaining-budget propagation in first version | Q317 |
 | Generic request idempotency | Deferred | Business idempotency first; no generic annotation/template until a dedicated design round | Q117, Q121 |
-| Distributed lock | Accepted | Explicit Lock abstraction; Local and Redisson first; bounded acquisition retry; callback executes at most once | Q136-Q138 |
 | Distributed transaction/runtime orchestration | Deferred | No XA/Seata, Process Manager runtime, workflow DSL, or generic compensation engine in core | Q132-Q143 |
 | Identifier | Accepted | Numeric Snowflake-like `long/BIGINT`; JSON string; pluggable unique worker identity; fail on unsafe rollback | Q175, Q178-Q180 |
 | Database and persistence matrix | Accepted, verify | MyBatis-Plus is the only selected persistence framework; PostgreSQL is the Golden Path and MySQL is a long-term compatibility target verified by the same Repository contracts; jOOQ is deferred | Q202-Q219; superseded by ADR 0016 |

@@ -26,7 +26,7 @@ and standalone consumer BOM live under `framework/parent/` and
 | reactor root | `io.github.ande1922.moduvera:moduvera-reactor` |
 | build Parent | `io.github.ande1922.moduvera:moduvera-parent` |
 | BOM | `io.github.ande1922.moduvera:moduvera-bom` |
-| foundation | `moduvera-kernel`, `moduvera-lock-core`, `moduvera-object-storage-api`, `moduvera-message-core`, `moduvera-database-migration` under `io.github.ande1922.moduvera` |
+| foundation | `moduvera-kernel`, `moduvera-lock-core`, `moduvera-message-core`, `moduvera-database-migration` under `io.github.ande1922.moduvera` |
 | adapters | `io.github.ande1922.moduvera:moduvera-lock-local` |
 | starters | `moduvera-auth-resource-server-autoconfigure`, `moduvera-data-mybatis-plus-spring-boot-starter`, `moduvera-messaging-kafka-spring-boot-starter`, `moduvera-scheduler-spring-boot-starter`, `moduvera-web-spring-boot-starter` under `io.github.ande1922.moduvera` |
 | testing | `moduvera-test-support`, `moduvera-architecture-testkit`, `moduvera-bom-smoke` under `io.github.ande1922.moduvera` |
@@ -44,7 +44,6 @@ The branded artifact directory mappings are:
 | `platform-kernel` | `moduvera-kernel` |
 | `platform-lock-core` | `moduvera-lock-core` |
 | `platform-lock-local` | `moduvera-lock-local` |
-| `platform-object-storage-api` | `moduvera-object-storage-api` |
 | `platform-message-core` | `moduvera-message-core` |
 | `platform-database-migration` | `moduvera-database-migration` |
 | `platform-auth-resource-server-autoconfigure` | `moduvera-auth-resource-server-autoconfigure` |
