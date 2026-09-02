@@ -70,6 +70,7 @@ import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtException;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.web.client.support.RestClientHttpServiceGroupConfigurer;
 import org.testcontainers.containers.KafkaContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -198,6 +199,11 @@ class ModuveraMonolithApplicationIT {
         assertThat(context.getBeansOfType(CatalogHttpClient.class)).isEmpty();
         assertThat(context.getBeansOfType(InternalAccessTokenProvider.class)).isEmpty();
         assertThat(context.getBeansOfType(RemoteCatalogApiConfiguration.class)).isEmpty();
+        assertThat(context.getBeansOfType(RestClientHttpServiceGroupConfigurer.class)).isEmpty();
+        assertThat(org.springframework.util.ClassUtils.isPresent(
+                        "org.apache.hc.client5.http.impl.classic.CloseableHttpClient",
+                        getClass().getClassLoader()))
+                .isFalse();
         assertThat(context.getBeansOfType(MigrationDefinition.class).values())
                 .extracting(definition -> definition.component().value())
                 .containsExactlyInAnyOrder("catalog", "order", "inventory", "messaging");

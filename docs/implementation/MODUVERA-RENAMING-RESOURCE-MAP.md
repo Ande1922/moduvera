@@ -107,7 +107,7 @@ Framework and JDK names are explicitly outside the brand migration:
 | `platform.messaging.kafka.*` | `moduvera.messaging.kafka.*` |
 | `platform.scheduler.*` | `moduvera.scheduler.*` |
 | `platform.identifier.*` | `moduvera.identifier.*` |
-| `platform.clients.catalog.*` | `moduvera.reference.clients.catalog.*` |
+| `platform.clients.catalog.*` | `spring.http.serviceclient.catalog.*` |
 | `platform.clients.identity.*` | `moduvera.reference.clients.identity.*` |
 | `platform.messaging.outbox.*` | `moduvera.messaging.outbox.*` |
 | branded thread/bean prefixes `platform...` | `moduvera...` |
@@ -116,8 +116,9 @@ Framework and JDK names are explicitly outside the brand migration:
 
 The runtime configuration inventory includes
 `moduvera.messaging.kafka.{routes,consumer-bindings,relay-enabled,broker-ack-timeout,consumer-backoff-initial,consumer-backoff-max,failure-backoff}`,
-`moduvera.scheduler.pool-size`, `moduvera.identifier.worker-id`, and the
-Catalog/Identity client keys under `moduvera.reference.clients`.
+`moduvera.scheduler.pool-size`, `moduvera.identifier.worker-id`, the Catalog
+Client Group under `spring.http.serviceclient.catalog`, and the Identity client
+credentials under `moduvera.reference.clients.identity`.
 
 The final outbox metrics are
 `moduvera.messaging.outbox.claimed`,

@@ -3,18 +3,18 @@ package io.github.ande1922.moduvera.reference.order.adapter.outbound.http;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import io.github.ande1922.moduvera.context.Actor;
 import io.github.ande1922.moduvera.context.ActorType;
 import io.github.ande1922.moduvera.context.ExecutionContext;
 import io.github.ande1922.moduvera.context.ExecutionContextHolder;
 import io.github.ande1922.moduvera.context.TenantId;
+import io.github.ande1922.moduvera.reference.catalog.api.CatalogApi;
+import io.github.ande1922.moduvera.reference.catalog.api.GetProductQuery;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
-import java.time.Clock;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
@@ -28,7 +28,7 @@ import org.springframework.boot.restclient.autoconfigure.RestClientAutoConfigura
 import org.springframework.boot.restclient.autoconfigure.service.HttpServiceClientAutoConfiguration;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
-class IdentityServiceTokenClientConfigurationTest {
+class CatalogClientConfigurationTest {
 
     private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
             .withInitializer(context -> context.getBeanFactory()
@@ -39,50 +39,47 @@ class IdentityServiceTokenClientConfigurationTest {
                     HttpServiceClientPropertiesAutoConfiguration.class,
                     RestClientAutoConfiguration.class,
                     HttpServiceClientAutoConfiguration.class))
-            .withUserConfiguration(IdentityServiceTokenClientConfiguration.class)
-            .withBean(Clock.class, Clock::systemUTC)
-            .withPropertyValues(
-                    "moduvera.reference.clients.identity.service-id=order-service",
-                    "moduvera.reference.clients.identity.service-secret=order-secret");
+            .withUserConfiguration(RemoteCatalogApiConfiguration.class)
+            .withBean(InternalAccessTokenProvider.class, () -> () -> "catalog-token");
 
     @Test
-    void rejectsMissingIdentityBaseUrlDuringStartup() {
+    void rejectsMissingCatalogBaseUrlDuringStartup() {
         contextRunner.run(context -> {
             assertThat(context).hasFailed();
             assertThat(context.getStartupFailure())
                     .hasRootCauseInstanceOf(IllegalArgumentException.class)
-                    .hasStackTraceContaining("spring.http.serviceclient.identity.base-url");
+                    .hasStackTraceContaining("spring.http.serviceclient.catalog.base-url");
         });
     }
 
     @Test
-    void rejectsAConfiguredIdentityBaseUrlThatIsNotAbsoluteHttp() {
+    void rejectsAConfiguredCatalogBaseUrlThatIsNotAbsoluteHttp() {
         contextRunner
-                .withPropertyValues("spring.http.serviceclient.identity.base-url=/identity")
+                .withPropertyValues("spring.http.serviceclient.catalog.base-url=/catalog")
                 .run(context -> {
                     assertThat(context).hasFailed();
                     assertThat(context.getStartupFailure())
                             .hasRootCauseMessage(
-                                    "spring.http.serviceclient.identity.base-url must be an absolute HTTP(S) URL");
+                                    "spring.http.serviceclient.catalog.base-url must be an absolute HTTP(S) URL");
                 });
     }
 
     @Test
-    void registersTheNamedIdentityGroupWithIndependentTimeouts() {
+    void registersTheNamedCatalogGroupWithIndependentTimeouts() {
         contextRunner
                 .withPropertyValues(
-                        "spring.http.serviceclient.identity.base-url=https://identity.test",
-                        "spring.http.serviceclient.identity.connect-timeout=125ms",
-                        "spring.http.serviceclient.identity.read-timeout=750ms")
+                        "spring.http.serviceclient.catalog.base-url=https://catalog.test",
+                        "spring.http.serviceclient.catalog.connect-timeout=175ms",
+                        "spring.http.serviceclient.catalog.read-timeout=925ms")
                 .run(context -> {
                     assertThat(context).hasNotFailed();
-                    assertThat(context).hasSingleBean(InternalAccessTokenProvider.class);
-                    assertThat(context).hasSingleBean(IdentityServiceTokenTransport.class);
-                    var identity = context.getBean(HttpServiceClientProperties.class).get("identity");
-                    assertThat(identity).isNotNull();
-                    assertThat(identity.getBaseUrl()).isEqualTo("https://identity.test");
-                    assertThat(identity.getConnectTimeout()).isEqualTo(Duration.ofMillis(125));
-                    assertThat(identity.getReadTimeout()).isEqualTo(Duration.ofMillis(750));
+                    assertThat(context).hasSingleBean(CatalogApi.class);
+                    assertThat(context).hasSingleBean(CatalogLookupTransport.class);
+                    var catalog = context.getBean(HttpServiceClientProperties.class).get("catalog");
+                    assertThat(catalog).isNotNull();
+                    assertThat(catalog.getBaseUrl()).isEqualTo("https://catalog.test");
+                    assertThat(catalog.getConnectTimeout()).isEqualTo(Duration.ofMillis(175));
+                    assertThat(catalog.getReadTimeout()).isEqualTo(Duration.ofMillis(925));
                 });
     }
 
@@ -91,54 +88,27 @@ class IdentityServiceTokenClientConfigurationTest {
         contextRunner
                 .withPropertyValues(
                         "spring.http.clients.imperative.factory=jdk",
-                        "spring.http.serviceclient.identity.base-url=https://identity.test")
+                        "spring.http.serviceclient.catalog.base-url=https://catalog.test")
                 .run(context -> {
                     assertThat(context).hasFailed();
                     assertThat(context.getStartupFailure())
                             .hasRootCauseMessage(
-                                    "The identity HTTP Service Client Group requires Apache HC5");
+                                    "The catalog HTTP Service Client Group requires Apache HC5");
                 });
     }
 
     @Test
-    void doesNotRetryARejectedServiceTokenPost() {
+    void honorsTheNamedCatalogGroupReadTimeoutOnTheActualTransport() {
         AtomicInteger requests = new AtomicInteger();
-        HttpServer identity = server(exchange -> {
-            requests.incrementAndGet();
-            respond(exchange, 503, "{\"status\":503}");
-        });
-        try {
-            contextRunner
-                    .withPropertyValues(
-                            "spring.http.clients.imperative.factory=http-components",
-                            "spring.http.serviceclient.identity.base-url=" + baseUrl(identity),
-                            "spring.http.serviceclient.identity.connect-timeout=1s",
-                            "spring.http.serviceclient.identity.read-timeout=1s")
-                    .run(context -> {
-                        assertThat(context).hasNotFailed();
-                        var provider = context.getBean(InternalAccessTokenProvider.class);
-                        assertThatThrownBy(() -> ExecutionContextHolder.call(
-                                        executionContext(), provider::accessToken))
-                                .isInstanceOf(CatalogCallException.class)
-                                .hasMessage("Identity rejected the service token request with HTTP 503");
-                        assertThat(requests).hasValue(1);
-                    });
-        } finally {
-            identity.stop(0);
-        }
-    }
-
-    @Test
-    void honorsTheNamedIdentityGroupReadTimeoutOnTheActualTransport() {
-        AtomicInteger requests = new AtomicInteger();
-        HttpServer identity = server(exchange -> {
+        HttpServer catalog = server(exchange -> {
             requests.incrementAndGet();
             try {
                 Thread.sleep(500);
                 respond(
                         exchange,
                         200,
-                        "{\"accessToken\":\"late-token\",\"expiresAt\":\"2026-09-02T00:05:00Z\"}");
+                        "{\"productId\":100,\"name\":\"Keyboard\",\"unitPrice\":399.00,"
+                                + "\"currency\":\"CNY\",\"version\":3}");
             } catch (InterruptedException failure) {
                 Thread.currentThread().interrupt();
             } catch (IOException ignored) {
@@ -149,28 +119,58 @@ class IdentityServiceTokenClientConfigurationTest {
             contextRunner
                     .withPropertyValues(
                             "spring.http.clients.imperative.factory=http-components",
-                            "spring.http.serviceclient.identity.base-url=" + baseUrl(identity),
-                            "spring.http.serviceclient.identity.connect-timeout=1s",
-                            "spring.http.serviceclient.identity.read-timeout=50ms")
+                            "spring.http.serviceclient.catalog.base-url=" + baseUrl(catalog),
+                            "spring.http.serviceclient.catalog.connect-timeout=1s",
+                            "spring.http.serviceclient.catalog.read-timeout=50ms")
                     .run(context -> {
                         assertThat(context).hasNotFailed();
-                        var provider = context.getBean(InternalAccessTokenProvider.class);
+                        CatalogApi client = context.getBean(CatalogApi.class);
                         assertThatThrownBy(() -> ExecutionContextHolder.call(
-                                        executionContext(), provider::accessToken))
+                                        executionContext(),
+                                        () -> client.getProduct(new GetProductQuery(100))))
                                 .isInstanceOf(CatalogCallException.class)
-                                .hasMessage("Identity service token request failed")
+                                .hasMessage("Catalog product lookup failed")
                                 .hasRootCauseInstanceOf(SocketTimeoutException.class);
                         assertThat(requests).hasValue(1);
                     });
         } finally {
-            identity.stop(0);
+            catalog.stop(0);
+        }
+    }
+
+    @Test
+    void doesNotRetryAProductLookupAfterTheServerDropsTheConnection() {
+        AtomicInteger requests = new AtomicInteger();
+        HttpServer catalog = server(exchange -> {
+            requests.incrementAndGet();
+            exchange.close();
+        });
+        try {
+            contextRunner
+                    .withPropertyValues(
+                            "spring.http.clients.imperative.factory=http-components",
+                            "spring.http.serviceclient.catalog.base-url=" + baseUrl(catalog),
+                            "spring.http.serviceclient.catalog.connect-timeout=1s",
+                            "spring.http.serviceclient.catalog.read-timeout=1s")
+                    .run(context -> {
+                        assertThat(context).hasNotFailed();
+                        CatalogApi client = context.getBean(CatalogApi.class);
+                        assertThatThrownBy(() -> ExecutionContextHolder.call(
+                                        executionContext(),
+                                        () -> client.getProduct(new GetProductQuery(100))))
+                                .isInstanceOf(CatalogCallException.class)
+                                .hasMessage("Catalog product lookup failed");
+                        assertThat(requests).hasValue(1);
+                    });
+        } finally {
+            catalog.stop(0);
         }
     }
 
     private static HttpServer server(com.sun.net.httpserver.HttpHandler handler) {
         try {
             HttpServer server = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
-            server.createContext("/internal/api/v1/service-token", handler);
+            server.createContext("/internal/api/v1/catalog/products/100", handler);
             server.start();
             return server;
         } catch (IOException failure) {
@@ -184,11 +184,11 @@ class IdentityServiceTokenClientConfigurationTest {
 
     private static ExecutionContext executionContext() {
         return ExecutionContext.initiatedBy(
-                new TenantId("tenant-a"), new Actor(ActorType.USER, "alice"), "corr-identity");
+                new TenantId("tenant-a"), new Actor(ActorType.USER, "alice"), "corr-catalog");
     }
 
-    private static void respond(HttpExchange exchange, int status, String body) throws IOException {
-        exchange.getRequestBody().readAllBytes();
+    private static void respond(com.sun.net.httpserver.HttpExchange exchange, int status, String body)
+            throws IOException {
         byte[] payload = body.getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().add("Content-Type", "application/json");
         exchange.sendResponseHeaders(status, payload.length);

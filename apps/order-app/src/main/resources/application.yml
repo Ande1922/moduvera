@@ -12,6 +12,10 @@ spring:
       imperative:
         factory: http-components
     serviceclient:
+      catalog:
+        base-url: ${CATALOG_BASE_URL}
+        connect-timeout: ${CATALOG_CONNECT_TIMEOUT:2s}
+        read-timeout: ${CATALOG_READ_TIMEOUT:2s}
       identity:
         base-url: ${IDENTITY_BASE_URL}
         connect-timeout: ${IDENTITY_CONNECT_TIMEOUT:2s}
@@ -55,9 +59,6 @@ moduvera:
     worker-id: ${MODUVERA_IDENTIFIER_WORKER_ID}
   reference:
     clients:
-      catalog:
-        base-url: ${CATALOG_BASE_URL:http://localhost:8082}
-        timeout: ${CATALOG_TIMEOUT:2s}
       identity:
         service-id: ${ORDER_SERVICE_ID:order-service}
         service-secret: ${ORDER_SERVICE_SECRET}
