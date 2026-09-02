@@ -1,6 +1,5 @@
 package io.github.ande1922.moduvera.reference.catalog.catalog.adapter.inbound.http;
 
-import io.github.ande1922.moduvera.authorization.PermissionDeniedException;
 import io.github.ande1922.moduvera.reference.catalog.api.CatalogApi;
 import io.github.ande1922.moduvera.reference.catalog.catalog.application.ProductNotFoundException;
 import io.github.ande1922.moduvera.web.ProblemStatusContributor;
@@ -22,9 +21,6 @@ public class CatalogInternalHttpInboundConfiguration {
         return exception -> {
             if (exception instanceof ProductNotFoundException) {
                 return Optional.of(HttpStatus.NOT_FOUND);
-            }
-            if (exception instanceof PermissionDeniedException) {
-                return Optional.of(HttpStatus.FORBIDDEN);
             }
             return Optional.empty();
         };
