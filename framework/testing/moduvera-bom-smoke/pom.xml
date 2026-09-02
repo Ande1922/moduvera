@@ -38,11 +38,75 @@
     </dependency>
     <dependency>
       <groupId>io.github.ande1922.moduvera</groupId>
+      <artifactId>moduvera-database-migration</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.github.ande1922.moduvera</groupId>
+      <artifactId>moduvera-lock-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.github.ande1922.moduvera</groupId>
+      <artifactId>moduvera-lock-local</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.github.ande1922.moduvera</groupId>
       <artifactId>moduvera-message-core</artifactId>
     </dependency>
     <dependency>
       <groupId>io.github.ande1922.moduvera</groupId>
+      <artifactId>moduvera-auth-resource-server-autoconfigure</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.github.ande1922.moduvera</groupId>
+      <artifactId>moduvera-data-mybatis-plus-spring-boot-starter</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.github.ande1922.moduvera</groupId>
       <artifactId>moduvera-database-migration-spring-boot-starter</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.github.ande1922.moduvera</groupId>
+      <artifactId>moduvera-messaging-kafka-spring-boot-starter</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.github.ande1922.moduvera</groupId>
+      <artifactId>moduvera-scheduler-spring-boot-starter</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.github.ande1922.moduvera</groupId>
+      <artifactId>moduvera-test-support</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.github.ande1922.moduvera</groupId>
+      <artifactId>moduvera-architecture-testkit</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.github.ande1922.moduvera</groupId>
+      <artifactId>moduvera-web-spring-boot-starter</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.github.ande1922.moduvera</groupId>
+      <artifactId>catalog-api</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.github.ande1922.moduvera</groupId>
+      <artifactId>catalog-service</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.github.ande1922.moduvera</groupId>
+      <artifactId>inventory-api</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.github.ande1922.moduvera</groupId>
+      <artifactId>inventory-service</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.github.ande1922.moduvera</groupId>
+      <artifactId>order-api</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.github.ande1922.moduvera</groupId>
+      <artifactId>order-service</artifactId>
     </dependency>
     <dependency>
       <groupId>org.junit.jupiter</groupId>

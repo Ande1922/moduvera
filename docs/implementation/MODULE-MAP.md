@@ -30,7 +30,7 @@ App Assemblies are the only classpath composition roots. Business Services own r
 - `moduvera-messaging-kafka-spring-boot-starter`: JDBC stores, Kafka codecs/routes/transport, handler-bound reliable inbound endpoints and relay.
 - `moduvera-test-support`: test-only deterministic helpers.
 
-Lock, scheduler and object-storage artifacts are independent capability experiments; see the product-surface page before consuming them.
+Lock and scheduler artifacts are independent Incubating/Frozen capability experiments; see the product-surface page before consuming them.
 
 ## Business shape
 
@@ -72,4 +72,4 @@ The service-to-service security chain is USER JWT at Order, then an audience-sco
 
 ## Version governance
 
-Spring Boot 4.1.1 manages the core stack, Spring Cloud BOM 2025.1.3 governs Cloud Stream 5.0.x, MyBatis-Plus is fixed at 3.5.17, and the reactor compiles/releases for JDK 26. Redisson and MinIO coordinates may be managed before their capabilities are promoted; that is version governance, not a support claim.
+Spring Boot 4.1.1 manages the core stack, Spring Cloud BOM 2025.1.3 governs Cloud Stream 5.0.x, MyBatis-Plus is fixed at 3.5.17, and the reactor compiles/releases for JDK 26. The Redisson coordinate may be managed while distributed Lock remains frozen; version governance is not a support claim.
