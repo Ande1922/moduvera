@@ -1,6 +1,6 @@
 # Current Scaffold Product Surface
 
-This is the only current status source for the repository. Status is based on executable consumer evidence, not the presence of a POM, class, version property or BOM coordinate. Last verified: 2026-09-01.
+This is the only current status source for the repository. Status is based on executable consumer evidence, not the presence of a POM, class, version property or BOM coordinate. Last verified: 2026-09-02.
 
 ## Supported
 
@@ -21,9 +21,11 @@ The supported database default is PostgreSQL. MySQL is supported as a compatibil
 ## Consumer-verified reference products
 
 - `examples/simple-notes-demo`: small independent-parent consumer showing direct BOM/Starter use with HTTP, JWT, PostgreSQL, Kafka and DLQ.
-- `gateway-app`, `identity-app`, `catalog-app`, `order-app`, `inventory-app`: a separate-process reference product using opaque sessions, internal JWTs, real HTTP, durable messaging and asynchronous order fulfillment.
+- `gateway-app`, `identity-app`, `catalog-app`, `order-app`, `inventory-app`: a separate-process reference product using opaque sessions, internal JWTs, named Apache HC5 Catalog/Identity HTTP Service Client Groups, durable messaging and asynchronous order fulfillment.
 - `gateway-app`, `identity-app`, `app-monolith`: a focused business-core modular-monolith topology reusing the same service-owned HTTP/message adapters, Local `CatalogApi`, and Kafka Outbox/Inbox flow.
 - `verification/reference-product/harness/verify.sh`: topology-parameterized local acceptance harness that runs one public HTTP contract against both supported topologies, including concurrent tenant isolation and Kafka/App stop-recovery. Its Compose assets are not production deployment guidance.
+
+The Catalog and Identity HTTP Service Client Groups remain private to Order. No framework HTTP-client Starter is introduced before another independent consumer establishes a reusable seam.
 
 ## Incubating
 
@@ -33,7 +35,6 @@ The supported database default is PostgreSQL. MySQL is supported as a compatibil
 ## Planned
 
 - governed observability;
-- migration of the existing Catalog and Identity callers to Spring Boot HTTP Service Client Groups; no framework HTTP-client Starter before another independent consumer justifies one;
 - PostgreSQL-native AI/vector capability qualification when a real Agent/RAG use case exists;
 
 ## Deferred
