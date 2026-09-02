@@ -53,8 +53,7 @@ spring:
 moduvera:
   database:
     migration:
-      mode: startup
-      initialize: true
+      mode: validate
   identifier:
     worker-id: ${MODUVERA_IDENTIFIER_WORKER_ID}
   reference:

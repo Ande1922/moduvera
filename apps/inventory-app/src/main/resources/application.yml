@@ -33,8 +33,7 @@ spring:
 moduvera:
   database:
     migration:
-      mode: startup
-      initialize: true
+      mode: validate
   messaging:
     kafka:
       consumer-bindings: [reserveInventory-in-0]

@@ -28,6 +28,9 @@ import io.github.ande1922.moduvera.message.publication.DurablePublication;
 import io.github.ande1922.moduvera.messaging.kafka.KafkaMessageMapper;
 import io.github.ande1922.moduvera.messaging.kafka.migration.ModuveraMessagingMigrationConfiguration;
 import io.github.ande1922.moduvera.migration.MigrationDefinition;
+import io.github.ande1922.moduvera.migration.autoconfigure.ModuveraDatabaseMigrationAutoConfiguration;
+import io.github.ande1922.moduvera.migration.autoconfigure.ModuveraDatabaseMigrationMode;
+import io.github.ande1922.moduvera.migration.autoconfigure.ModuveraDatabaseMigrationProperties;
 import io.github.ande1922.moduvera.reference.inventory.InventoryModuleConfiguration;
 import io.github.ande1922.moduvera.reference.inventory.adapter.inbound.messaging.ReserveInventoryCommandInboundConfiguration;
 import io.github.ande1922.moduvera.reference.inventory.adapter.outbound.messaging.InventoryResultPublicationConfiguration;
@@ -48,6 +51,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import javax.sql.DataSource;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
@@ -58,13 +62,16 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import org.springframework.context.ApplicationContext;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageHeaders;
 import org.springframework.messaging.support.MessageBuilder;
@@ -96,6 +103,7 @@ class InventoryApplicationIT {
 
     @DynamicPropertySource
     static void properties(DynamicPropertyRegistry properties) {
+        initializeDisposableDatabase();
         properties.add("spring.datasource.url", POSTGRES::getJdbcUrl);
         properties.add("spring.datasource.username", POSTGRES::getUsername);
         properties.add("spring.datasource.password", POSTGRES::getPassword);
@@ -134,11 +142,30 @@ class InventoryApplicationIT {
                 () -> "reserveInventoryTest-out-0");
     }
 
+    private static void initializeDisposableDatabase() {
+        DataSource dataSource = new DriverManagerDataSource(
+                POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
+        new ApplicationContextRunner()
+                .withConfiguration(
+                        AutoConfigurations.of(ModuveraDatabaseMigrationAutoConfiguration.class))
+                .withPropertyValues(
+                        "moduvera.database.migration.mode=startup",
+                        "moduvera.database.migration.initialize=true")
+                .withBean(DataSource.class, () -> dataSource)
+                .withUserConfiguration(
+                        InventoryMigrationConfiguration.class,
+                        ModuveraMessagingMigrationConfiguration.class)
+                .run(context -> assertThat(context).hasNotFailed());
+    }
+
     @Autowired
     private JdbcTemplate jdbc;
 
     @Autowired
     private ApplicationContext context;
+
+    @Autowired
+    private ModuveraDatabaseMigrationProperties migrationProperties;
 
     @Autowired
     private KafkaMessageMapper messages;
@@ -185,6 +212,8 @@ class InventoryApplicationIT {
         assertThat(context.getBeansOfType(MigrationDefinition.class).values())
                 .extracting(definition -> definition.component().value())
                 .containsExactlyInAnyOrder("inventory", "messaging");
+        assertThat(migrationProperties.getMode()).isEqualTo(ModuveraDatabaseMigrationMode.VALIDATE);
+        assertThat(migrationProperties.isInitialize()).isFalse();
     }
 
     @Test
