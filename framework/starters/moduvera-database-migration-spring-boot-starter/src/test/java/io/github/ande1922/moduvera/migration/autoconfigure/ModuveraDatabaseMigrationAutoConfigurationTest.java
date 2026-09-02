@@ -58,6 +58,24 @@ class ModuveraDatabaseMigrationAutoConfigurationTest {
                 });
     }
 
+    @Test
+    void validateRejectsInitializationBeforeTouchingTheDataSource() {
+        var dataSource = new RejectingDataSource();
+
+        runner.withPropertyValues(
+                        "moduvera.database.migration.mode=validate",
+                        "moduvera.database.migration.initialize=true")
+                .withBean(DataSource.class, () -> dataSource)
+                .withBean(MigrationDefinition.class, () -> definition("catalog"))
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasRootCauseInstanceOf(IllegalStateException.class)
+                            .hasRootCauseMessage("VALIDATE migration mode does not allow initialize=true");
+                    assertThat(dataSource.connectionRequests).isZero();
+                });
+    }
+
     private static MigrationDefinition definition(String component) {
         return new MigrationDefinition(
                 new DatabaseComponent(component),

@@ -30,10 +30,8 @@ These are not a new Grill frontier. The V0.1 Demo should make them concrete, ret
 - Domain/data common-field mapping and the `AggregateVersion` representation; the concrete proposal is isolated in [DATA-MODEL-CONFIRMATION.md](../implementation/DATA-MODEL-CONFIRMATION.md) pending one overall decision.
 - MyBatis-Plus behavior across PostgreSQL and MySQL under one Repository TCK, with PostgreSQL as the Golden Path.
 - Service-owned PostgreSQL/MySQL migration scripts and MyBatis-Plus persistence mappings.
-- `CacheDefinition` routing and type validation for Redis/Caffeine.
 - Spring Boot Client Group behavior with the shared Apache HC5 connection manager.
 - API versioning, OpenAPI grouping, and contract snapshots.
-- S3-compatible checksum, tag, lifecycle, multipart, and version-ID differences.
 - Numeric quality thresholds such as changed-line coverage and CRAP after the Demo establishes a real baseline.
 - Spring Cloud Stream/Kafka Binder behavior on JDK 26, plus optional targeted PIT. Spring Boot, compiler warnings, Spotless, PMD, JaCoCo, ArchUnit, Flyway and Testcontainers now have local JDK 26 build evidence.
 

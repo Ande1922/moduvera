@@ -1,6 +1,6 @@
 # Current Scaffold Product Surface
 
-This is the only current status source for the repository. Status is based on executable consumer evidence, not the presence of a POM, class, version property or BOM coordinate. Last verified: 2026-09-01.
+This is the only current status source for the repository. Status is based on executable consumer evidence, not the presence of a POM, class, version property or BOM coordinate. Last verified: 2026-09-02.
 
 ## Supported
 
@@ -21,11 +21,13 @@ The supported database default is PostgreSQL. MySQL is supported as a compatibil
 ## Consumer-verified reference products
 
 - `examples/simple-notes-demo`: small independent-parent consumer showing direct BOM/Starter use with HTTP, JWT, PostgreSQL, Kafka and DLQ.
-- `gateway-app`, `identity-app`, `catalog-app`, `order-app`, `inventory-app`: a separate-process reference product using opaque sessions, internal JWTs, real HTTP, durable messaging and asynchronous order fulfillment.
+- `gateway-app`, `identity-app`, `catalog-app`, `order-app`, `inventory-app`: a separate-process reference product using opaque sessions, internal JWTs, named Apache HC5 Catalog/Identity HTTP Service Client Groups, durable messaging and asynchronous order fulfillment.
 - `gateway-app`, `identity-app`, `app-monolith`: a focused business-core modular-monolith topology reusing the same service-owned HTTP/message adapters, Local `CatalogApi`, and Kafka Outbox/Inbox flow.
 - `verification/reference-product/harness/verify.sh`: topology-parameterized local acceptance harness that runs one public HTTP contract against both supported topologies, including concurrent tenant isolation and Kafka/App stop-recovery. Its Compose assets are not production deployment guidance.
 
-## Incubating
+The Catalog and Identity HTTP Service Client Groups remain private to Order. No framework HTTP-client Starter is introduced before another independent consumer establishes a reusable seam.
+
+## Incubating / Frozen
 
 - `moduvera-lock-core`, `moduvera-lock-local` and `moduvera-scheduler-spring-boot-starter`: tested local behavior, but no reference-product consumer. Their public surfaces are frozen until a real business use case supplies requirements.
 - `moduvera-architecture-testkit`: repository-internal gate; not yet an external testing product.
@@ -33,7 +35,6 @@ The supported database default is PostgreSQL. MySQL is supported as a compatibil
 ## Planned
 
 - governed observability;
-- migration of the existing Catalog and Identity callers to Spring Boot HTTP Service Client Groups; no framework HTTP-client Starter before another independent consumer justifies one;
 - PostgreSQL-native AI/vector capability qualification when a real Agent/RAG use case exists;
 
 ## Deferred
@@ -41,13 +42,15 @@ The supported database default is PostgreSQL. MySQL is supported as a compatibil
 - jOOQ and equal multi-ORM support;
 - RabbitMQ, RocketMQ or equal multi-broker support;
 - generic Saga/workflow/distributed-transaction runtime;
-- reusable cache policy and distributed-lock/scheduler expansion until real business consumers establish their contracts;
+- reusable cache policy until a real business consumer establishes its contract;
 - automatic multi-level cache, sharding, read/write splitting, XA and RLS-by-default;
 - Kubernetes/Helm/release or production deployment templates.
 
 The reference `identity-app` intentionally uses ephemeral signing keys as Demo evidence. Production IAM key storage, rotation and multi-instance operation are outside the current scaffold product boundary.
 
-The previous object-storage API has been withdrawn and is removed rather than carried as an unverified contract. A future consumer must redefine its storage boundary from concrete business semantics.
+## Withdrawn
+
+- Object Storage: the previous speculative API and object/upload model have been removed. A future consumer must redefine its storage boundary from concrete business semantics.
 
 ## Promotion rule
 

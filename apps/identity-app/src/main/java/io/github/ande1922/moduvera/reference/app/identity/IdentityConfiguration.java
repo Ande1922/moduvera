@@ -1,16 +1,10 @@
 package io.github.ande1922.moduvera.reference.app.identity;
 
-import io.github.ande1922.moduvera.migration.DatabaseComponent;
-import io.github.ande1922.moduvera.migration.DatabaseMigrator;
-import io.github.ande1922.moduvera.migration.MigrationPlan;
 import com.nimbusds.jose.jwk.JWKSet;
 import com.nimbusds.jose.jwk.source.ImmutableJWKSet;
 import com.nimbusds.jose.jwk.source.JWKSource;
 import com.nimbusds.jose.proc.SecurityContext;
 import java.time.Clock;
-import java.util.List;
-import javax.sql.DataSource;
-import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -61,15 +55,6 @@ class IdentityConfiguration {
             IdentityProperties properties,
             Clock clock) {
         return new IdentityService(identities, passwords, jwt, properties, clock);
-    }
-
-    @Bean
-    SmartInitializingSingleton identityMigrations(DataSource dataSource) {
-        return () -> new DatabaseMigrator(dataSource)
-                .migrate(new MigrationPlan(
-                        new DatabaseComponent("identity"),
-                        List.of("classpath:db/migration/identity"),
-                        true));
     }
 
     @Bean

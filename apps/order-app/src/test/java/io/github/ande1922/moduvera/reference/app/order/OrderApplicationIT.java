@@ -20,12 +20,14 @@ import io.github.ande1922.moduvera.message.outbox.MessageTransport;
 import io.github.ande1922.moduvera.message.outbox.OutboxWorker;
 import io.github.ande1922.moduvera.messaging.kafka.migration.ModuveraMessagingMigrationConfiguration;
 import io.github.ande1922.moduvera.migration.MigrationDefinition;
+import io.github.ande1922.moduvera.migration.autoconfigure.ModuveraDatabaseMigrationAutoConfiguration;
 import io.github.ande1922.moduvera.migration.autoconfigure.ModuveraDatabaseMigrationMode;
 import io.github.ande1922.moduvera.migration.autoconfigure.ModuveraDatabaseMigrationProperties;
 import io.github.ande1922.moduvera.reference.order.OrderModuleConfiguration;
 import io.github.ande1922.moduvera.reference.order.adapter.inbound.http.OrderHttpInboundConfiguration;
 import io.github.ande1922.moduvera.reference.order.adapter.inbound.messaging.InventoryResultInboundConfiguration;
 import io.github.ande1922.moduvera.reference.order.adapter.outbound.http.CatalogHttpClient;
+import io.github.ande1922.moduvera.reference.order.adapter.outbound.http.IdentityServiceTokenClientConfiguration;
 import io.github.ande1922.moduvera.reference.order.adapter.outbound.http.RemoteCatalogApiConfiguration;
 import io.github.ande1922.moduvera.reference.order.adapter.outbound.messaging.OutboxReserveInventoryPublisher;
 import io.github.ande1922.moduvera.reference.order.adapter.outbound.messaging.ReserveInventoryPublicationConfiguration;
@@ -43,15 +45,22 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicInteger;
+import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.boot.http.client.autoconfigure.service.HttpServiceClientProperties;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -60,6 +69,10 @@ import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import org.springframework.context.ApplicationContext;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.http.client.ClientHttpRequestFactory;
+import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
+import io.micrometer.observation.ObservationRegistry;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtException;
@@ -84,6 +97,11 @@ class OrderApplicationIT {
     private static final HttpClient HTTP = HttpClient.newHttpClient();
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final HttpServer CATALOG = catalogServer();
+    private static final AtomicInteger SERVICE_TOKEN_REQUESTS = new AtomicInteger();
+    private static final ConcurrentLinkedQueue<String> SERVICE_TOKEN_BODIES =
+            new ConcurrentLinkedQueue<>();
+    private static final ConcurrentLinkedQueue<CatalogRequest> CATALOG_REQUESTS =
+            new ConcurrentLinkedQueue<>();
     private static final String RESERVE_TOPIC = "order-reserve-" + UUID.randomUUID();
     private static final String RESULT_TOPIC = "order-result-" + UUID.randomUUID();
 
@@ -94,12 +112,15 @@ class OrderApplicationIT {
 
     @DynamicPropertySource
     static void properties(DynamicPropertyRegistry properties) {
+        initializeDisposableDatabase();
         properties.add("spring.datasource.url", POSTGRES::getJdbcUrl);
         properties.add("spring.datasource.username", POSTGRES::getUsername);
         properties.add("spring.datasource.password", POSTGRES::getPassword);
         properties.add("moduvera.identifier.worker-id", () -> 1);
-        properties.add("moduvera.reference.clients.catalog.base-url", () -> "http://localhost:" + CATALOG.getAddress().getPort());
-        properties.add("moduvera.reference.clients.identity.base-url", () -> "http://localhost:" + CATALOG.getAddress().getPort());
+        properties.add(
+                "spring.http.serviceclient.catalog.base-url",
+                () -> "http://localhost:" + CATALOG.getAddress().getPort());
+        properties.add("spring.http.serviceclient.identity.base-url", () -> "http://localhost:" + CATALOG.getAddress().getPort());
         properties.add("moduvera.reference.clients.identity.service-id", () -> "order-service");
         properties.add("moduvera.reference.clients.identity.service-secret", () -> "order-secret");
         properties.add("moduvera.messaging.kafka.relay-enabled", () -> false);
@@ -140,6 +161,22 @@ class OrderApplicationIT {
                 () -> "inventoryResultTest-out-0");
     }
 
+    private static void initializeDisposableDatabase() {
+        DataSource dataSource = new DriverManagerDataSource(
+                POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
+        new ApplicationContextRunner()
+                .withConfiguration(
+                        AutoConfigurations.of(ModuveraDatabaseMigrationAutoConfiguration.class))
+                .withPropertyValues(
+                        "moduvera.database.migration.mode=startup",
+                        "moduvera.database.migration.initialize=true")
+                .withBean(DataSource.class, () -> dataSource)
+                .withUserConfiguration(
+                        OrderMigrationConfiguration.class,
+                        ModuveraMessagingMigrationConfiguration.class)
+                .run(context -> assertThat(context).hasNotFailed());
+    }
+
     @LocalServerPort
     private int port;
 
@@ -163,6 +200,15 @@ class OrderApplicationIT {
 
     @Autowired
     private ModuveraDatabaseMigrationProperties migrationProperties;
+
+    @Autowired
+    private ClientHttpRequestFactory clientHttpRequestFactory;
+
+    @Autowired
+    private HttpServiceClientProperties httpServiceClients;
+
+    @Autowired
+    private ObservationRegistry observations;
 
     @BeforeEach
     void cleanDatabase() {
@@ -217,10 +263,12 @@ class OrderApplicationIT {
     }
 
     @Test
-    void explicitlyComposesTheOrderRuntimeSlicesAndStartupMigrations() {
+    void explicitlyComposesTheOrderRuntimeSlicesAndValidationOnlyMigrations() {
         assertThat(applicationContext.getBeansOfType(OrderModuleConfiguration.class)).hasSize(1);
         assertThat(applicationContext.getBeansOfType(OrderHttpInboundConfiguration.class)).hasSize(1);
         assertThat(applicationContext.getBeansOfType(InventoryResultInboundConfiguration.class))
+                .hasSize(1);
+        assertThat(applicationContext.getBeansOfType(IdentityServiceTokenClientConfiguration.class))
                 .hasSize(1);
         assertThat(applicationContext.getBeansOfType(RemoteCatalogApiConfiguration.class)).hasSize(1);
         assertThat(applicationContext.getBeansOfType(OrderPersistenceConfiguration.class)).hasSize(1);
@@ -232,7 +280,53 @@ class OrderApplicationIT {
         assertThat(migrationDefinitions)
                 .extracting(definition -> definition.component().value())
                 .containsExactlyInAnyOrder("order", "messaging");
-        assertThat(migrationProperties.getMode()).isEqualTo(ModuveraDatabaseMigrationMode.STARTUP);
+        assertThat(migrationProperties.getMode()).isEqualTo(ModuveraDatabaseMigrationMode.VALIDATE);
+        assertThat(migrationProperties.isInitialize()).isFalse();
+        assertThat(clientHttpRequestFactory)
+                .isInstanceOf(HttpComponentsClientHttpRequestFactory.class);
+        assertThat(observations).isNotSameAs(ObservationRegistry.NOOP);
+        assertThat(httpServiceClients.get("identity")).satisfies(identity -> {
+            assertThat(identity).isNotNull();
+            assertThat(identity.getConnectTimeout()).isEqualTo(Duration.ofSeconds(2));
+            assertThat(identity.getReadTimeout()).isEqualTo(Duration.ofSeconds(2));
+        });
+        assertThat(httpServiceClients.get("catalog")).satisfies(catalog -> {
+            assertThat(catalog).isNotNull();
+            assertThat(catalog.getConnectTimeout()).isEqualTo(Duration.ofSeconds(2));
+            assertThat(catalog.getReadTimeout()).isEqualTo(Duration.ofSeconds(2));
+        });
+    }
+
+    @Test
+    void preservesDelegatedContextAndReusesAValidServiceTokenForTheSameScope()
+            throws Exception {
+        int tokenRequestsBefore = SERVICE_TOKEN_REQUESTS.get();
+        SERVICE_TOKEN_BODIES.clear();
+        CATALOG_REQUESTS.clear();
+
+        HttpResponse<String> first = post(100, 1, "reuse-user", "tenant-a", "corr-reuse-one");
+        HttpResponse<String> second = post(100, 1, "reuse-user", "tenant-a", "corr-reuse-two");
+
+        assertThat(first.statusCode()).isEqualTo(201);
+        assertThat(second.statusCode()).isEqualTo(201);
+        assertThat(SERVICE_TOKEN_REQUESTS).hasValue(tokenRequestsBefore + 1);
+        assertThat(SERVICE_TOKEN_BODIES)
+                .singleElement()
+                .asString()
+                .contains("\"tenantId\":\"tenant-a\"")
+                .contains("\"audience\":\"catalog-service\"")
+                .contains("\"initiatorType\":\"USER\"")
+                .contains("\"initiatorId\":\"reuse-user\"");
+        assertThat(CATALOG_REQUESTS)
+                .extracting(
+                        CatalogRequest::authorization,
+                        CatalogRequest::tenantId,
+                        CatalogRequest::correlationId)
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple(
+                                "Bearer catalog-service-token", "tenant-a", "corr-reuse-one"),
+                        org.assertj.core.groups.Tuple.tuple(
+                                "Bearer catalog-service-token", "tenant-a", "corr-reuse-two"));
     }
 
     @Test
@@ -348,6 +442,8 @@ class OrderApplicationIT {
 
     private record PersistedOrder(String status, long version, String createdBy, String updatedBy) {}
 
+    private record CatalogRequest(String authorization, String tenantId, String correlationId) {}
+
     private static void eventually(java.util.function.BooleanSupplier condition) throws Exception {
         Instant deadline = Instant.now().plusSeconds(15);
         while (!condition.getAsBoolean()) {
@@ -404,9 +500,13 @@ class OrderApplicationIT {
 
     private static void catalogResponse(HttpExchange exchange) throws IOException {
         String productId = exchange.getRequestURI().getPath().replaceAll(".*/", "");
-        boolean trusted = "Bearer catalog-service-token".equals(exchange.getRequestHeaders().getFirst("Authorization"))
-                && "tenant-a".equals(exchange.getRequestHeaders().getFirst("Tenant-Id"))
-                && exchange.getRequestHeaders().getFirst("X-Correlation-Id") != null;
+        String authorization = exchange.getRequestHeaders().getFirst("Authorization");
+        String tenantId = exchange.getRequestHeaders().getFirst("Tenant-Id");
+        String correlationId = exchange.getRequestHeaders().getFirst("X-Correlation-Id");
+        CATALOG_REQUESTS.add(new CatalogRequest(authorization, tenantId, correlationId));
+        boolean trusted = "Bearer catalog-service-token".equals(authorization)
+                && "tenant-a".equals(tenantId)
+                && correlationId != null;
         if (!trusted || "999".equals(productId)) {
             respond(exchange, trusted ? 503 : 401, "{\"type\":\"about:blank\",\"status\":503}");
             return;
@@ -419,13 +519,16 @@ class OrderApplicationIT {
     }
 
     private static void serviceTokenResponse(HttpExchange exchange) throws IOException {
+        SERVICE_TOKEN_REQUESTS.incrementAndGet();
         String authorization = exchange.getRequestHeaders().getFirst("Authorization");
         String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+        SERVICE_TOKEN_BODIES.add(body);
         boolean trusted = basic("order-service", "order-secret").equals(authorization)
                 && body.contains("\"tenantId\":\"tenant-a\"")
                 && body.contains("\"audience\":\"catalog-service\"")
                 && body.contains("\"initiatorType\":\"USER\"")
-                && body.contains("\"initiatorId\":\"alice\"");
+                && (body.contains("\"initiatorId\":\"alice\"")
+                        || body.contains("\"initiatorId\":\"reuse-user\""));
         respond(exchange, trusted ? 200 : 401,
                 trusted
                         ? "{\"accessToken\":\"catalog-service-token\",\"expiresAt\":\""
@@ -453,6 +556,11 @@ class OrderApplicationIT {
         JwtDecoder orderTestJwtDecoder() {
             return token -> switch (token) {
                 case "order-user" -> user(token, "tenant-a", List.of("order:create", "order:read"));
+                case "reuse-user" -> user(
+                        token,
+                        "reuse-user",
+                        "tenant-a",
+                        List.of("order:create", "order:read"));
                 case "other-tenant" -> user(token, "tenant-b", List.of("order:create", "order:read"));
                 case "no-permission" -> user(token, "tenant-a", List.of());
                 default -> throw new JwtException("unknown test token");
@@ -473,10 +581,15 @@ class OrderApplicationIT {
         }
 
         private static Jwt user(String token, String tenantId, List<String> permissions) {
+            return user(token, "alice", tenantId, permissions);
+        }
+
+        private static Jwt user(
+                String token, String subject, String tenantId, List<String> permissions) {
             Instant now = Instant.now();
             return Jwt.withTokenValue(token)
                     .header("alg", "test")
-                    .subject("alice")
+                    .subject(subject)
                     .issuedAt(now)
                     .expiresAt(now.plusSeconds(3600))
                     .claim("actor_type", "USER")

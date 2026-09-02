@@ -26,7 +26,7 @@ and standalone consumer BOM live under `framework/parent/` and
 | reactor root | `io.github.ande1922.moduvera:moduvera-reactor` |
 | build Parent | `io.github.ande1922.moduvera:moduvera-parent` |
 | BOM | `io.github.ande1922.moduvera:moduvera-bom` |
-| foundation | `moduvera-kernel`, `moduvera-lock-core`, `moduvera-object-storage-api`, `moduvera-message-core`, `moduvera-database-migration` under `io.github.ande1922.moduvera` |
+| foundation | `moduvera-kernel`, `moduvera-lock-core`, `moduvera-message-core`, `moduvera-database-migration` under `io.github.ande1922.moduvera` |
 | adapters | `io.github.ande1922.moduvera:moduvera-lock-local` |
 | starters | `moduvera-auth-resource-server-autoconfigure`, `moduvera-data-mybatis-plus-spring-boot-starter`, `moduvera-messaging-kafka-spring-boot-starter`, `moduvera-scheduler-spring-boot-starter`, `moduvera-web-spring-boot-starter` under `io.github.ande1922.moduvera` |
 | testing | `moduvera-test-support`, `moduvera-architecture-testkit`, `moduvera-bom-smoke` under `io.github.ande1922.moduvera` |
@@ -44,7 +44,6 @@ The branded artifact directory mappings are:
 | `platform-kernel` | `moduvera-kernel` |
 | `platform-lock-core` | `moduvera-lock-core` |
 | `platform-lock-local` | `moduvera-lock-local` |
-| `platform-object-storage-api` | `moduvera-object-storage-api` |
 | `platform-message-core` | `moduvera-message-core` |
 | `platform-database-migration` | `moduvera-database-migration` |
 | `platform-auth-resource-server-autoconfigure` | `moduvera-auth-resource-server-autoconfigure` |
@@ -108,7 +107,7 @@ Framework and JDK names are explicitly outside the brand migration:
 | `platform.messaging.kafka.*` | `moduvera.messaging.kafka.*` |
 | `platform.scheduler.*` | `moduvera.scheduler.*` |
 | `platform.identifier.*` | `moduvera.identifier.*` |
-| `platform.clients.catalog.*` | `moduvera.reference.clients.catalog.*` |
+| `platform.clients.catalog.*` | `spring.http.serviceclient.catalog.*` |
 | `platform.clients.identity.*` | `moduvera.reference.clients.identity.*` |
 | `platform.messaging.outbox.*` | `moduvera.messaging.outbox.*` |
 | branded thread/bean prefixes `platform...` | `moduvera...` |
@@ -117,8 +116,9 @@ Framework and JDK names are explicitly outside the brand migration:
 
 The runtime configuration inventory includes
 `moduvera.messaging.kafka.{routes,consumer-bindings,relay-enabled,broker-ack-timeout,consumer-backoff-initial,consumer-backoff-max,failure-backoff}`,
-`moduvera.scheduler.pool-size`, `moduvera.identifier.worker-id`, and the
-Catalog/Identity client keys under `moduvera.reference.clients`.
+`moduvera.scheduler.pool-size`, `moduvera.identifier.worker-id`, the Catalog
+Client Group under `spring.http.serviceclient.catalog`, and the Identity client
+credentials under `moduvera.reference.clients.identity`.
 
 The final outbox metrics are
 `moduvera.messaging.outbox.claimed`,

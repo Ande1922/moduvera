@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import io.github.ande1922.moduvera.migration.MigrationDefinition;
 import io.github.ande1922.moduvera.reference.catalog.api.CatalogApi;
 import io.github.ande1922.moduvera.reference.catalog.api.ProductSnapshot;
+import io.github.ande1922.moduvera.reference.catalog.catalog.application.ProductNotFoundException;
 import io.github.ande1922.moduvera.reference.catalog.catalog.domain.ProductRepository;
 import io.github.ande1922.moduvera.web.ProblemStatusContributor;
 import java.math.BigDecimal;
@@ -13,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpStatus;
 
 class CatalogInternalHttpInboundConfigurationTest {
 
@@ -25,6 +27,9 @@ class CatalogInternalHttpInboundConfigurationTest {
                 .run(context -> {
                     assertThat(context).hasSingleBean(CatalogHttpController.class);
                     assertThat(context).hasSingleBean(ProblemStatusContributor.class);
+                    assertThat(context.getBean(ProblemStatusContributor.class)
+                                    .statusFor(new ProductNotFoundException(42)))
+                            .contains(HttpStatus.NOT_FOUND);
                     assertThat(context).doesNotHaveBean(ProductRepository.class);
                     assertThat(context).doesNotHaveBean(MigrationDefinition.class);
                 });

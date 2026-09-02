@@ -1,6 +1,5 @@
 package io.github.ande1922.moduvera.reference.order.adapter.inbound.http;
 
-import io.github.ande1922.moduvera.authorization.PermissionDeniedException;
 import io.github.ande1922.moduvera.reference.order.application.OrderNotFoundException;
 import io.github.ande1922.moduvera.reference.order.api.OrderApi;
 import io.github.ande1922.moduvera.web.ProblemStatusContributor;
@@ -22,9 +21,6 @@ public class OrderHttpInboundConfiguration {
         return exception -> {
             if (exception instanceof OrderNotFoundException) {
                 return Optional.of(HttpStatus.NOT_FOUND);
-            }
-            if (exception instanceof PermissionDeniedException) {
-                return Optional.of(HttpStatus.FORBIDDEN);
             }
             return Optional.empty();
         };

@@ -28,5 +28,4 @@ management:
 moduvera:
   database:
     migration:
-      mode: startup
-      initialize: true
+      mode: validate

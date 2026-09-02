@@ -17,11 +17,9 @@ The non-deployment scaffold is complete only when all of the following exist and
 5. typed configuration, telemetry integration points, governed HTTP clients and explicit propagation boundaries;
 6. a programmatic `TransactionBoundary`, service-owned Flyway artifacts, a MyBatis-Plus adapter, PostgreSQL Golden Path tests, and MySQL compatibility Repository TCKs;
 7. at-least-once messaging with CloudEvents, asynchronous command contracts, transactional Outbox/Inbox, and Spring Cloud Stream imperative functions over Kafka in both supported application topologies;
-8. Spring Cache plus validated CacheDefinitions, local single-flight, native Redis access, local/Redisson locks, and bounded scheduling support;
-9. S3-compatible object storage contracts for streaming, presigned upload, prepare/confirm, metadata, checksum and logical object references;
-10. Catalog, Order and Inventory reference business capabilities exercising tenant/RBAC, real HTTP boundaries, Outbox/Inbox, PostgreSQL persistence and public black-box acceptance;
-11. separate-process Catalog, Order and Inventory App Assemblies with exactly one selected implementation for every required Service API, plus one modular-monolith App Assembly that proves the same reference-business flow through focused topology acceptance;
-12. unit, architecture, contract, integration, TCK and independent pytest acceptance suites, with documented evidence and no hidden deployment dependency.
+8. Catalog, Order and Inventory reference business capabilities exercising tenant/RBAC, real HTTP boundaries, Outbox/Inbox, PostgreSQL persistence and public black-box acceptance;
+9. separate-process Catalog, Order and Inventory App Assemblies with exactly one selected implementation for every required Service API, plus one modular-monolith App Assembly that proves the same reference-business flow through focused topology acceptance;
+10. unit, architecture, contract, integration, TCK and independent pytest acceptance suites, with documented evidence and no hidden deployment dependency.
 
 ## Explicitly outside this delivery
 
@@ -42,7 +40,7 @@ These groups express the intended completeness model, not current status or a st
 2. Technical Starters and in-process implementations.
 3. Data, migration and durable messaging reliability.
 4. Identity, tenant and authorization closure.
-5. Cache, locks, jobs, governed HTTP clients and object storage.
+5. Consumer-proven runtime capabilities and governed HTTP clients.
 6. Catalog/Order/Inventory multi-process Golden Path.
 7. Kafka integration and separate App Assemblies.
 8. MySQL compatibility TCK and independent black-box acceptance without an all-combinations matrix.

@@ -7,6 +7,19 @@ spring:
     password: ${ORDER_DATABASE_PASSWORD:order}
   flyway:
     enabled: false
+  http:
+    clients:
+      imperative:
+        factory: http-components
+    serviceclient:
+      catalog:
+        base-url: ${CATALOG_BASE_URL}
+        connect-timeout: ${CATALOG_CONNECT_TIMEOUT:2s}
+        read-timeout: ${CATALOG_READ_TIMEOUT:2s}
+      identity:
+        base-url: ${IDENTITY_BASE_URL}
+        connect-timeout: ${IDENTITY_CONNECT_TIMEOUT:2s}
+        read-timeout: ${IDENTITY_READ_TIMEOUT:2s}
   cloud:
     function:
       definition: inventoryResult
@@ -40,17 +53,12 @@ spring:
 moduvera:
   database:
     migration:
-      mode: startup
-      initialize: true
+      mode: validate
   identifier:
     worker-id: ${MODUVERA_IDENTIFIER_WORKER_ID}
   reference:
     clients:
-      catalog:
-        base-url: ${CATALOG_BASE_URL:http://localhost:8082}
-        timeout: ${CATALOG_TIMEOUT:2s}
       identity:
-        base-url: ${IDENTITY_BASE_URL:http://localhost:8081}
         service-id: ${ORDER_SERVICE_ID:order-service}
         service-secret: ${ORDER_SERVICE_SECRET}
   messaging:

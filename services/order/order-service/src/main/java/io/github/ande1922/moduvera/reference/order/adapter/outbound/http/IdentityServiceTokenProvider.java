@@ -1,34 +1,29 @@
 package io.github.ande1922.moduvera.reference.order.adapter.outbound.http;
 
 import io.github.ande1922.moduvera.context.ExecutionContextHolder;
-import java.net.URI;
 import java.time.Clock;
 import java.time.Duration;
-import java.time.Instant;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpStatusCode;
-import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
+import org.springframework.web.client.RestClientResponseException;
 
 /** Obtains a short-lived audience-scoped service JWT without exposing credentials to business code. */
 public final class IdentityServiceTokenProvider implements InternalAccessTokenProvider {
 
-    private final RestClient identity;
+    private final IdentityServiceTokenTransport identity;
     private final String serviceId;
     private final String serviceSecret;
     private final String audience;
     private final ServiceTokenCache tokens;
 
     public IdentityServiceTokenProvider(
-            RestClient.Builder builder,
-            URI identityBaseUri,
+            IdentityServiceTokenTransport identity,
             String serviceId,
             String serviceSecret,
             String audience,
             Clock clock,
             Duration refreshSkew,
             int tokenCacheMaxEntries) {
-        this.identity = builder.baseUrl(identityBaseUri.toString()).build();
+        this.identity = java.util.Objects.requireNonNull(identity, "identity");
         this.serviceId = requireConfiguration(serviceId, "serviceId");
         this.serviceSecret = requireConfiguration(serviceSecret, "serviceSecret");
         this.audience = requireConfiguration(audience, "audience");
@@ -48,20 +43,11 @@ public final class IdentityServiceTokenProvider implements InternalAccessTokenPr
     }
 
     private ServiceTokenCache.Token requestToken(ServiceTokenCache.Key key) {
-        var request = new ServiceTokenRequest(
+        var request = new IdentityServiceTokenTransport.ServiceTokenRequest(
                 key.tenantId(), key.audience(), key.initiatorType().name(), key.initiatorId());
         try {
-            TokenResponse response = identity.post()
-                    .uri("/internal/api/v1/service-token")
-                    .header(HttpHeaders.AUTHORIZATION, basic(serviceId, serviceSecret))
-                    .body(request)
-                    .retrieve()
-                    .onStatus(HttpStatusCode::isError, (httpRequest, httpResponse) -> {
-                        throw new CatalogCallException(
-                                "Identity rejected the service token request with HTTP "
-                                        + httpResponse.getStatusCode().value());
-                    })
-                    .body(TokenResponse.class);
+            IdentityServiceTokenTransport.TokenResponse response =
+                    identity.issue(basic(serviceId, serviceSecret), request);
             if (response == null
                     || response.accessToken() == null
                     || response.accessToken().isBlank()
@@ -71,6 +57,11 @@ public final class IdentityServiceTokenProvider implements InternalAccessTokenPr
             return new ServiceTokenCache.Token(response.accessToken(), response.expiresAt());
         } catch (CatalogCallException failure) {
             throw failure;
+        } catch (RestClientResponseException failure) {
+            throw new CatalogCallException(
+                    "Identity rejected the service token request with HTTP "
+                            + failure.getStatusCode().value(),
+                    failure);
         } catch (RestClientException failure) {
             throw new CatalogCallException("Identity service token request failed", failure);
         }
@@ -88,9 +79,4 @@ public final class IdentityServiceTokenProvider implements InternalAccessTokenPr
         }
         return value;
     }
-
-    private record ServiceTokenRequest(
-            String tenantId, String audience, String initiatorType, String initiatorId) {}
-
-    private record TokenResponse(String accessToken, Instant expiresAt) {}
 }

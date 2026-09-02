@@ -25,6 +25,7 @@ import io.github.ande1922.moduvera.message.outbox.OutboxStore;
 import io.github.ande1922.moduvera.message.outbox.OutboxWorker;
 import io.github.ande1922.moduvera.message.publication.DurablePublication;
 import io.github.ande1922.moduvera.message.outbox.PublicationObserver;
+import io.github.ande1922.moduvera.migration.MigrationDefinition;
 import io.github.ande1922.moduvera.messaging.kafka.KafkaMessageMapper;
 import io.github.ande1922.moduvera.messaging.kafka.OutboxRelay;
 import io.github.ande1922.moduvera.messaging.kafka.ReliableInboundEndpoint;
@@ -96,6 +97,8 @@ class NotesDemoIT {
         properties.add("spring.datasource.url", POSTGRES::getJdbcUrl);
         properties.add("spring.datasource.username", POSTGRES::getUsername);
         properties.add("spring.datasource.password", POSTGRES::getPassword);
+        properties.add("moduvera.database.migration.mode", () -> "startup");
+        properties.add("moduvera.database.migration.initialize", () -> true);
         properties.add("spring.cloud.stream.kafka.binder.brokers", KAFKA::getBootstrapServers);
         properties.add("spring.cloud.stream.bindings.noteCreated-in-0.destination", () -> topic());
         properties.add("spring.cloud.stream.bindings.notesCreated-out-0.destination", () -> topic());
@@ -154,8 +157,31 @@ class NotesDemoIT {
     @Autowired
     private AtomicInteger retryAttempts;
 
+    @Autowired
+    private List<MigrationDefinition> migrationDefinitions;
+
     @Test
     void consumesTheScaffoldThroughRealHttpAndPostgresql() throws Exception {
+        assertThat(migrationDefinitions)
+                .filteredOn(definition -> definition.component().value().equals("notes_demo"))
+                .singleElement()
+                .satisfies(definition -> {
+                    assertThat(definition.postgresqlLocations())
+                            .containsExactly("classpath:db/migration/notes");
+                    assertThat(definition.mysqlLocations()).isEmpty();
+                });
+        assertThat(jdbc.queryForList(
+                        "SELECT component_name FROM moduvera_database_components ORDER BY component_name",
+                        String.class))
+                .containsExactly("messaging", "notes_demo");
+        assertThat(jdbc.queryForList(
+                        "SELECT version FROM flyway_history_messaging WHERE success ORDER BY installed_rank",
+                        String.class))
+                .containsExactly("0", "1");
+        assertThat(jdbc.queryForList(
+                        "SELECT version FROM flyway_history_notes_demo WHERE success ORDER BY installed_rank",
+                        String.class))
+                .containsExactly("0", "10");
         assertThat(transactions).isNotNull();
         assertThat(tenantLineHandler).isNotNull();
         assertThat(mybatisPlusInterceptor.getInterceptors())
@@ -285,7 +311,10 @@ class NotesDemoIT {
 
         HttpResponse<String> forbidden = send("POST", "/api/v1/notes", "tenant-a-reader", "{\"content\":\"blocked\"}", "corr-forbidden");
         assertThat(forbidden.statusCode()).isEqualTo(403);
-        assertThat(forbidden.body()).contains("\"code\":\"security.permission-denied\"");
+        assertThat(forbidden.headers().firstValue("X-Correlation-Id")).contains("corr-forbidden");
+        assertThat(forbidden.body())
+                .contains("\"code\":\"security.permission-denied\"")
+                .contains("\"correlationId\":\"corr-forbidden\"");
 
         HttpResponse<String> invalid = send("POST", "/api/v1/notes", "tenant-a-writer", "{\"content\":\"\"}", "corr-invalid");
         assertThat(invalid.statusCode()).isEqualTo(400);

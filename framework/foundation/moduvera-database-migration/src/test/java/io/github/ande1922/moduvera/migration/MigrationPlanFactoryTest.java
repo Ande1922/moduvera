@@ -1,6 +1,7 @@
 package io.github.ande1922.moduvera.migration;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.List;
 import java.util.Map;
@@ -46,5 +47,21 @@ class MigrationPlanFactoryTest {
                         List.of("classpath:db/catalog/mysql"),
                         Map.of("catalogSchema", "catalog"),
                         false));
+    }
+
+    @Test
+    void rejectsASelectedDialectThatTheDefinitionDoesNotSupport() {
+        var definition = new MigrationDefinition(
+                new DatabaseComponent("catalog"),
+                List.of("classpath:db/catalog/postgresql"),
+                List.of(),
+                Map.of());
+
+        assertThatThrownBy(() -> MigrationPlanFactory.create(
+                        definition, MigrationDialect.MYSQL, new MigrationExecutionOptions(false)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("catalog")
+                .hasMessageContaining("MYSQL")
+                .hasMessageContaining("not supported");
     }
 }

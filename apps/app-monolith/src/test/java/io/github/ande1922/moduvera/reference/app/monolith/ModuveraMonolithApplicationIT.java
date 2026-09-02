@@ -10,7 +10,11 @@ import io.github.ande1922.moduvera.message.MessageType;
 import io.github.ande1922.moduvera.message.SerializedMessage;
 import io.github.ande1922.moduvera.message.outbox.MessageTransport;
 import io.github.ande1922.moduvera.message.outbox.OutboxWorker;
+import io.github.ande1922.moduvera.messaging.kafka.migration.ModuveraMessagingMigrationConfiguration;
 import io.github.ande1922.moduvera.migration.MigrationDefinition;
+import io.github.ande1922.moduvera.migration.autoconfigure.ModuveraDatabaseMigrationAutoConfiguration;
+import io.github.ande1922.moduvera.migration.autoconfigure.ModuveraDatabaseMigrationMode;
+import io.github.ande1922.moduvera.migration.autoconfigure.ModuveraDatabaseMigrationProperties;
 import io.github.ande1922.moduvera.reference.catalog.api.CatalogApi;
 import io.github.ande1922.moduvera.reference.catalog.catalog.CatalogModuleConfiguration;
 import io.github.ande1922.moduvera.reference.catalog.catalog.adapter.inbound.http.CatalogInternalHttpInboundConfiguration;
@@ -51,13 +55,16 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import java.util.function.Consumer;
+import javax.sql.DataSource;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -65,11 +72,13 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtException;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.web.client.support.RestClientHttpServiceGroupConfigurer;
 import org.testcontainers.containers.KafkaContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -98,6 +107,7 @@ class ModuveraMonolithApplicationIT {
 
     @DynamicPropertySource
     static void properties(DynamicPropertyRegistry properties) {
+        initializeDisposableDatabase();
         properties.add("spring.datasource.url", POSTGRES::getJdbcUrl);
         properties.add("spring.datasource.username", POSTGRES::getUsername);
         properties.add("spring.datasource.password", POSTGRES::getPassword);
@@ -113,6 +123,24 @@ class ModuveraMonolithApplicationIT {
         properties.add("spring.cloud.stream.bindings.inventoryResult-in-0.group", () -> "monolith-order");
         configureSynchronousProducer(properties, "reserveInventory-out-0");
         configureSynchronousProducer(properties, "inventoryResult-out-0");
+    }
+
+    private static void initializeDisposableDatabase() {
+        DataSource dataSource = new DriverManagerDataSource(
+                POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
+        new ApplicationContextRunner()
+                .withConfiguration(
+                        AutoConfigurations.of(ModuveraDatabaseMigrationAutoConfiguration.class))
+                .withPropertyValues(
+                        "moduvera.database.migration.mode=startup",
+                        "moduvera.database.migration.initialize=true")
+                .withBean(DataSource.class, () -> dataSource)
+                .withUserConfiguration(
+                        CatalogMigrationConfiguration.class,
+                        OrderMigrationConfiguration.class,
+                        InventoryMigrationConfiguration.class,
+                        ModuveraMessagingMigrationConfiguration.class)
+                .run(context -> assertThat(context).hasNotFailed());
     }
 
     private static void configureSynchronousProducer(
@@ -136,6 +164,9 @@ class ModuveraMonolithApplicationIT {
 
     @Autowired
     private ApplicationContext context;
+
+    @Autowired
+    private ModuveraDatabaseMigrationProperties migrationProperties;
 
     @Autowired
     private JdbcTemplate jdbc;
@@ -198,9 +229,16 @@ class ModuveraMonolithApplicationIT {
         assertThat(context.getBeansOfType(CatalogHttpClient.class)).isEmpty();
         assertThat(context.getBeansOfType(InternalAccessTokenProvider.class)).isEmpty();
         assertThat(context.getBeansOfType(RemoteCatalogApiConfiguration.class)).isEmpty();
+        assertThat(context.getBeansOfType(RestClientHttpServiceGroupConfigurer.class)).isEmpty();
+        assertThat(org.springframework.util.ClassUtils.isPresent(
+                        "org.apache.hc.client5.http.impl.classic.CloseableHttpClient",
+                        getClass().getClassLoader()))
+                .isFalse();
         assertThat(context.getBeansOfType(MigrationDefinition.class).values())
                 .extracting(definition -> definition.component().value())
                 .containsExactlyInAnyOrder("catalog", "order", "inventory", "messaging");
+        assertThat(migrationProperties.getMode()).isEqualTo(ModuveraDatabaseMigrationMode.VALIDATE);
+        assertThat(migrationProperties.isInitialize()).isFalse();
 
         HttpResponse<String> created = postOrder(100, 1, "corr-prefix");
         assertThat(created.statusCode()).isEqualTo(201);
