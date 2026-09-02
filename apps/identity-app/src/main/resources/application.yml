@@ -11,6 +11,11 @@ spring:
   flyway:
     enabled: false
 
+moduvera:
+  database:
+    migration:
+      mode: validate
+
 identity:
   issuer: ${IDENTITY_ISSUER:http://localhost:8081}
   session-ttl: ${IDENTITY_SESSION_TTL:8h}

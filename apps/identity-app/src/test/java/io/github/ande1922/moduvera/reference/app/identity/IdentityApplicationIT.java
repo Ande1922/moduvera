@@ -6,6 +6,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.nimbusds.jose.jwk.JWKSet;
 import com.nimbusds.jose.jwk.source.ImmutableJWKSet;
 import com.nimbusds.jose.proc.SecurityContext;
+import io.github.ande1922.moduvera.migration.DatabaseComponent;
+import io.github.ande1922.moduvera.migration.MigrationDefinition;
+import io.github.ande1922.moduvera.migration.autoconfigure.ModuveraDatabaseMigrationMode;
+import io.github.ande1922.moduvera.migration.autoconfigure.ModuveraDatabaseMigrationProperties;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -14,6 +18,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -56,6 +61,8 @@ class IdentityApplicationIT {
         properties.add("spring.datasource.password", POSTGRES::getPassword);
         properties.add("identity.issuer", () -> ISSUER);
         properties.add("identity.allowed-audiences", () -> "catalog-service,order-service");
+        properties.add("moduvera.database.migration.mode", () -> "startup");
+        properties.add("moduvera.database.migration.initialize", () -> true);
     }
 
     @LocalServerPort
@@ -72,6 +79,12 @@ class IdentityApplicationIT {
 
     @Autowired
     private JwtEncoder encoder;
+
+    @Autowired
+    private List<MigrationDefinition> migrationDefinitions;
+
+    @Autowired
+    private ModuveraDatabaseMigrationProperties migrationProperties;
 
     @BeforeEach
     void seedIdentityFixtures() {
@@ -218,6 +231,28 @@ class IdentityApplicationIT {
                 .isEqualTo(403);
     }
 
+    @Test
+    void publishesTheCurrentPublicSigningKeyAsJwks() throws Exception {
+        HttpResponse<String> response = get("/oauth2/jwks");
+
+        assertThat(response.statusCode()).isEqualTo(200);
+        JWKSet jwks = JWKSet.parse(response.body());
+        assertThat(jwks.toJSONObject()).isEqualTo(signingKeys.publicJwkSet());
+        assertThat(jwks.getKeys()).allMatch(key -> !key.isPrivate());
+    }
+
+    @Test
+    void publishesThePostgresqlOnlyIdentityMigrationDefinition() {
+        assertThat(migrationDefinitions)
+                .containsExactly(new MigrationDefinition(
+                        new DatabaseComponent("identity"),
+                        List.of("classpath:db/migration/identity"),
+                        List.of(),
+                        Map.of()));
+        assertThat(migrationProperties.getMode()).isEqualTo(ModuveraDatabaseMigrationMode.STARTUP);
+        assertThat(migrationProperties.isInitialize()).isTrue();
+    }
+
     private NimbusJwtDecoder validatingDecoder(String audience) {
         NimbusJwtDecoder decoder = NimbusJwtDecoder.withPublicKey(signingKeys.publicKey()).build();
         decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(
@@ -276,6 +311,14 @@ class IdentityApplicationIT {
         return HTTP.send(
                 request.POST(HttpRequest.BodyPublishers.ofString(body)).build(),
                 HttpResponse.BodyHandlers.ofString());
+    }
+
+    private HttpResponse<String> get(String path) throws Exception {
+        var request = HttpRequest.newBuilder()
+                .uri(URI.create("http://localhost:" + port + path))
+                .GET()
+                .build();
+        return HTTP.send(request, HttpResponse.BodyHandlers.ofString());
     }
 
     private static String basic(String username, String password) {
