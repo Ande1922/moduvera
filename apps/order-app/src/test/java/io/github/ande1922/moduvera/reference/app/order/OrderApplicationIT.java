@@ -26,6 +26,7 @@ import io.github.ande1922.moduvera.reference.order.OrderModuleConfiguration;
 import io.github.ande1922.moduvera.reference.order.adapter.inbound.http.OrderHttpInboundConfiguration;
 import io.github.ande1922.moduvera.reference.order.adapter.inbound.messaging.InventoryResultInboundConfiguration;
 import io.github.ande1922.moduvera.reference.order.adapter.outbound.http.CatalogHttpClient;
+import io.github.ande1922.moduvera.reference.order.adapter.outbound.http.IdentityServiceTokenClientConfiguration;
 import io.github.ande1922.moduvera.reference.order.adapter.outbound.http.RemoteCatalogApiConfiguration;
 import io.github.ande1922.moduvera.reference.order.adapter.outbound.messaging.OutboxReserveInventoryPublisher;
 import io.github.ande1922.moduvera.reference.order.adapter.outbound.messaging.ReserveInventoryPublicationConfiguration;
@@ -43,6 +44,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Set;
@@ -52,6 +54,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.http.client.autoconfigure.service.HttpServiceClientProperties;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -60,6 +63,9 @@ import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import org.springframework.context.ApplicationContext;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.http.client.ClientHttpRequestFactory;
+import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
+import io.micrometer.observation.ObservationRegistry;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtException;
@@ -99,7 +105,7 @@ class OrderApplicationIT {
         properties.add("spring.datasource.password", POSTGRES::getPassword);
         properties.add("moduvera.identifier.worker-id", () -> 1);
         properties.add("moduvera.reference.clients.catalog.base-url", () -> "http://localhost:" + CATALOG.getAddress().getPort());
-        properties.add("moduvera.reference.clients.identity.base-url", () -> "http://localhost:" + CATALOG.getAddress().getPort());
+        properties.add("spring.http.serviceclient.identity.base-url", () -> "http://localhost:" + CATALOG.getAddress().getPort());
         properties.add("moduvera.reference.clients.identity.service-id", () -> "order-service");
         properties.add("moduvera.reference.clients.identity.service-secret", () -> "order-secret");
         properties.add("moduvera.messaging.kafka.relay-enabled", () -> false);
@@ -164,6 +170,15 @@ class OrderApplicationIT {
     @Autowired
     private ModuveraDatabaseMigrationProperties migrationProperties;
 
+    @Autowired
+    private ClientHttpRequestFactory clientHttpRequestFactory;
+
+    @Autowired
+    private HttpServiceClientProperties httpServiceClients;
+
+    @Autowired
+    private ObservationRegistry observations;
+
     @BeforeEach
     void cleanDatabase() {
         jdbc.update("DELETE FROM moduvera_message_outbox");
@@ -222,6 +237,8 @@ class OrderApplicationIT {
         assertThat(applicationContext.getBeansOfType(OrderHttpInboundConfiguration.class)).hasSize(1);
         assertThat(applicationContext.getBeansOfType(InventoryResultInboundConfiguration.class))
                 .hasSize(1);
+        assertThat(applicationContext.getBeansOfType(IdentityServiceTokenClientConfiguration.class))
+                .hasSize(1);
         assertThat(applicationContext.getBeansOfType(RemoteCatalogApiConfiguration.class)).hasSize(1);
         assertThat(applicationContext.getBeansOfType(OrderPersistenceConfiguration.class)).hasSize(1);
         assertThat(applicationContext.getBeansOfType(ReserveInventoryPublicationConfiguration.class))
@@ -233,6 +250,14 @@ class OrderApplicationIT {
                 .extracting(definition -> definition.component().value())
                 .containsExactlyInAnyOrder("order", "messaging");
         assertThat(migrationProperties.getMode()).isEqualTo(ModuveraDatabaseMigrationMode.STARTUP);
+        assertThat(clientHttpRequestFactory)
+                .isInstanceOf(HttpComponentsClientHttpRequestFactory.class);
+        assertThat(observations).isNotSameAs(ObservationRegistry.NOOP);
+        assertThat(httpServiceClients.get("identity")).satisfies(identity -> {
+            assertThat(identity).isNotNull();
+            assertThat(identity.getConnectTimeout()).isEqualTo(Duration.ofSeconds(2));
+            assertThat(identity.getReadTimeout()).isEqualTo(Duration.ofSeconds(2));
+        });
     }
 
     @Test

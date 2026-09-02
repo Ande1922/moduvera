@@ -4,6 +4,7 @@ import io.github.ande1922.moduvera.messaging.kafka.migration.ModuveraMessagingMi
 import io.github.ande1922.moduvera.reference.order.OrderModuleConfiguration;
 import io.github.ande1922.moduvera.reference.order.adapter.inbound.http.OrderHttpInboundConfiguration;
 import io.github.ande1922.moduvera.reference.order.adapter.inbound.messaging.InventoryResultInboundConfiguration;
+import io.github.ande1922.moduvera.reference.order.adapter.outbound.http.IdentityServiceTokenClientConfiguration;
 import io.github.ande1922.moduvera.reference.order.adapter.outbound.http.RemoteCatalogApiConfiguration;
 import io.github.ande1922.moduvera.reference.order.adapter.outbound.messaging.ReserveInventoryPublicationConfiguration;
 import io.github.ande1922.moduvera.reference.order.adapter.outbound.persistence.OrderPersistenceConfiguration;
@@ -19,6 +20,7 @@ import org.springframework.context.annotation.Import;
     ReserveInventoryPublicationConfiguration.class,
     OrderHttpInboundConfiguration.class,
     InventoryResultInboundConfiguration.class,
+    IdentityServiceTokenClientConfiguration.class,
     RemoteCatalogApiConfiguration.class,
     OrderMigrationConfiguration.class,
     ModuveraMessagingMigrationConfiguration.class,
