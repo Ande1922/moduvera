@@ -87,6 +87,20 @@ class IdentityServiceTokenClientConfigurationTest {
     }
 
     @Test
+    void rejectsAClientFactoryOtherThanApacheHc5() {
+        contextRunner
+                .withPropertyValues(
+                        "spring.http.clients.imperative.factory=jdk",
+                        "spring.http.serviceclient.identity.base-url=https://identity.test")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasRootCauseMessage(
+                                    "The identity HTTP Service Client Group requires Apache HC5");
+                });
+    }
+
+    @Test
     void doesNotRetryARejectedServiceTokenPost() {
         AtomicInteger requests = new AtomicInteger();
         HttpServer identity = server(exchange -> {
