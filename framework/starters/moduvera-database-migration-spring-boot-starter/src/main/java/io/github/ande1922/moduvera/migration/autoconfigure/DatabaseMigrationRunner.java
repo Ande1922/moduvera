@@ -50,10 +50,12 @@ final class DatabaseMigrationRunner implements SmartInitializingSingleton {
         }
 
         var dialect = dialect(dataSource);
-        var migrator = new DatabaseMigrator(dataSource);
         var options = new MigrationExecutionOptions(initialize);
-        for (var definition : orderedDefinitions) {
-            var plan = MigrationPlanFactory.create(definition, dialect, options);
+        var plans = orderedDefinitions.stream()
+                .map(definition -> MigrationPlanFactory.create(definition, dialect, options))
+                .toList();
+        var migrator = new DatabaseMigrator(dataSource);
+        for (var plan : plans) {
             switch (mode) {
                 case STARTUP -> migrator.migrate(plan);
                 case VALIDATE -> migrator.validate(plan);

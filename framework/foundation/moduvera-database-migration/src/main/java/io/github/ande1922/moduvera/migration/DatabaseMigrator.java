@@ -5,6 +5,7 @@ import javax.sql.DataSource;
 import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.MigrationInfoService;
 import org.flywaydb.core.api.MigrationVersion;
+import org.flywaydb.core.api.configuration.FluentConfiguration;
 import org.flywaydb.core.api.output.MigrateResult;
 import org.flywaydb.core.api.output.ValidateResult;
 
@@ -32,20 +33,20 @@ public final class DatabaseMigrator {
             throw new IllegalStateException(
                     "Flyway history is missing for component " + plan.component().value());
         }
-        var flyway = flyway(plan);
+        var flyway = configuration(plan).ignoreMigrationPatterns("*:pending").load();
         var result = flyway.validateWithResult();
+        if (!result.validationSuccessful) {
+            throw new IllegalStateException("invalid Flyway history for component "
+                    + plan.component().value()
+                    + ": "
+                    + result.getAllErrorMessages());
+        }
         var pending = flyway.info().pending();
         if (pending.length > 0) {
             throw new IllegalStateException("pending migrations remain for component "
                     + plan.component().value()
                     + ": "
                     + pending.length);
-        }
-        if (!result.validationSuccessful) {
-            throw new IllegalStateException("invalid Flyway history for component "
-                    + plan.component().value()
-                    + ": "
-                    + result.getAllErrorMessages());
         }
         return result;
     }
@@ -56,6 +57,10 @@ public final class DatabaseMigrator {
     }
 
     private Flyway flyway(MigrationPlan plan) {
+        return configuration(plan).load();
+    }
+
+    private FluentConfiguration configuration(MigrationPlan plan) {
         return Flyway.configure()
                 .dataSource(dataSource)
                 .locations(plan.locations().toArray(String[]::new))
@@ -65,8 +70,7 @@ public final class DatabaseMigrator {
                 .baselineDescription("platform component initialization")
                 .baselineOnMigrate(false)
                 .cleanDisabled(true)
-                .validateMigrationNaming(true)
-                .load();
+                .validateMigrationNaming(true);
     }
 
     private boolean historyTableExists(DatabaseComponent component) {

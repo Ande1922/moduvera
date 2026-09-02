@@ -10,6 +10,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.TreeMap;
 import java.util.stream.Stream;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.TestInstance;
@@ -44,6 +45,7 @@ class StartupMigrationRuntimeIT {
         DataSource dataSource = new DriverManagerDataSource(
                 container.getJdbcUrl(), container.getUsername(), container.getPassword());
 
+        assertUnsupportedDefinitionFailsBeforeAnyWrite(dataSource, dialect);
         assertStartupInitialization(dataSource, dialect);
         assertValidationDoesNotWrite(dataSource);
         assertMissingHistoryIsRejected(dataSource);
@@ -96,6 +98,7 @@ class StartupMigrationRuntimeIT {
         migrationContext(dataSource, "startup", true, missingHistory)
                 .run(context -> assertThat(context).hasNotFailed());
         execute(dataSource, "DROP TABLE flyway_history_missing_history");
+        var before = snapshot(dataSource);
 
         migrationContext(dataSource, "validate", false, missingHistory).run(context -> {
             assertThat(context).hasFailed();
@@ -104,15 +107,19 @@ class StartupMigrationRuntimeIT {
                     .hasMessageContaining("Flyway history")
                     .hasMessageContaining("missing_history");
         });
+        assertThat(snapshot(dataSource)).isEqualTo(before);
     }
 
-    private static void assertInvalidHistoryIsRejected(DataSource dataSource) {
+    private static void assertInvalidHistoryIsRejected(DataSource dataSource) throws SQLException {
         var validHistory = definition(
                 "invalid_history", "validated", Map.of("probeTable", "invalid_history_probe"));
         migrationContext(dataSource, "startup", true, validHistory)
                 .run(context -> assertThat(context).hasNotFailed());
         var invalidHistory = definition(
-                "invalid_history", "invalid", Map.of("probeTable", "invalid_history_probe"));
+                "invalid_history",
+                "invalid",
+                Map.of("probeTable", "invalid_history_probe", "pendingTable", "invalid_pending_probe"));
+        var before = snapshot(dataSource);
 
         migrationContext(dataSource, "validate", false, invalidHistory).run(context -> {
             assertThat(context).hasFailed();
@@ -121,9 +128,10 @@ class StartupMigrationRuntimeIT {
                     .hasMessageContaining("invalid Flyway history")
                     .hasMessageContaining("invalid_history");
         });
+        assertThat(snapshot(dataSource)).isEqualTo(before);
     }
 
-    private static void assertPendingMigrationsAreRejected(DataSource dataSource) {
+    private static void assertPendingMigrationsAreRejected(DataSource dataSource) throws SQLException {
         var migratedHistory = definition(
                 "pending_history", "validated", Map.of("probeTable", "pending_history_probe"));
         migrationContext(dataSource, "startup", true, migratedHistory)
@@ -132,6 +140,7 @@ class StartupMigrationRuntimeIT {
                 "pending_history",
                 "pending",
                 Map.of("probeTable", "pending_history_probe", "pendingTable", "pending_probe"));
+        var before = snapshot(dataSource);
 
         migrationContext(dataSource, "validate", false, pendingHistory).run(context -> {
             assertThat(context).hasFailed();
@@ -140,12 +149,13 @@ class StartupMigrationRuntimeIT {
                     .hasMessageContaining("pending migration")
                     .hasMessageContaining("pending_history");
         });
+        assertThat(snapshot(dataSource)).isEqualTo(before);
     }
 
     private static void assertMissingIdentityIsRejectedWithoutWrites(DataSource dataSource) throws SQLException {
-        var identityRows = rows(dataSource, "moduvera_database_components");
         var missingIdentity = definition(
                 "missing_identity", "validated", Map.of("probeTable", "missing_identity_probe"));
+        var before = snapshot(dataSource);
         migrationContext(dataSource, "validate", false, missingIdentity).run(context -> {
             assertThat(context).hasFailed();
             assertThat(context.getStartupFailure())
@@ -153,9 +163,41 @@ class StartupMigrationRuntimeIT {
                     .hasMessageContaining("database is not initialized")
                     .hasMessageContaining("missing_identity");
         });
-        assertThat(rows(dataSource, "moduvera_database_components")).isEqualTo(identityRows);
+        assertThat(snapshot(dataSource)).isEqualTo(before);
         assertThat(tableExists(dataSource, "flyway_history_missing_identity")).isFalse();
         assertThat(tableExists(dataSource, "missing_identity_probe")).isFalse();
+    }
+
+    private static void assertUnsupportedDefinitionFailsBeforeAnyWrite(DataSource dataSource, String dialect)
+            throws SQLException {
+        var supported = definition(
+                "preflight_alpha", "validated", Map.of("probeTable", "preflight_alpha_probe"));
+        var unsupported = new MigrationDefinition(
+                new DatabaseComponent("preflight_zeta"),
+                dialect.equals("postgresql")
+                        ? List.of()
+                        : List.of("classpath:db/runtime/postgresql/validated"),
+                dialect.equals("mysql") ? List.of() : List.of("classpath:db/runtime/mysql/validated"),
+                Map.of("probeTable", "preflight_zeta_probe"));
+        var before = snapshot(dataSource);
+
+        new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(ModuveraDatabaseMigrationAutoConfiguration.class))
+                .withPropertyValues(
+                        "moduvera.database.migration.mode=startup",
+                        "moduvera.database.migration.initialize=true")
+                .withBean(DataSource.class, () -> dataSource)
+                .withBean("supportedDefinition", MigrationDefinition.class, () -> supported)
+                .withBean("unsupportedDefinition", MigrationDefinition.class, () -> unsupported)
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .isInstanceOf(IllegalArgumentException.class)
+                            .hasMessageContaining("not supported")
+                            .hasMessageContaining("preflight_zeta");
+                });
+
+        assertThat(snapshot(dataSource)).isEqualTo(before);
     }
 
     Stream<Arguments> databases() {
@@ -191,46 +233,61 @@ class StartupMigrationRuntimeIT {
     }
 
     private static DatabaseSnapshot snapshot(DataSource dataSource) throws SQLException {
-        return new DatabaseSnapshot(
-                tables(dataSource),
-                rows(dataSource, "moduvera_database_components"),
-                rows(dataSource, "flyway_history_validated"),
-                rows(dataSource, "validation_probe"));
-    }
-
-    private static List<String> tables(DataSource dataSource) throws SQLException {
-        var tables = new ArrayList<String>();
-        try (var connection = dataSource.getConnection();
-                var results = connection.getMetaData()
-                        .getTables(connection.getCatalog(), null, "%", new String[] {"TABLE"})) {
-            while (results.next()) {
-                var table = results.getString("TABLE_NAME");
-                if (table.equalsIgnoreCase("moduvera_database_components")
-                        || table.equalsIgnoreCase("flyway_history_validated")
-                        || table.equalsIgnoreCase("validation_probe")) {
-                    tables.add(table.toLowerCase());
+        try (var connection = dataSource.getConnection()) {
+            var metadata = connection.getMetaData();
+            var catalog = connection.getCatalog();
+            var schema = metadata.supportsSchemasInTableDefinitions() ? connection.getSchema() : null;
+            var tables = new TreeMap<String, TableSnapshot>();
+            try (var results = metadata.getTables(catalog, schema, "%", new String[] {"TABLE", "VIEW"})) {
+                while (results.next()) {
+                    var table = results.getString("TABLE_NAME");
+                    tables.put(
+                            table,
+                            new TableSnapshot(
+                                    results.getString("TABLE_TYPE"),
+                                    columns(connection, catalog, schema, table),
+                                    rows(connection, table)));
                 }
             }
+            return new DatabaseSnapshot(Map.copyOf(tables));
         }
-        return tables.stream().sorted().toList();
     }
 
-    private static List<List<String>> rows(DataSource dataSource, String table) throws SQLException {
-        var rows = new ArrayList<List<String>>();
-        try (var connection = dataSource.getConnection();
-                var statement = connection.createStatement();
-                var results = statement.executeQuery("SELECT * FROM " + table + " ORDER BY 1")) {
+    private static List<ColumnSnapshot> columns(
+            java.sql.Connection connection, String catalog, String schema, String table) throws SQLException {
+        var columns = new ArrayList<ColumnSnapshot>();
+        try (var results = connection.getMetaData().getColumns(catalog, schema, table, "%")) {
+            while (results.next()) {
+                columns.add(new ColumnSnapshot(
+                        results.getInt("ORDINAL_POSITION"),
+                        results.getString("COLUMN_NAME"),
+                        results.getString("TYPE_NAME"),
+                        results.getInt("COLUMN_SIZE"),
+                        results.getInt("DECIMAL_DIGITS"),
+                        results.getInt("NULLABLE"),
+                        results.getString("COLUMN_DEF")));
+            }
+        }
+        return List.copyOf(columns);
+    }
+
+    private static List<List<String>> rows(java.sql.Connection connection, String table) throws SQLException {
+        var rowValues = new ArrayList<List<String>>();
+        var quote = connection.getMetaData().getIdentifierQuoteString().strip();
+        var quotedTable = quote.isEmpty() ? table : quote + table.replace(quote, quote + quote) + quote;
+        try (var statement = connection.createStatement();
+                var results = statement.executeQuery("SELECT * FROM " + quotedTable + " ORDER BY 1")) {
             int columns = results.getMetaData().getColumnCount();
             while (results.next()) {
                 var row = new ArrayList<String>(columns);
                 for (int column = 1; column <= columns; column++) {
                     row.add(Objects.toString(results.getObject(column), null));
                 }
-                rows.add(row);
+                rowValues.add(row);
             }
         }
-        rows.sort(Comparator.comparing(Object::toString));
-        return List.copyOf(rows);
+        rowValues.sort(Comparator.comparing(Object::toString));
+        return List.copyOf(rowValues);
     }
 
     private static void execute(DataSource dataSource, String sql) throws SQLException {
@@ -253,9 +310,17 @@ class StartupMigrationRuntimeIT {
         }
     }
 
-    private record DatabaseSnapshot(
-            List<String> tables,
-            List<List<String>> identities,
-            List<List<String>> history,
-            List<List<String>> applicationRows) {}
+    private record DatabaseSnapshot(Map<String, TableSnapshot> tables) {}
+
+    private record TableSnapshot(
+            String type, List<ColumnSnapshot> columns, List<List<String>> rows) {}
+
+    private record ColumnSnapshot(
+            int ordinal,
+            String name,
+            String type,
+            int size,
+            int decimals,
+            int nullable,
+            String defaultValue) {}
 }
