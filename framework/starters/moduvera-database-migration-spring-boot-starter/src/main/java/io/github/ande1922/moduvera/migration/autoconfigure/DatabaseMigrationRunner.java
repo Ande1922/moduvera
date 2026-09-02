@@ -12,16 +12,25 @@ import java.util.List;
 import javax.sql.DataSource;
 import org.springframework.beans.factory.SmartInitializingSingleton;
 
-final class StartupMigrationRunner implements SmartInitializingSingleton {
+final class DatabaseMigrationRunner implements SmartInitializingSingleton {
 
     private final List<MigrationDefinition> definitions;
     private final DataSource dataSource;
+    private final ModuveraDatabaseMigrationMode mode;
     private final boolean initialize;
 
-    StartupMigrationRunner(List<MigrationDefinition> definitions, DataSource dataSource, boolean initialize) {
+    DatabaseMigrationRunner(
+            List<MigrationDefinition> definitions,
+            DataSource dataSource,
+            ModuveraDatabaseMigrationMode mode,
+            boolean initialize) {
         this.definitions = List.copyOf(definitions);
         this.dataSource = dataSource;
+        this.mode = mode;
         this.initialize = initialize;
+        if (mode == ModuveraDatabaseMigrationMode.VALIDATE && initialize) {
+            throw new IllegalStateException("VALIDATE migration mode does not allow initialize=true");
+        }
     }
 
     @Override
@@ -44,7 +53,12 @@ final class StartupMigrationRunner implements SmartInitializingSingleton {
         var migrator = new DatabaseMigrator(dataSource);
         var options = new MigrationExecutionOptions(initialize);
         for (var definition : orderedDefinitions) {
-            migrator.migrate(MigrationPlanFactory.create(definition, dialect, options));
+            var plan = MigrationPlanFactory.create(definition, dialect, options);
+            switch (mode) {
+                case STARTUP -> migrator.migrate(plan);
+                case VALIDATE -> migrator.validate(plan);
+                case EXTERNAL, DISABLED -> throw new IllegalStateException("migration runner requires an execution mode");
+            }
         }
     }
 

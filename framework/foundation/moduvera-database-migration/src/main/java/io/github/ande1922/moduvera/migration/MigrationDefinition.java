@@ -15,12 +15,15 @@ public record MigrationDefinition(
         postgresqlLocations = List.copyOf(postgresqlLocations);
         mysqlLocations = List.copyOf(mysqlLocations);
         placeholders = Map.copyOf(placeholders);
+        if (postgresqlLocations.isEmpty() && mysqlLocations.isEmpty()) {
+            throw new IllegalArgumentException("at least one migration dialect must be supported");
+        }
         requireLocations("postgresql", postgresqlLocations);
         requireLocations("mysql", mysqlLocations);
     }
 
     private static void requireLocations(String dialect, List<String> locations) {
-        if (locations.isEmpty() || locations.stream().anyMatch(String::isBlank)) {
+        if (locations.stream().anyMatch(String::isBlank)) {
             throw new IllegalArgumentException(dialect + " migration locations must be non-blank");
         }
         if (locations.stream().distinct().count() != locations.size()) {

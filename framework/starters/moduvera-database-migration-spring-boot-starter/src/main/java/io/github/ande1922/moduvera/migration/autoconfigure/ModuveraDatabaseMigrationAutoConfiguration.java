@@ -17,10 +17,24 @@ public class ModuveraDatabaseMigrationAutoConfiguration {
             prefix = "moduvera.database.migration",
             name = "mode",
             havingValue = "startup")
-    StartupMigrationRunner moduveraStartupMigrationRunner(
+    DatabaseMigrationRunner moduveraStartupMigrationRunner(
             List<MigrationDefinition> definitions,
             DataSource dataSource,
             ModuveraDatabaseMigrationProperties properties) {
-        return new StartupMigrationRunner(definitions, dataSource, properties.isInitialize());
+        return new DatabaseMigrationRunner(
+                definitions, dataSource, ModuveraDatabaseMigrationMode.STARTUP, properties.isInitialize());
+    }
+
+    @Bean
+    @ConditionalOnProperty(
+            prefix = "moduvera.database.migration",
+            name = "mode",
+            havingValue = "validate")
+    DatabaseMigrationRunner moduveraValidationMigrationRunner(
+            List<MigrationDefinition> definitions,
+            DataSource dataSource,
+            ModuveraDatabaseMigrationProperties properties) {
+        return new DatabaseMigrationRunner(
+                definitions, dataSource, ModuveraDatabaseMigrationMode.VALIDATE, properties.isInitialize());
     }
 }

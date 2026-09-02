@@ -27,26 +27,23 @@ class MigrationDefinitionTest {
         assertThat(definition.placeholders()).containsEntry("catalogSchema", "catalog");
     }
 
-    @Test
-    void rejectsDefinitionsMissingAMysqlResource() {
-        assertThatThrownBy(() -> new MigrationDefinition(
-                        new DatabaseComponent("catalog"),
-                        List.of("classpath:db/catalog/postgresql"),
-                        List.of(),
-                        Map.of()))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("mysql");
+    @ParameterizedTest
+    @MethodSource("singleDialectDefinitions")
+    void supportsDefinitionsForASingleDialect(
+            List<String> postgresqlLocations, List<String> mysqlLocations) {
+        var definition = new MigrationDefinition(
+                new DatabaseComponent("catalog"), postgresqlLocations, mysqlLocations, Map.of());
+
+        assertThat(definition.postgresqlLocations()).isEqualTo(postgresqlLocations);
+        assertThat(definition.mysqlLocations()).isEqualTo(mysqlLocations);
     }
 
     @Test
-    void rejectsDefinitionsMissingAPostgresqlResource() {
+    void rejectsDefinitionsThatSupportNoDialect() {
         assertThatThrownBy(() -> new MigrationDefinition(
-                        new DatabaseComponent("catalog"),
-                        List.of(),
-                        List.of("classpath:db/catalog/mysql"),
-                        Map.of()))
+                        new DatabaseComponent("catalog"), List.of(), List.of(), Map.of()))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("postgresql");
+                .hasMessageContaining("at least one migration dialect");
     }
 
     @Test
@@ -80,5 +77,11 @@ class MigrationDefinitionTest {
         return Stream.of(
                 Arguments.of("postgresql", List.of(postgresql, postgresql), List.of(mysql)),
                 Arguments.of("mysql", List.of(postgresql), List.of(mysql, mysql)));
+    }
+
+    static Stream<Arguments> singleDialectDefinitions() {
+        return Stream.of(
+                Arguments.of(List.of("classpath:db/catalog/postgresql"), List.of()),
+                Arguments.of(List.of(), List.of("classpath:db/catalog/mysql")));
     }
 }

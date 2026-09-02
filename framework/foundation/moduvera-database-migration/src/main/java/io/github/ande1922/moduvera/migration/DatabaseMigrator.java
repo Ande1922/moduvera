@@ -28,7 +28,26 @@ public final class DatabaseMigrator {
 
     public ValidateResult validate(MigrationPlan plan) {
         identities.verifyOrInitialize(dataSource, plan.component(), false);
-        return flyway(plan).validateWithResult();
+        if (!historyTableExists(plan.component())) {
+            throw new IllegalStateException(
+                    "Flyway history is missing for component " + plan.component().value());
+        }
+        var flyway = flyway(plan);
+        var result = flyway.validateWithResult();
+        var pending = flyway.info().pending();
+        if (pending.length > 0) {
+            throw new IllegalStateException("pending migrations remain for component "
+                    + plan.component().value()
+                    + ": "
+                    + pending.length);
+        }
+        if (!result.validationSuccessful) {
+            throw new IllegalStateException("invalid Flyway history for component "
+                    + plan.component().value()
+                    + ": "
+                    + result.getAllErrorMessages());
+        }
+        return result;
     }
 
     public MigrationInfoService info(MigrationPlan plan) {
