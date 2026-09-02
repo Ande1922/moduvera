@@ -76,16 +76,17 @@ class ModuveraWebAutoConfigurationTest {
     @Test
     void givesProviderOwnedStatusContributorsPrecedence() {
         runner.withUserConfiguration(ProviderMappings.class).run(context -> {
-            var mockMvc = MockMvcBuilders.standaloneSetup(new ProviderStatusController())
+            var mockMvc = MockMvcBuilders.standaloneSetup(new ProviderPermissionStatusController())
                     .setControllerAdvice(context.getBean(ApiExceptionHandler.class))
                     .addFilters(context.getBean(CorrelationIdFilter.class))
                     .build();
 
-            mockMvc.perform(get("/provider-status").header(CorrelationIdFilter.HEADER, "corr-provider-42"))
-                    .andExpect(status().isNotFound())
+            mockMvc.perform(get("/provider-permission-status")
+                            .header(CorrelationIdFilter.HEADER, "corr-provider-42"))
+                    .andExpect(status().isConflict())
                     .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
-                    .andExpect(jsonPath("$.status").value(404))
-                    .andExpect(jsonPath("$.code").value("catalog.not-found"))
+                    .andExpect(jsonPath("$.status").value(409))
+                    .andExpect(jsonPath("$.code").value("security.permission-denied"))
                     .andExpect(jsonPath("$.correlationId").value("corr-provider-42"));
         });
     }
@@ -104,6 +105,13 @@ class ModuveraWebAutoConfigurationTest {
         ProblemStatusContributor orderProblemStatuses() {
             return exception -> exception.code().value().startsWith("order.")
                     ? Optional.of(HttpStatus.NOT_FOUND)
+                    : Optional.empty();
+        }
+
+        @Bean
+        ProblemStatusContributor providerPermissionStatuses() {
+            return exception -> exception instanceof PermissionDeniedException
+                    ? Optional.of(HttpStatus.CONFLICT)
                     : Optional.empty();
         }
     }
@@ -125,11 +133,11 @@ class ModuveraWebAutoConfigurationTest {
     }
 
     @RestController
-    private static final class ProviderStatusController {
+    private static final class ProviderPermissionStatusController {
 
-        @GetMapping("/provider-status")
+        @GetMapping("/provider-permission-status")
         String providerStatus() {
-            throw new TestCodedException("catalog.not-found");
+            throw new PermissionDeniedException(new PermissionCode("catalog:read"));
         }
     }
 }
