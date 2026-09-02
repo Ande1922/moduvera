@@ -20,6 +20,7 @@ import io.github.ande1922.moduvera.message.outbox.MessageTransport;
 import io.github.ande1922.moduvera.message.outbox.OutboxWorker;
 import io.github.ande1922.moduvera.messaging.kafka.migration.ModuveraMessagingMigrationConfiguration;
 import io.github.ande1922.moduvera.migration.MigrationDefinition;
+import io.github.ande1922.moduvera.migration.autoconfigure.ModuveraDatabaseMigrationAutoConfiguration;
 import io.github.ande1922.moduvera.migration.autoconfigure.ModuveraDatabaseMigrationMode;
 import io.github.ande1922.moduvera.migration.autoconfigure.ModuveraDatabaseMigrationProperties;
 import io.github.ande1922.moduvera.reference.order.OrderModuleConfiguration;
@@ -51,11 +52,14 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
+import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.boot.http.client.autoconfigure.service.HttpServiceClientProperties;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.boot.test.context.TestConfiguration;
@@ -65,6 +69,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import org.springframework.context.ApplicationContext;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.http.client.ClientHttpRequestFactory;
 import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
 import io.micrometer.observation.ObservationRegistry;
@@ -107,6 +112,7 @@ class OrderApplicationIT {
 
     @DynamicPropertySource
     static void properties(DynamicPropertyRegistry properties) {
+        initializeDisposableDatabase();
         properties.add("spring.datasource.url", POSTGRES::getJdbcUrl);
         properties.add("spring.datasource.username", POSTGRES::getUsername);
         properties.add("spring.datasource.password", POSTGRES::getPassword);
@@ -153,6 +159,22 @@ class OrderApplicationIT {
         properties.add(
                 "moduvera.messaging.kafka.routes[order.inventory-result]",
                 () -> "inventoryResultTest-out-0");
+    }
+
+    private static void initializeDisposableDatabase() {
+        DataSource dataSource = new DriverManagerDataSource(
+                POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
+        new ApplicationContextRunner()
+                .withConfiguration(
+                        AutoConfigurations.of(ModuveraDatabaseMigrationAutoConfiguration.class))
+                .withPropertyValues(
+                        "moduvera.database.migration.mode=startup",
+                        "moduvera.database.migration.initialize=true")
+                .withBean(DataSource.class, () -> dataSource)
+                .withUserConfiguration(
+                        OrderMigrationConfiguration.class,
+                        ModuveraMessagingMigrationConfiguration.class)
+                .run(context -> assertThat(context).hasNotFailed());
     }
 
     @LocalServerPort
@@ -241,7 +263,7 @@ class OrderApplicationIT {
     }
 
     @Test
-    void explicitlyComposesTheOrderRuntimeSlicesAndStartupMigrations() {
+    void explicitlyComposesTheOrderRuntimeSlicesAndValidationOnlyMigrations() {
         assertThat(applicationContext.getBeansOfType(OrderModuleConfiguration.class)).hasSize(1);
         assertThat(applicationContext.getBeansOfType(OrderHttpInboundConfiguration.class)).hasSize(1);
         assertThat(applicationContext.getBeansOfType(InventoryResultInboundConfiguration.class))
@@ -258,7 +280,8 @@ class OrderApplicationIT {
         assertThat(migrationDefinitions)
                 .extracting(definition -> definition.component().value())
                 .containsExactlyInAnyOrder("order", "messaging");
-        assertThat(migrationProperties.getMode()).isEqualTo(ModuveraDatabaseMigrationMode.STARTUP);
+        assertThat(migrationProperties.getMode()).isEqualTo(ModuveraDatabaseMigrationMode.VALIDATE);
+        assertThat(migrationProperties.isInitialize()).isFalse();
         assertThat(clientHttpRequestFactory)
                 .isInstanceOf(HttpComponentsClientHttpRequestFactory.class);
         assertThat(observations).isNotSameAs(ObservationRegistry.NOOP);

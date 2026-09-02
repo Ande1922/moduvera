@@ -10,12 +10,15 @@ import io.github.ande1922.moduvera.context.ExecutionContextHolder;
 import io.github.ande1922.moduvera.context.MissingExecutionContextException;
 import io.github.ande1922.moduvera.context.TenantId;
 import io.github.ande1922.moduvera.migration.MigrationDefinition;
+import io.github.ande1922.moduvera.migration.autoconfigure.ModuveraDatabaseMigrationAutoConfiguration;
 import io.github.ande1922.moduvera.migration.autoconfigure.ModuveraDatabaseMigrationMode;
 import io.github.ande1922.moduvera.migration.autoconfigure.ModuveraDatabaseMigrationProperties;
 import io.github.ande1922.moduvera.reference.catalog.catalog.adapter.inbound.http.CatalogHttpController;
 import io.github.ande1922.moduvera.reference.catalog.catalog.adapter.outbound.persistence.MybatisCatalogProductRepository;
 import io.github.ande1922.moduvera.reference.catalog.catalog.domain.Product;
 import io.github.ande1922.moduvera.reference.catalog.catalog.domain.ProductRepository;
+import io.github.ande1922.moduvera.reference.catalog.migration.CatalogMigrationConfiguration;
+import javax.sql.DataSource;
 import java.math.BigDecimal;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -28,13 +31,16 @@ import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtException;
@@ -59,10 +65,25 @@ class CatalogApplicationIT {
 
     @DynamicPropertySource
     static void database(DynamicPropertyRegistry properties) {
+        initializeDisposableDatabase();
         properties.add("spring.datasource.url", POSTGRES::getJdbcUrl);
         properties.add("spring.datasource.username", POSTGRES::getUsername);
         properties.add("spring.datasource.password", POSTGRES::getPassword);
         properties.add("spring.threads.virtual.enabled", () -> true);
+    }
+
+    private static void initializeDisposableDatabase() {
+        DataSource dataSource = new DriverManagerDataSource(
+                POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
+        new ApplicationContextRunner()
+                .withConfiguration(
+                        AutoConfigurations.of(ModuveraDatabaseMigrationAutoConfiguration.class))
+                .withPropertyValues(
+                        "moduvera.database.migration.mode=startup",
+                        "moduvera.database.migration.initialize=true")
+                .withBean(DataSource.class, () -> dataSource)
+                .withUserConfiguration(CatalogMigrationConfiguration.class)
+                .run(context -> assertThat(context).hasNotFailed());
     }
 
     @LocalServerPort
@@ -120,13 +141,14 @@ class CatalogApplicationIT {
     }
 
     @Test
-    void explicitlySelectsTheCatalogTopologyAndStartupMigrationPolicy() {
+    void explicitlySelectsTheCatalogTopologyAndValidationOnlyMigrationPolicy() {
         assertThat(products).isInstanceOf(MybatisCatalogProductRepository.class);
         assertThat(controller).isNotNull();
         assertThat(migrationDefinitions)
                 .extracting(definition -> definition.component().value())
                 .containsExactly("catalog");
-        assertThat(migrationProperties.getMode()).isEqualTo(ModuveraDatabaseMigrationMode.STARTUP);
+        assertThat(migrationProperties.getMode()).isEqualTo(ModuveraDatabaseMigrationMode.VALIDATE);
+        assertThat(migrationProperties.isInitialize()).isFalse();
     }
 
     @Test

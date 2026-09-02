@@ -134,12 +134,16 @@ seed() {
 }
 
 COMMON_KAFKA=("KAFKA_BROKERS=localhost:$KAFKA_PORT" "INVENTORY_RESERVE_TOPIC=inventory-reserve-$RUN_ID" "INVENTORY_RESULT_TOPIC=inventory-result-$RUN_ID")
+DISPOSABLE_DATABASE_MIGRATION=(
+  "MODUVERA_DATABASE_MIGRATION_MODE=startup"
+  "MODUVERA_DATABASE_MIGRATION_INITIALIZE=true"
+)
 
 start_identity() {
   start_app identity apps/identity-app/target/identity-app-0.1.0-SNAPSHOT.jar \
     "IDENTITY_PORT=$IDENTITY_PORT" "IDENTITY_DATABASE_URL=jdbc:postgresql://localhost:$POSTGRES_PORT/identity" \
     IDENTITY_DATABASE_USER=identity IDENTITY_DATABASE_PASSWORD=identity-reference \
-    "IDENTITY_ISSUER=http://localhost:$IDENTITY_PORT"
+    "IDENTITY_ISSUER=http://localhost:$IDENTITY_PORT" "${DISPOSABLE_DATABASE_MIGRATION[@]}"
   wait_http identity "http://localhost:$IDENTITY_PORT/actuator/health"
 }
 
@@ -147,7 +151,8 @@ start_catalog() {
   start_app catalog apps/catalog-app/target/catalog-app-0.1.0-SNAPSHOT.jar \
     "CATALOG_PORT=$CATALOG_PORT" "CATALOG_DB_URL=jdbc:postgresql://localhost:$POSTGRES_PORT/catalog" \
     CATALOG_DB_USERNAME=catalog CATALOG_DB_PASSWORD=catalog-reference \
-    "IDENTITY_ISSUER_URI=http://localhost:$IDENTITY_PORT" "IDENTITY_JWKS_URI=http://localhost:$IDENTITY_PORT/oauth2/jwks"
+    "IDENTITY_ISSUER_URI=http://localhost:$IDENTITY_PORT" "IDENTITY_JWKS_URI=http://localhost:$IDENTITY_PORT/oauth2/jwks" \
+    "${DISPOSABLE_DATABASE_MIGRATION[@]}"
   wait_http catalog "http://localhost:$CATALOG_PORT/actuator/health"
 }
 
@@ -157,14 +162,16 @@ start_order() {
     ORDER_DATABASE_USERNAME=orders ORDER_DATABASE_PASSWORD=order-reference \
     "IDENTITY_ISSUER_URI=http://localhost:$IDENTITY_PORT" "IDENTITY_JWKS_URI=http://localhost:$IDENTITY_PORT/oauth2/jwks" \
     "IDENTITY_BASE_URL=http://localhost:$IDENTITY_PORT" ORDER_SERVICE_ID=order-service ORDER_SERVICE_SECRET=order-secret \
-    "CATALOG_BASE_URL=http://localhost:$CATALOG_PORT" MODUVERA_IDENTIFIER_WORKER_ID=1 "${COMMON_KAFKA[@]}"
+    "CATALOG_BASE_URL=http://localhost:$CATALOG_PORT" MODUVERA_IDENTIFIER_WORKER_ID=1 \
+    "${COMMON_KAFKA[@]}" "${DISPOSABLE_DATABASE_MIGRATION[@]}"
   wait_http order "http://localhost:$ORDER_PORT/actuator/health"
 }
 
 start_inventory() {
   start_app inventory apps/inventory-app/target/inventory-app-0.1.0-SNAPSHOT.jar \
     "INVENTORY_PORT=$INVENTORY_PORT" "INVENTORY_DATABASE_URL=jdbc:postgresql://localhost:$POSTGRES_PORT/inventory" \
-    INVENTORY_DATABASE_USERNAME=inventory INVENTORY_DATABASE_PASSWORD=inventory-reference "${COMMON_KAFKA[@]}"
+    INVENTORY_DATABASE_USERNAME=inventory INVENTORY_DATABASE_PASSWORD=inventory-reference \
+    "${COMMON_KAFKA[@]}" "${DISPOSABLE_DATABASE_MIGRATION[@]}"
   wait_http inventory "http://localhost:$INVENTORY_PORT/actuator/health"
 }
 
@@ -173,7 +180,7 @@ start_monolith() {
     "SERVER_PORT=$MONOLITH_PORT" "BUSINESS_DATABASE_URL=jdbc:postgresql://localhost:$POSTGRES_PORT/orders" \
     BUSINESS_DATABASE_USERNAME=orders BUSINESS_DATABASE_PASSWORD=order-reference \
     "IDENTITY_ISSUER_URI=http://localhost:$IDENTITY_PORT" "IDENTITY_JWKS_URI=http://localhost:$IDENTITY_PORT/oauth2/jwks" \
-    MODUVERA_IDENTIFIER_WORKER_ID=1 "${COMMON_KAFKA[@]}"
+    MODUVERA_IDENTIFIER_WORKER_ID=1 "${COMMON_KAFKA[@]}" "${DISPOSABLE_DATABASE_MIGRATION[@]}"
   wait_http monolith "http://localhost:$MONOLITH_PORT/actuator/health"
 }
 
