@@ -6,12 +6,12 @@ This is a deliberately small consumer project, not another platform module. It o
 
 - its own Spring Boot 4.1.1 parent rather than `moduvera-parent`;
 - `moduvera-bom` as an imported BOM;
-- versionless dependencies on Kernel and the Web, Resource Server, Data, Messaging and Migration Spring Boot starters;
+- versionless dependencies on the Kernel and Message Core artifacts, Resource Server autoconfigure, and the Web, Data, Messaging and Migration Spring Boot starters;
 - native HTTP responses and RFC 9457 errors;
 - JWT-derived `ExecutionContext`, use-case permission checks and transparent tenant isolation;
 - PostgreSQL, MyBatis-Plus, `TransactionBoundary` and component-owned Flyway SQL.
 
-It does not import Catalog, Order, Inventory or `app-monolith`. It does not claim Kafka, Outbox/Inbox or MySQL support.
+It does not import Catalog, Order, Inventory or `app-monolith`. It exercises Kafka and JDBC Outbox/Inbox behavior as consumer evidence for the documented Messaging capability; it does not establish any additional platform support beyond the [current capability status](../../docs/implementation/SCAFFOLD-PRODUCT-SURFACE.md), and it does not claim MySQL support.
 
 ## Read the usage path
 
@@ -39,6 +39,7 @@ The test proves:
 - missing permission uses the Web Starter's `403 security.permission-denied` problem, while missing authentication returns `401`;
 - invalid input returns `400 application/problem+json` with the correlation ID;
 - the Notes and Messaging migration definitions have distinct component identities and Flyway histories;
+- Kafka publication and consumption, JDBC Outbox/Inbox, retry and DLQ behavior remain active;
 - PostgreSQL migration, Mapper registration, TenantLine and `TransactionBoundary` are all active.
 
 ## Manual run
@@ -52,6 +53,14 @@ docker run --rm --name simple-notes-postgres \
   -e POSTGRES_PASSWORD=notes \
   -p 5432:5432 postgres:18.6
 ```
+
+The migration ownership transition to separate `messaging` and `notes_demo` histories does not support upgrading a database created by an earlier Notes demo revision. Those databases are disposable fixtures; do not rewrite their Flyway history or add a compatibility migration. Stop the demo, remove the old no-volume container, and recreate it with the command above:
+
+```bash
+docker rm -f simple-notes-postgres
+```
+
+The replacement `docker run --rm` container starts from an empty database and is removed again when stopped.
 
 Install the scaffold artifacts once, then start the independent project:
 
