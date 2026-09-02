@@ -15,6 +15,13 @@ public final class MigrationPlanFactory {
             case POSTGRESQL -> definition.postgresqlLocations();
             case MYSQL -> definition.mysqlLocations();
         };
+        if (locations.isEmpty()) {
+            throw new IllegalArgumentException("migration dialect "
+                    + dialect
+                    + " is not supported by component "
+                    + definition.component().value()
+                    + ".");
+        }
         return new MigrationPlan(
                 definition.component(), locations, definition.placeholders(), options.initialize());
     }
