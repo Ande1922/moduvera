@@ -24,6 +24,9 @@ spring:
           destination: ${NOTES_FAILURE_TOPIC:notes-failure}
 
 moduvera:
+  database:
+    migration:
+      mode: validate
   messaging:
     kafka:
       routes:

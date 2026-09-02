@@ -6,7 +6,7 @@ This is a deliberately small consumer project, not another platform module. It o
 
 - its own Spring Boot 4.1.1 parent rather than `moduvera-parent`;
 - `moduvera-bom` as an imported BOM;
-- versionless dependencies on Kernel, Web, Resource Server, Data and migration artifacts;
+- versionless dependencies on Kernel and the Web, Resource Server, Data, Messaging and Migration Spring Boot starters;
 - native HTTP responses and RFC 9457 errors;
 - JWT-derived `ExecutionContext`, use-case permission checks and transparent tenant isolation;
 - PostgreSQL, MyBatis-Plus, `TransactionBoundary` and component-owned Flyway SQL.
@@ -36,8 +36,9 @@ The test proves:
 
 - an authenticated writer creates a note and receives an unwrapped `201` body;
 - the same tenant reads it, while another tenant receives `404`;
-- missing permission returns `403`, missing authentication returns `401`;
+- missing permission uses the Web Starter's `403 security.permission-denied` problem, while missing authentication returns `401`;
 - invalid input returns `400 application/problem+json` with the correlation ID;
+- the Notes and Messaging migration definitions have distinct component identities and Flyway histories;
 - PostgreSQL migration, Mapper registration, TenantLine and `TransactionBoundary` are all active.
 
 ## Manual run
@@ -57,6 +58,19 @@ Install the scaffold artifacts once, then start the independent project:
 ```bash
 ./mvnw -DskipITs install
 cd examples/simple-notes-demo
+```
+
+The normal application configuration validates existing schema and history without writing to the database. For the fresh disposable database above, initialize it explicitly on the first run:
+
+```bash
+../../mvnw spring-boot:run \
+  -Dspring-boot.run.profiles=demo \
+  -Dspring-boot.run.arguments="--moduvera.database.migration.mode=startup --moduvera.database.migration.initialize=true"
+```
+
+Subsequent runs can use the normal validation policy:
+
+```bash
 ../../mvnw spring-boot:run -Dspring-boot.run.profiles=demo
 ```
 

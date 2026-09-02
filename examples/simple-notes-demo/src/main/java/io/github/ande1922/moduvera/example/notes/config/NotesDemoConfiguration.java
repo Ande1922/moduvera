@@ -4,13 +4,9 @@ import io.github.ande1922.moduvera.context.ExecutionContextHolder;
 import io.github.ande1922.moduvera.context.Actor;
 import io.github.ande1922.moduvera.context.ActorType;
 import io.github.ande1922.moduvera.example.notes.domain.NoteNotFoundException;
-import io.github.ande1922.moduvera.authorization.PermissionDeniedException;
 import io.github.ande1922.moduvera.authorization.UseCaseAuthorizer;
 import io.github.ande1922.moduvera.identifier.IdentifierGenerator;
 import io.github.ande1922.moduvera.identifier.SnowflakeIdentifierGenerator;
-import io.github.ande1922.moduvera.migration.DatabaseComponent;
-import io.github.ande1922.moduvera.migration.DatabaseMigrator;
-import io.github.ande1922.moduvera.migration.MigrationPlan;
 import io.github.ande1922.moduvera.message.Destination;
 import io.github.ande1922.moduvera.message.InboundMessageContract;
 import io.github.ande1922.moduvera.message.MessageKind;
@@ -18,13 +14,11 @@ import io.github.ande1922.moduvera.message.MessageType;
 import io.github.ande1922.moduvera.message.NonRetryableMessageException;
 import io.github.ande1922.moduvera.messaging.kafka.ReliableInboundEndpoint;
 import io.github.ande1922.moduvera.messaging.kafka.ReliableMessageConsumerFactory;
-import io.github.ande1922.moduvera.web.ProblemStatusResolver;
+import io.github.ande1922.moduvera.web.ProblemStatusContributor;
 import java.sql.Timestamp;
 import java.net.URI;
 import java.time.Clock;
-import java.util.List;
-import javax.sql.DataSource;
-import org.springframework.beans.factory.SmartInitializingSingleton;
+import java.util.Optional;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -46,27 +40,10 @@ class NotesDemoConfiguration {
     }
 
     @Bean
-    ProblemStatusResolver notesProblemStatusResolver() {
-        return exception -> {
-            if (exception instanceof NoteNotFoundException) {
-                return HttpStatus.NOT_FOUND;
-            }
-            if (exception instanceof PermissionDeniedException) {
-                return HttpStatus.FORBIDDEN;
-            }
-            return HttpStatus.UNPROCESSABLE_CONTENT;
-        };
-    }
-
-    @Bean
-    SmartInitializingSingleton notesDatabaseMigration(DataSource dataSource) {
-        return () -> new DatabaseMigrator(dataSource)
-                .migrate(new MigrationPlan(
-                        new DatabaseComponent("notes_demo"),
-                        List.of(
-                                "classpath:db/moduvera-messaging/postgresql",
-                                "classpath:db/migration/notes"),
-                        true));
+    ProblemStatusContributor noteNotFoundProblemStatusContributor() {
+        return exception -> exception instanceof NoteNotFoundException
+                ? Optional.of(HttpStatus.NOT_FOUND)
+                : Optional.empty();
     }
 
     @Bean
