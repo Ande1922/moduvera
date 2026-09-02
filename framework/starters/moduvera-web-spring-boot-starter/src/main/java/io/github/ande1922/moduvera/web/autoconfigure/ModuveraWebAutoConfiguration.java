@@ -1,5 +1,6 @@
 package io.github.ande1922.moduvera.web.autoconfigure;
 
+import io.github.ande1922.moduvera.authorization.PermissionDeniedException;
 import io.github.ande1922.moduvera.web.ApiExceptionHandler;
 import io.github.ande1922.moduvera.web.CorrelationIdFilter;
 import io.github.ande1922.moduvera.web.ProblemStatusContributor;
@@ -21,7 +22,9 @@ public class ModuveraWebAutoConfiguration {
                 .map(contributor -> contributor.statusFor(exception))
                 .flatMap(java.util.Optional::stream)
                 .findFirst()
-                .orElse(HttpStatus.UNPROCESSABLE_CONTENT);
+                .orElseGet(() -> exception instanceof PermissionDeniedException
+                        ? HttpStatus.FORBIDDEN
+                        : HttpStatus.UNPROCESSABLE_CONTENT);
     }
 
     @Bean
