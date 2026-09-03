@@ -122,17 +122,29 @@ class QualityGatePolicyTest(unittest.TestCase):
         self.assertNotIn(secret, str(caught.exception))
 
     def test_common_credential_key_forms_are_scanned_and_redacted(self) -> None:
-        value = "credential-" + "value-1234567890"
-        keys = ("client_secret", "client-secret", "access_token", "access-token", "refresh_token")
-        self.fixture.write("notes.md", "".join(f"{key}={value}\n" for key in keys))
+        value = "credential-" + "v@lue:1234567890!"
+        assignments = (
+            f'"client_secret": "{value}"',
+            f"'client-secret'='{value}'",
+            f'"access_token":"{value}"',
+            f"'access-token': '{value}'",
+            f'"refresh_token": "{value}"',
+            f"refresh-token={value}",
+        )
+        for assignment in assignments:
+            self.assertIsNotNone(quality_gate.CREDENTIAL_ASSIGNMENT.search(assignment))
+            self.assertNotIn(value, quality_gate.redact(assignment))
+        self.fixture.write("notes.md", "\n".join(assignments) + "\n")
         head = self.fixture.commit("credentials")
         with self.assertRaises(quality_gate.GateError) as caught:
             quality_gate.check_sensitive_content(self.fixture.root, self.base, head)
         self.assertNotIn(value, str(caught.exception))
-        redacted = quality_gate.redact("".join(f"{key}={value}\n" for key in keys))
+        redacted = quality_gate.redact("\n".join(assignments) + "\n")
         self.assertNotIn(value, redacted)
-        for key in keys:
-            self.assertIn(f"{key}=[REDACTED]", redacted)
+        self.assertEqual(len(assignments), redacted.count("[REDACTED]"))
+        self.assertIn('"client_secret": "[REDACTED]"', redacted)
+        self.assertIn("'client-secret'='[REDACTED]'", redacted)
+        self.assertIn('"access_token":"[REDACTED]"', redacted)
 
     def test_private_key_redaction_removes_entire_multiline_block(self) -> None:
         begin = "-----BEGIN " + "PRIVATE KEY-----"
@@ -189,10 +201,22 @@ class QualityGateEvidenceTest(unittest.TestCase):
         pem_end = "-----END " + "PRIVATE KEY-----"
         pem_payload = "cHJpdmF0ZS1rZXktcGF5bG9hZA=="
         client_value = "client-value-1234567890"
+        credential_assignments = tuple(
+            f'"{key}": "{client_value}"'
+            for key in (
+                "client_secret",
+                "client-secret",
+                "access_token",
+                "access-token",
+                "refresh_token",
+                "refresh-token",
+            )
+        )
+        credential_arguments = " ".join(f"'{assignment}'" for assignment in credential_assignments)
         extension.write_text(
             "#!/usr/bin/env bash\n"
             f"printf '%s\\n' '{exposed}' '{pem_begin}' '{pem_payload}' '{pem_end}' "
-            f"'client_secret={client_value}'\n"
+            f"{credential_arguments}\n"
             "exit 7\n",
             encoding="utf-8",
         )
@@ -210,7 +234,10 @@ class QualityGateEvidenceTest(unittest.TestCase):
         self.assertNotIn(pem_end, result.stdout)
         self.assertIn("[REDACTED_PRIVATE_KEY_BLOCK]", result.stdout)
         self.assertNotIn(client_value, result.stdout)
-        self.assertIn("client_secret=[REDACTED]", result.stdout)
+        self.assertIn('"client_secret": "[REDACTED]"', result.stdout)
+        self.assertIn('"access-token": "[REDACTED]"', result.stdout)
+        self.assertIn('"refresh-token": "[REDACTED]"', result.stdout)
+        self.assertGreaterEqual(result.stdout.count("[REDACTED]"), len(credential_assignments))
         latest = self.latest_run()
         self.assertEqual(
             0o700, stat.S_IMODE((self.fixture.root / ".quality-gate").stat().st_mode)
@@ -340,13 +367,98 @@ class QualityGateEvidenceTest(unittest.TestCase):
         self.assertNotEqual(first.run_dir, latest)
         self.assertIn("status: FAIL", (latest / "summary.txt").read_text())
 
+    def test_extension_mutating_tracked_input_cannot_pass(self) -> None:
+        self.install_gate()
+        extension = self.fixture.root / "tools/quality/checks.d/common/10-mutate-tracked"
+        extension.write_text(
+            "#!/usr/bin/env bash\nprintf '# changed\\n' > README.md\n",
+            encoding="utf-8",
+        )
+        extension.chmod(0o755)
+        self.base = self.fixture.commit("install tracked mutator")
+        self.fixture.write("guide.md", "# Guide\n")
+        head = self.fixture.commit("docs")
+        result = self.run_gate("auto", "--base", self.base, "--head", head)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("status: FAIL", result.stdout)
+        self.assertNotIn("status: PASS", result.stdout)
+        self.assertIn("checkout must be clean", result.stdout)
+
+    def test_extension_mutating_untracked_input_cannot_pass(self) -> None:
+        self.install_gate()
+        extension = self.fixture.root / "tools/quality/checks.d/common/10-mutate-untracked"
+        extension.write_text(
+            "#!/usr/bin/env bash\ntouch unexpected-gate-output\n",
+            encoding="utf-8",
+        )
+        extension.chmod(0o755)
+        self.base = self.fixture.commit("install untracked mutator")
+        self.fixture.write("guide.md", "# Guide\n")
+        head = self.fixture.commit("docs")
+        result = self.run_gate("auto", "--base", self.base, "--head", head)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("status: FAIL", result.stdout)
+        self.assertNotIn("status: PASS", result.stdout)
+        self.assertIn("unexpected-gate-output", result.stdout)
+
+    def test_concurrent_checkout_mutation_cannot_pass(self) -> None:
+        self.install_gate()
+        extension = self.fixture.root / "tools/quality/checks.d/common/10-coordinate"
+        extension.write_text(
+            "#!/usr/bin/env bash\n"
+            "touch \"$QUALITY_GATE_RUN_DIR/ready\"\n"
+            "while [ ! -f \"$QUALITY_GATE_RUN_DIR/continue\" ]; do sleep 0.05; done\n",
+            encoding="utf-8",
+        )
+        extension.chmod(0o755)
+        self.base = self.fixture.commit("install coordinating extension")
+        self.fixture.write("guide.md", "# Guide\n")
+        head = self.fixture.commit("docs")
+        process = subprocess.Popen(
+            [
+                str(self.fixture.root / "tools/quality/quality-gate.sh"),
+                "auto",
+                "--base",
+                self.base,
+                "--head",
+                head,
+            ],
+            cwd=self.fixture.root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        run_dir: Path | None = None
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            latest_pointer = self.fixture.root / ".quality-gate/latest"
+            if latest_pointer.is_file():
+                run_id = latest_pointer.read_text().strip()
+                candidate = self.fixture.root / ".quality-gate/runs" / run_id
+                if (candidate / "ready").is_file():
+                    run_dir = candidate
+                    break
+            time.sleep(0.05)
+        self.assertIsNotNone(run_dir, "coordinating extension did not start")
+        assert run_dir is not None
+        self.fixture.write("README.md", "# Concurrent mutation\n")
+        (run_dir / "continue").write_text("continue\n", encoding="utf-8")
+        stdout, stderr = process.communicate(timeout=10)
+        self.assertNotEqual(0, process.returncode, stdout + stderr)
+        self.assertIn("status: FAIL", stdout)
+        self.assertNotIn("status: PASS", stdout)
+        self.assertIn("checkout must be clean", stdout)
+        self.assertTrue((run_dir / "completed").is_file())
+
     def test_interruption_terminates_child_and_completes_evidence(self) -> None:
         self.install_gate()
         extension = self.fixture.root / "tools/quality/checks.d/common/10-wait"
         extension.write_text(
             "#!/usr/bin/env bash\n"
-            "echo $$ > \"$QUALITY_GATE_RUN_DIR/child.pid\"\n"
-            "exec sleep 60\n",
+            "echo $$ > \"$QUALITY_GATE_RUN_DIR/leader.pid\"\n"
+            "sh -c 'trap \"\" TERM; echo $$ > "
+            '"$QUALITY_GATE_RUN_DIR/grandchild.pid"; exec sleep 60' + "' &\n"
+            "wait\n",
             encoding="utf-8",
         )
         extension.chmod(0o755)
@@ -367,28 +479,33 @@ class QualityGateEvidenceTest(unittest.TestCase):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-        child_pid_path: Path | None = None
+        run_dir: Path | None = None
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             latest_pointer = self.fixture.root / ".quality-gate/latest"
             if latest_pointer.is_file():
                 run_id = latest_pointer.read_text().strip()
-                candidate = self.fixture.root / ".quality-gate/runs" / run_id / "child.pid"
-                if candidate.is_file():
-                    child_pid_path = candidate
+                candidate = self.fixture.root / ".quality-gate/runs" / run_id
+                if (candidate / "leader.pid").is_file() and (
+                    candidate / "grandchild.pid"
+                ).is_file():
+                    run_dir = candidate
                     break
             time.sleep(0.05)
-        self.assertIsNotNone(child_pid_path, "waiting extension did not start")
-        assert child_pid_path is not None
-        child_pid = int(child_pid_path.read_text().strip())
+        self.assertIsNotNone(run_dir, "waiting extension and resistant grandchild did not start")
+        assert run_dir is not None
+        leader_pid = int((run_dir / "leader.pid").read_text().strip())
+        grandchild_pid = int((run_dir / "grandchild.pid").read_text().strip())
+        interrupted_at = time.monotonic()
         os.kill(process.pid, signal.SIGTERM)
         stdout, stderr = process.communicate(timeout=10)
         self.assertEqual(128 + signal.SIGTERM, process.returncode, stdout + stderr)
+        self.assertGreaterEqual(time.monotonic() - interrupted_at, quality_gate.PROCESS_GROUP_TERM_SECONDS)
         self.assertIn("status: INTERRUPTED", stdout)
-        run_dir = child_pid_path.parent
         self.assertTrue((run_dir / "completed").is_file())
-        with self.assertRaises(ProcessLookupError):
-            os.kill(child_pid, 0)
+        for child_pid in (leader_pid, grandchild_pid):
+            with self.assertRaises(ProcessLookupError):
+                os.kill(child_pid, 0)
 
 
 class EvidencePathSafetyTest(unittest.TestCase):

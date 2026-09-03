@@ -18,7 +18,9 @@ creates a new failed evidence run.
 Official evidence runs only from a clean checkout whose `HEAD` exactly matches
 the resolved `--head`. Staged, unstaged, or non-ignored untracked paths stop
 the gate before any check executes. This pins the scripts, Maven wrapper, and
-inputs used by the recorded commit.
+inputs used by the recorded commit. The same invariant is checked immediately
+before and after every executable phase and once more before recording PASS;
+an extension, build, or concurrent process that changes inputs fails the run.
 
 Both profiles run the gate self-tests, `git diff --check`, changed-Markdown
 local-link checks, project Skill structure checks, and a high-confidence scan
@@ -48,7 +50,11 @@ mode `0600`. Symlinked evidence components are rejected before use.
 newest attempt, including a failed base-resolution attempt. Only the newest 20
 completed runs are kept.
 The terminal prints only the bounded redacted summary; inspect `full.log`
-locally when more detail is required.
+locally when more detail is required. Credential redaction recognizes quoted
+JSON and shell-style assignments, and private-key blocks are removed in full.
+SIGINT/SIGTERM cleanup tracks the phase process group through descendant exit,
+escalates resistant members to SIGKILL, and completes interrupted evidence
+only after the direct child has been reaped.
 
 Run the deterministic policy and fixture suite directly with:
 

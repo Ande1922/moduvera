@@ -18,6 +18,7 @@ import signal
 import stat
 import subprocess
 import sys
+import time
 import urllib.parse
 
 
@@ -25,6 +26,8 @@ MAX_COMPLETED_RUNS = 20
 MAX_FAILURE_LINES = 20
 MAX_TAIL_BYTES = 64 * 1024
 MAX_SUMMARY_BYTES = 8192
+PROCESS_GROUP_TERM_SECONDS = 2.0
+PROCESS_GROUP_KILL_SECONDS = 5.0
 DOC_SUFFIXES = {".md"}
 PRIVATE_KEY_BEGIN = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----")
 PRIVATE_KEY_END = re.compile(r"-----END [A-Z0-9 ]*PRIVATE KEY-----")
@@ -32,27 +35,34 @@ CREDENTIAL_KEY = (
     r"(?:password|passwd|token|secret|api[_-]?key|client[_-]?secret|"
     r"access[_-]?token|refresh[_-]?token)"
 )
+CREDENTIAL_ASSIGNMENT = re.compile(
+    rf"(?i)(?P<prefix>(?P<key_quote>['\"]?)\b{CREDENTIAL_KEY}\b"
+    rf"(?P=key_quote)\s*[:=]\s*)"
+    r"(?!['\"]?(?:\$\{|<|REDACTED\b|CHANGEME\b|example\b|dummy\b|test\b))"
+    r"(?P<value>\"[^\"\r\n]+\"|'[^'\r\n]+'|[^\s,;}\]]+)"
+)
 SECRET_PATTERNS = (
     PRIVATE_KEY_BEGIN,
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
     re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"),
     re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"),
     re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{16,}"),
-    re.compile(
-        rf"(?i)\b{CREDENTIAL_KEY}\b\s*[:=]\s*"
-        r"['\"]?(?!\$\{|<|REDACTED|CHANGEME|example\b|dummy\b|test\b)"
-        r"[A-Za-z0-9._~+/=-]{12,}"
-    ),
+    CREDENTIAL_ASSIGNMENT,
 )
+
+
+def _redact_credential(match: re.Match[str]) -> str:
+    value = match.group("value")
+    if len(value) >= 2 and value[0] in {'"', "'"} and value[-1] == value[0]:
+        replacement = f"{value[0]}[REDACTED]{value[0]}"
+    else:
+        replacement = "[REDACTED]"
+    return match.group("prefix") + replacement
+
+
 REDACTIONS = (
     (re.compile(r"(?i)(\bBearer\s+)[A-Za-z0-9._~+/=-]+"), r"\1[REDACTED]"),
-    (
-        re.compile(
-            rf"(?i)(\b{CREDENTIAL_KEY}\b\s*[:=]\s*)"
-            r"([^\s,;]+)"
-        ),
-        r"\1[REDACTED]",
-    ),
+    (CREDENTIAL_ASSIGNMENT, _redact_credential),
     (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "[REDACTED_AWS_KEY]"),
     (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"), "[REDACTED_GITHUB_TOKEN]"),
     (re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"), "[REDACTED_SLACK_TOKEN]"),
@@ -443,21 +453,52 @@ def bounded_tail(path: Path, max_lines: int = MAX_FAILURE_LINES) -> list[str]:
     return content.decode("utf-8", "replace").splitlines()[-max_lines:]
 
 
-def _terminate_process_group(process: subprocess.Popen[str], signum: int = signal.SIGTERM) -> None:
-    if process.poll() is not None:
-        return
+def _process_group_exists(process_group: int) -> bool:
     try:
-        os.killpg(process.pid, signum)
+        os.killpg(process_group, 0)
     except ProcessLookupError:
-        return
-    try:
-        process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _wait_for_process_group_exit(
+    process: subprocess.Popen[str], process_group: int, timeout: float
+) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        process.poll()
+        if not _process_group_exists(process_group):
+            return True
+        time.sleep(0.05)
+    process.poll()
+    return not _process_group_exists(process_group)
+
+
+def _terminate_process_group(
+    process: subprocess.Popen[str], process_group: int, signum: int = signal.SIGTERM
+) -> None:
+    cleanup_error: GateError | None = None
+    if _process_group_exists(process_group):
         try:
-            os.killpg(process.pid, signal.SIGKILL)
+            os.killpg(process_group, signum)
         except ProcessLookupError:
             pass
+    if not _wait_for_process_group_exit(process, process_group, PROCESS_GROUP_TERM_SECONDS):
+        try:
+            os.killpg(process_group, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        if not _wait_for_process_group_exit(process, process_group, PROCESS_GROUP_KILL_SECONDS):
+            cleanup_error = GateError(f"process group {process_group} did not exit after SIGKILL")
+    try:
+        process.wait(timeout=PROCESS_GROUP_KILL_SECONDS)
+    except subprocess.TimeoutExpired:
+        process.kill()
         process.wait()
+    if cleanup_error is not None:
+        raise cleanup_error
 
 
 class Runner:
@@ -468,6 +509,7 @@ class Runner:
 
     def step(self, name: str, command: list[str], env: dict[str, str] | None = None) -> bool:
         process: subprocess.Popen[str] | None = None
+        process_group: int | None = None
         with _open_existing_private(self.evidence.log_path, self.evidence.run_dir, "a") as log:
             log.write(f"\n=== {name} ===\n$ {shlex.join(command)}\n")
             log.flush()
@@ -480,23 +522,54 @@ class Runner:
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
             )
+            process_group = os.getpgid(process.pid)
             try:
                 return_code = process.wait()
             except GateInterrupted as interrupted:
-                _terminate_process_group(process, interrupted.signum)
+                _terminate_process_group(process, process_group, interrupted.signum)
                 self.results.append(
                     (name, 128 + interrupted.signum, bounded_tail(self.evidence.log_path))
                 )
                 raise
             except BaseException:
-                _terminate_process_group(process)
+                _terminate_process_group(process, process_group)
                 raise
-            finally:
-                if process.poll() is None:
-                    _terminate_process_group(process)
+            if _process_group_exists(process_group):
+                log.write(f"step left process group {process_group} running; terminating it\n")
+                log.flush()
+                _terminate_process_group(process, process_group)
+                if return_code == 0:
+                    return_code = 1
         excerpt = bounded_tail(self.evidence.log_path) if return_code else []
         self.results.append((name, return_code, excerpt))
         return return_code == 0
+
+
+def run_pinned_step(
+    runner: Runner,
+    repo: Path,
+    head: str,
+    name: str,
+    command: list[str],
+    env: dict[str, str] | None = None,
+) -> bool:
+    ensure_pinned_checkout(repo, head)
+    try:
+        return runner.step(name, command, env)
+    finally:
+        try:
+            ensure_pinned_checkout(repo, head)
+        except (GateError, OSError) as error:
+            if runner.results and runner.results[-1][0] == name:
+                recorded_name, recorded_code, recorded_excerpt = runner.results[-1]
+                runner.results[-1] = (
+                    recorded_name,
+                    recorded_code or 1,
+                    [*recorded_excerpt, f"input integrity failure: {error}"][
+                        -MAX_FAILURE_LINES:
+                    ],
+                )
+            raise
 
 
 def extension_commands(repo: Path, head: str, groups: tuple[str, ...]) -> list[tuple[str, list[str]]]:
@@ -577,6 +650,8 @@ def gate(arguments: list[str]) -> int:
     previous_handlers = {signum: signal.getsignal(signum) for signum in watched_signals}
 
     def interrupt(signum: int, _frame: object) -> None:
+        for watched in watched_signals:
+            signal.signal(watched, signal.SIG_IGN)
         raise GateInterrupted(signum)
 
     for signum in watched_signals:
@@ -632,15 +707,22 @@ def gate(arguments: list[str]) -> int:
             for name, command in common_extensions
         )
         for name, command, env in steps:
-            if not runner.step(name, command, env):
+            if not run_pinned_step(runner, repo, head, name, command, env):
                 failure = f"step failed: {name}"
                 break
         if failure is None and profile == "normal":
-            if not runner.step("maven-clean-verify", ["./mvnw", "-B", "-ntp", "clean", "verify"], environment):
+            if not run_pinned_step(
+                runner,
+                repo,
+                head,
+                "maven-clean-verify",
+                ["./mvnw", "-B", "-ntp", "clean", "verify"],
+                environment,
+            ):
                 failure = "step failed: maven-clean-verify"
             else:
                 for name, command in normal_extensions:
-                    if not runner.step(name, command, environment):
+                    if not run_pinned_step(runner, repo, head, name, command, environment):
                         failure = f"step failed: {name}"
                         break
         del entries
@@ -652,6 +734,12 @@ def gate(arguments: list[str]) -> int:
     finally:
         for signum in watched_signals:
             signal.signal(signum, signal.SIG_IGN)
+
+    if failure is None:
+        try:
+            ensure_pinned_checkout(repo, head)
+        except (GateError, OSError) as error:
+            failure = str(error)
 
     status_text = "PASS" if failure is None else ("INTERRUPTED" if interrupted_signum else "FAIL")
     lines = [
