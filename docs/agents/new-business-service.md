@@ -26,9 +26,11 @@ explanation, and its forward scenario together.
     "apps",
     "acceptance_consumers",
     "decisions",
-    "exclusions"
+    "exclusions",
+    "durable_state"
   ],
   "required_dependency_fields": ["blocked", "blocker"],
+  "required_participant_fields": ["role", "name"],
   "required_promise_fields": [
     "key",
     "kind",
@@ -38,6 +40,7 @@ explanation, and its forward scenario together.
     "app",
     "verification"
   ],
+  "optional_promise_fields": ["provider_adapter"],
   "required_app_fields": [
     "name",
     "topology",
@@ -247,7 +250,10 @@ The specification carries the complete shape card, support claims, decisions,
 exclusions, and test seams. Draft consumer/use-case vertical slices. Each
 ticket names its outcome, support claims, acceptance criteria, test seams,
 decisions, exclusions, artifacts, and only genuine blockers. Shared artifacts
-retain traceability to every consuming slice.
+retain traceability to every consuming slice. Forward validation returns the
+validated shape card alongside those tickets so capability, ownership,
+dependencies, App topology, durable state, and acceptance promises remain
+reviewable rather than collapsing into section headings.
 
 Select the next stage from the current route table in the
 [delivery workflow](delivery-workflow.md). The linked `to-spec`, `to-tickets`,

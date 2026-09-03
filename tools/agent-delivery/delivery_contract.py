@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, replace
 import json
 from pathlib import Path
 import re
+from string import Formatter
 from typing import Any
 
 
@@ -54,6 +55,7 @@ SHAPE_CONTRACT = re.compile(
     re.DOTALL,
 )
 SAFE_KEY = re.compile(r"[a-z][a-z0-9-]*")
+MAX_SHAPE_CONTRACT_BYTES = 64 * 1024
 
 
 class DeliveryContractError(RuntimeError):
@@ -100,7 +102,9 @@ class ImplementationRoute:
 class BusinessServiceContract:
     required_description_fields: tuple[str, ...]
     required_dependency_fields: tuple[str, ...]
+    required_participant_fields: tuple[str, ...]
     required_promise_fields: tuple[str, ...]
+    optional_promise_fields: tuple[str, ...]
     required_app_fields: tuple[str, ...]
     required_acceptance_fields: tuple[str, ...]
     artifact_templates: dict[str, str]
@@ -182,6 +186,7 @@ class BusinessServiceDescription:
 class PlannedArtifact:
     target: str
     consumers: tuple[str, ...]
+    acceptance_consumers: tuple[str, ...]
     use_cases: tuple[str, ...]
     support_promises: tuple[str, ...]
 
@@ -201,6 +206,7 @@ class BusinessServiceTicket:
 
 @dataclass(frozen=True)
 class BusinessServicePlan:
+    shape_card: BusinessServiceDescription
     spec_sections: tuple[str, ...]
     support_claims: tuple[str, ...]
     decisions: tuple[str, ...]
@@ -252,135 +258,308 @@ def _key(value: str, label: str) -> str:
     return value
 
 
+def _validate_required_values(
+    value: Any, required_fields: tuple[str, ...], label: str
+) -> None:
+    for field_name in required_fields:
+        field_value = getattr(value, field_name)
+        if field_value is None:
+            raise ValueError(f"{label} {field_name} is required")
+        if isinstance(field_value, str):
+            _label(field_value, f"{label} {field_name}")
+
+
+def _schema_error(path: str, reason: str) -> DeliveryContractError:
+    return DeliveryContractError(f"Shape Contract invalid at {path}: {reason}")
+
+
+def _schema_object(value: Any, path: str, keys: set[str]) -> dict[str, Any]:
+    if type(value) is not dict:
+        raise _schema_error(path, "expected object")
+    if set(value) != keys:
+        raise _schema_error(path, "object keys do not match schema")
+    return value
+
+
+def _schema_key(value: Any, path: str) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) > 80
+        or re.fullmatch(r"[a-z][a-z0-9_-]*", value) is None
+    ):
+        raise _schema_error(path, "expected safe identifier")
+    return value
+
+
+def _schema_string(value: Any, path: str, *, limit: int = 1000) -> str:
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or value != value.strip()
+        or len(value) > limit
+        or any(ord(character) < 32 or ord(character) == 127 for character in value)
+    ):
+        raise _schema_error(path, "expected bounded nonblank string")
+    return value
+
+
+def _schema_string_list(value: Any, path: str) -> tuple[str, ...]:
+    if type(value) is not list or not value:
+        raise _schema_error(path, "expected nonempty string list")
+    result = tuple(
+        _schema_key(item, f"{path}[item]")
+        for item in value
+    )
+    if len(result) != len(set(result)):
+        raise _schema_error(path, "duplicate values")
+    return result
+
+
+def _schema_named_object(value: Any, path: str) -> dict[str, Any]:
+    if type(value) is not dict or not value:
+        raise _schema_error(path, "expected nonempty object")
+    result: dict[str, Any] = {}
+    for key, item in value.items():
+        normalized = _schema_key(key, f"{path}.key")
+        result[normalized] = item
+    return result
+
+
+def _template_fields(value: Any, path: str) -> tuple[str, set[str]]:
+    template = _schema_string(value, path, limit=500)
+    placeholders: set[str] = set()
+    try:
+        parsed = tuple(Formatter().parse(template))
+    except ValueError as error:
+        raise _schema_error(path, "malformed template") from error
+    for _literal, field_name, format_spec, conversion in parsed:
+        if field_name is None:
+            continue
+        if (
+            format_spec
+            or conversion is not None
+            or re.fullmatch(r"[a-z][a-z0-9_]*", field_name) is None
+        ):
+            raise _schema_error(path, "unsupported template placeholder")
+        placeholders.add(field_name)
+    return template, placeholders
+
+
+def _validate_field_schema(
+    required: tuple[str, ...],
+    optional: tuple[str, ...],
+    model: type[Any],
+    path: str,
+) -> None:
+    if set(required).intersection(optional):
+        raise _schema_error(path, "required and optional fields overlap")
+    model_fields = {field.name for field in fields(model)}
+    if set(required).union(optional) != model_fields:
+        raise _schema_error(path, "field coverage differs from normalized model")
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise _schema_error("root", "duplicate object key")
+        result[key] = value
+    return result
+
+
 def load_business_service_contract(recipe: Path) -> BusinessServiceContract:
-    text = recipe.read_text(encoding="utf-8")
+    try:
+        state = recipe.stat()
+        if state.st_size > MAX_SHAPE_CONTRACT_BYTES:
+            raise _schema_error("root", "recipe exceeds size limit")
+        text = recipe.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        raise _schema_error("root", "recipe is unreadable") from error
     matches = SHAPE_CONTRACT.findall(text)
     if len(matches) != 1:
-        raise DeliveryContractError(f"{recipe}: exactly one Shape Contract is required")
+        raise _schema_error("root", "expected exactly one JSON block")
     try:
-        raw = json.loads(matches[0])
-    except json.JSONDecodeError as error:
-        raise DeliveryContractError(f"{recipe}: invalid Shape Contract JSON") from error
-    if not isinstance(raw, dict) or raw.get("schema") != 1:
-        raise DeliveryContractError(f"{recipe}: unsupported Shape Contract schema")
-    try:
-        durable = raw["durable_state"]
-        contract = BusinessServiceContract(
-            tuple(raw["required_description_fields"]),
-            tuple(raw["required_dependency_fields"]),
-            tuple(raw["required_promise_fields"]),
-            tuple(raw["required_app_fields"]),
-            tuple(raw["required_acceptance_fields"]),
-            dict(raw["artifact_templates"]),
-            dict(raw["scenarios"]),
-            tuple(durable["required_fields"]),
-            tuple(durable["artifact_roles"]),
-            tuple(raw["app_topologies"]),
-            dict(raw["acceptance_topologies"]),
+        raw = json.loads(matches[0], object_pairs_hook=_unique_json_object)
+    except DeliveryContractError:
+        raise
+    except (json.JSONDecodeError, RecursionError) as error:
+        raise _schema_error("root", "malformed JSON") from error
+    root_keys = {
+        "schema",
+        "required_description_fields",
+        "required_dependency_fields",
+        "required_participant_fields",
+        "required_promise_fields",
+        "optional_promise_fields",
+        "required_app_fields",
+        "required_acceptance_fields",
+        "artifact_templates",
+        "scenarios",
+        "durable_state",
+        "app_topologies",
+        "acceptance_topologies",
+    }
+    raw = _schema_object(raw, "root", root_keys)
+    if type(raw["schema"]) is not int or raw["schema"] != 1:
+        raise _schema_error("schema", "expected integer 1")
+
+    required_description = _schema_string_list(
+        raw["required_description_fields"], "required_description_fields"
+    )
+    required_dependency = _schema_string_list(
+        raw["required_dependency_fields"], "required_dependency_fields"
+    )
+    required_participant = _schema_string_list(
+        raw["required_participant_fields"], "required_participant_fields"
+    )
+    required_promise = _schema_string_list(
+        raw["required_promise_fields"], "required_promise_fields"
+    )
+    optional_promise = _schema_string_list(
+        raw["optional_promise_fields"], "optional_promise_fields"
+    )
+    required_app = _schema_string_list(
+        raw["required_app_fields"], "required_app_fields"
+    )
+    required_acceptance = _schema_string_list(
+        raw["required_acceptance_fields"], "required_acceptance_fields"
+    )
+    _validate_field_schema(
+        required_description, (), BusinessServiceDescription,
+        "required_description_fields",
+    )
+    _validate_field_schema(
+        required_dependency, (), UseCaseDependency, "required_dependency_fields"
+    )
+    _validate_field_schema(
+        required_participant, (), Participant, "required_participant_fields"
+    )
+    _validate_field_schema(
+        required_promise, optional_promise, SupportPromise,
+        "required_promise_fields",
+    )
+    _validate_field_schema(required_app, (), AppSupport, "required_app_fields")
+    _validate_field_schema(
+        required_acceptance, (), AcceptanceConsumer,
+        "required_acceptance_fields",
+    )
+
+    template_raw = _schema_named_object(raw["artifact_templates"], "artifact_templates")
+    artifact_templates: dict[str, str] = {}
+    artifact_placeholders: dict[str, set[str]] = {}
+    for role, value in template_raw.items():
+        template, placeholders = _template_fields(
+            value, f"artifact_templates.{role}"
         )
-    except (KeyError, TypeError, ValueError) as error:
-        raise DeliveryContractError(f"{recipe}: incomplete Shape Contract") from error
-    required_description = {
-        "name", "capability", "owner", "use_cases", "dependencies", "support_promises",
-        "apps", "acceptance_consumers", "decisions", "exclusions",
-    }
-    required_promise = {
-        "key", "kind", "use_case", "participants", "permission", "app",
-        "verification",
-    }
-    required_app = {"name", "topology", "support_promises", "verification"}
-    required_acceptance = {
-        "name", "topology", "app", "support_promises", "verification",
-    }
-    scenarios = {
-        "local-direct", "remote-direct", "http", "message-command",
-        "message-event", "internal",
-    }
-    if set(contract.required_description_fields) != required_description:
-        raise DeliveryContractError(f"{recipe}: incomplete description field contract")
-    if len(contract.required_description_fields) != len(required_description):
-        raise DeliveryContractError(f"{recipe}: duplicate description field contract")
-    if set(contract.required_dependency_fields) != {"blocked", "blocker"}:
-        raise DeliveryContractError(f"{recipe}: incomplete dependency field contract")
-    if len(contract.required_dependency_fields) != 2:
-        raise DeliveryContractError(f"{recipe}: duplicate dependency field contract")
-    if set(contract.required_promise_fields) != required_promise:
-        raise DeliveryContractError(f"{recipe}: incomplete support-promise field contract")
-    if len(contract.required_promise_fields) != len(required_promise):
-        raise DeliveryContractError(f"{recipe}: duplicate support-promise field contract")
-    if set(contract.required_app_fields) != required_app:
-        raise DeliveryContractError(f"{recipe}: incomplete App field contract")
-    if len(contract.required_app_fields) != len(required_app):
-        raise DeliveryContractError(f"{recipe}: duplicate App field contract")
-    if set(contract.required_acceptance_fields) != required_acceptance:
-        raise DeliveryContractError(f"{recipe}: incomplete acceptance field contract")
-    if len(contract.required_acceptance_fields) != len(required_acceptance):
-        raise DeliveryContractError(f"{recipe}: duplicate acceptance field contract")
-    if set(contract.scenarios) != scenarios:
-        raise DeliveryContractError(f"{recipe}: incomplete scenario contract")
-    if set(contract.app_topologies) != {"standalone", "multi-service"}:
-        raise DeliveryContractError(f"{recipe}: incomplete App topology contract")
-    if len(contract.app_topologies) != 2:
-        raise DeliveryContractError(f"{recipe}: duplicate App topology contract")
-    if set(contract.acceptance_topologies) != {
-        "reference-product", "declared-app", "consumer-contract",
-    }:
-        raise DeliveryContractError(f"{recipe}: incomplete acceptance topology contract")
-    required_state = {
-        "name", "use_case", "transaction_boundary", "tenant_isolation",
-        "repository_seam", "migration", "verification",
-    }
-    if set(contract.state_required_fields) != required_state:
-        raise DeliveryContractError(f"{recipe}: incomplete durable-state field contract")
-    if len(contract.state_required_fields) != len(required_state):
-        raise DeliveryContractError(f"{recipe}: duplicate durable-state field contract")
-    if not contract.artifact_templates or any(
-        not isinstance(key, str)
-        or SAFE_KEY.fullmatch(key) is None
-        or not isinstance(value, str)
-        or not value.strip()
-        for key, value in contract.artifact_templates.items()
-    ):
-        raise DeliveryContractError(f"{recipe}: invalid artifact templates")
-    for name, scenario in contract.scenarios.items():
-        if not isinstance(scenario, dict):
-            raise DeliveryContractError(f"{recipe}: invalid scenario {name}")
-        for field in ("intent", "participant_roles", "provider_adapter", "artifact_roles"):
-            if field not in scenario:
-                raise DeliveryContractError(f"{recipe}: scenario {name} omits {field}")
-        if not isinstance(scenario["intent"], str) or not scenario["intent"].strip():
-            raise DeliveryContractError(f"{recipe}: scenario {name} has no intent")
-        if scenario["provider_adapter"] not in {"required", "forbidden"}:
-            raise DeliveryContractError(f"{recipe}: invalid adapter policy for {name}")
-        participant_roles = tuple(scenario["participant_roles"])
-        if (
-            not participant_roles
-            or len(participant_roles) != len(set(participant_roles))
-            or any(
-                not isinstance(role, str) or SAFE_KEY.fullmatch(role) is None
-                for role in participant_roles
+        artifact_templates[role] = template
+        artifact_placeholders[role] = placeholders
+
+    scenario_raw = _schema_named_object(raw["scenarios"], "scenarios")
+    scenarios: dict[str, dict[str, Any]] = {}
+    role_contexts: dict[str, list[set[str]]] = {}
+    scenario_keys = {"intent", "participant_roles", "provider_adapter", "artifact_roles"}
+    for name, value in scenario_raw.items():
+        scenario = _schema_object(value, f"scenarios.{name}", scenario_keys)
+        intent = _schema_string(scenario["intent"], f"scenarios.{name}.intent")
+        participant_roles = _schema_string_list(
+            scenario["participant_roles"], f"scenarios.{name}.participant_roles"
+        )
+        adapter_policy = scenario["provider_adapter"]
+        if adapter_policy not in {"required", "forbidden"}:
+            raise _schema_error(
+                f"scenarios.{name}.provider_adapter", "expected required or forbidden"
             )
-        ):
-            raise DeliveryContractError(f"{recipe}: invalid participant roles for {name}")
-        roles = tuple(scenario["artifact_roles"])
-        if len(roles) != len(set(roles)) or not roles:
-            raise DeliveryContractError(f"{recipe}: invalid artifact roles for {name}")
-        if any(role not in contract.artifact_templates for role in roles):
-            raise DeliveryContractError(f"{recipe}: unknown artifact role for {name}")
-    if (
-        not contract.state_artifact_roles
-        or len(contract.state_artifact_roles) != len(set(contract.state_artifact_roles))
-        or any(role not in contract.artifact_templates for role in contract.state_artifact_roles)
-    ):
-        raise DeliveryContractError(f"{recipe}: invalid durable-state artifact roles")
-    return contract
+        artifact_roles = _schema_string_list(
+            scenario["artifact_roles"], f"scenarios.{name}.artifact_roles"
+        )
+        if not set(artifact_roles).issubset(artifact_templates):
+            raise _schema_error(
+                f"scenarios.{name}.artifact_roles", "unknown artifact role"
+            )
+        for role in artifact_roles:
+            role_contexts.setdefault(role, []).append(
+                {"service", "promise", "app", "provider_adapter"}
+            )
+        scenarios[name] = {
+            "intent": intent,
+            "participant_roles": participant_roles,
+            "provider_adapter": adapter_policy,
+            "artifact_roles": artifact_roles,
+        }
+
+    durable = _schema_object(
+        raw["durable_state"], "durable_state", {"required_fields", "artifact_roles"}
+    )
+    state_required = _schema_string_list(
+        durable["required_fields"], "durable_state.required_fields"
+    )
+    _validate_field_schema(
+        state_required, (), DurableStateNeed, "durable_state.required_fields"
+    )
+    state_roles = _schema_string_list(
+        durable["artifact_roles"], "durable_state.artifact_roles"
+    )
+    if not set(state_roles).issubset(artifact_templates):
+        raise _schema_error("durable_state.artifact_roles", "unknown artifact role")
+    for role in state_roles:
+        role_contexts.setdefault(role, []).append({"service", "state"})
+
+    if set(role_contexts) != set(artifact_templates):
+        raise _schema_error("artifact_templates", "contains unused artifact role")
+    for role, contexts in role_contexts.items():
+        available = set.intersection(*contexts)
+        if not artifact_placeholders[role].issubset(available):
+            raise _schema_error(
+                f"artifact_templates.{role}", "placeholder is unavailable at use site"
+            )
+
+    app_topologies = _schema_string_list(raw["app_topologies"], "app_topologies")
+    acceptance_raw = _schema_named_object(
+        raw["acceptance_topologies"], "acceptance_topologies"
+    )
+    acceptance_topologies: dict[str, str] = {}
+    for topology, value in acceptance_raw.items():
+        template, placeholders = _template_fields(
+            value, f"acceptance_topologies.{topology}"
+        )
+        if not placeholders.issubset({"consumer", "app"}):
+            raise _schema_error(
+                f"acceptance_topologies.{topology}",
+                "placeholder is unavailable at use site",
+            )
+        acceptance_topologies[topology] = template
+
+    return BusinessServiceContract(
+        required_description,
+        required_dependency,
+        required_participant,
+        required_promise,
+        optional_promise,
+        required_app,
+        required_acceptance,
+        artifact_templates,
+        scenarios,
+        state_required,
+        state_roles,
+        app_topologies,
+        acceptance_topologies,
+    )
 
 
-def _participants(promise: SupportPromise, required_roles: tuple[str, ...]) -> tuple[str, ...]:
+def _participants(
+    promise: SupportPromise,
+    required_roles: tuple[str, ...],
+    contract: BusinessServiceContract,
+) -> tuple[str, ...]:
     if not promise.participants:
         raise ValueError(f"support promise {promise.key} requires participants")
     pairs: list[tuple[str, str]] = []
     for participant in promise.participants:
+        _validate_required_values(
+            participant,
+            contract.required_participant_fields,
+            f"support promise {promise.key} participant",
+        )
         role = _key(participant.role, f"support promise {promise.key} participant role")
         name = _label(participant.name, f"support promise {promise.key} participant")
         pairs.append((role, name))
@@ -398,12 +577,18 @@ def business_service_plan(
     description: BusinessServiceDescription,
     contract: BusinessServiceContract,
 ) -> BusinessServicePlan:
+    _validate_required_values(
+        description, contract.required_description_fields, "business service"
+    )
     name = _key(description.name, "business service name")
     _label(description.capability, "business service capability")
     _label(description.owner, "business service owner")
     use_cases = _string_tuple(description.use_cases, "use cases", required=True)
     dependency_pairs: list[tuple[str, str]] = []
     for dependency in description.dependencies:
+        _validate_required_values(
+            dependency, contract.required_dependency_fields, "use-case dependency"
+        )
         blocked = _label(dependency.blocked, "blocked use case")
         blocker = _label(dependency.blocker, "blocking use case")
         if blocked not in use_cases or blocker not in use_cases:
@@ -438,6 +623,7 @@ def business_service_plan(
     app_names = tuple(app.name for app in description.apps)
     _string_tuple(app_names, "App names", required=True)
     for app in description.apps:
+        _validate_required_values(app, contract.required_app_fields, f"App {app.name}")
         _key(app.name, "App name")
         if app.topology not in contract.app_topologies:
             raise ValueError(f"App {app.name} has unsupported topology")
@@ -451,7 +637,16 @@ def business_service_plan(
     acceptance_names = tuple(item.name for item in description.acceptance_consumers)
     _string_tuple(acceptance_names, "acceptance consumers", required=True)
     accepted_promises: list[str] = []
+    input_promises = {promise.key: promise for promise in description.support_promises}
+    for promise in description.support_promises:
+        if promise.app not in app_names:
+            raise ValueError(f"support promise {promise.key} references an unknown App")
     for acceptance in description.acceptance_consumers:
+        _validate_required_values(
+            acceptance,
+            contract.required_acceptance_fields,
+            f"acceptance consumer {acceptance.name}",
+        )
         _label(acceptance.name, "acceptance consumer")
         if acceptance.topology not in contract.acceptance_topologies:
             raise ValueError(f"acceptance consumer {acceptance.name} has unsupported topology")
@@ -464,6 +659,10 @@ def business_service_plan(
         )
         if not set(promises).issubset(promise_keys):
             raise ValueError(f"acceptance consumer {acceptance.name} references an unknown promise")
+        if any(input_promises[key].app != acceptance.app for key in promises):
+            raise ValueError(
+                f"acceptance consumer {acceptance.name} crosses promise App boundaries"
+            )
         accepted_promises.extend(promises)
         _label(acceptance.verification, f"acceptance consumer {acceptance.name} verification")
     if sorted(accepted_promises) != sorted(promise_keys):
@@ -474,17 +673,35 @@ def business_service_plan(
     support_claims: list[str] = []
     promise_by_key: dict[str, SupportPromise] = {}
 
-    def trace(target: str, consumers: tuple[str, ...], use_case: str, promise: str) -> None:
+    def trace(
+        target: str,
+        consumers: tuple[str, ...],
+        use_case: str,
+        promise: str,
+        acceptance_consumers: tuple[str, ...] = (),
+    ) -> None:
         _label(target, "planned artifact target")
         entry = artifacts_by_target.setdefault(
-            target, {"consumers": set(), "use_cases": set(), "promises": set()}
+            target,
+            {
+                "consumers": set(),
+                "acceptance_consumers": set(),
+                "use_cases": set(),
+                "promises": set(),
+            },
         )
         entry["consumers"].update(consumers)
+        entry["acceptance_consumers"].update(acceptance_consumers)
         entry["use_cases"].add(use_case)
         entry["promises"].add(promise)
         ticket_targets[use_case].add(target)
 
     for promise in description.support_promises:
+        _validate_required_values(
+            promise,
+            contract.required_promise_fields,
+            f"support promise {promise.key}",
+        )
         key = _key(promise.key, "support promise key")
         if promise.kind not in contract.scenarios:
             raise ValueError(f"support promise {key} has unsupported kind")
@@ -495,7 +712,9 @@ def business_service_plan(
         if promise.app not in app_names:
             raise ValueError(f"support promise {key} references an unknown App")
         scenario = contract.scenarios[promise.kind]
-        consumers = _participants(promise, tuple(scenario["participant_roles"]))
+        consumers = _participants(
+            promise, tuple(scenario["participant_roles"]), contract
+        )
         adapter_policy = scenario["provider_adapter"]
         if adapter_policy == "required":
             if promise.provider_adapter is None:
@@ -521,6 +740,9 @@ def business_service_plan(
     state_names = tuple(state.name for state in description.durable_state)
     _string_tuple(state_names, "durable state names")
     for state in description.durable_state:
+        _validate_required_values(
+            state, contract.state_required_fields, f"durable state {state.name}"
+        )
         _key(state.name, "durable state name")
         if state.use_case not in use_cases:
             raise ValueError(f"durable state {state.name} references an unknown use case")
@@ -551,12 +773,19 @@ def business_service_plan(
         for promise_key in acceptance.support_promises:
             promise = promise_by_key[promise_key]
             consumers = tuple(participant.name for participant in promise.participants)
-            trace(target, consumers, promise.use_case, promise_key)
+            trace(
+                target,
+                consumers,
+                promise.use_case,
+                promise_key,
+                (acceptance.name,),
+            )
 
     artifacts = tuple(
         PlannedArtifact(
             target,
             tuple(sorted(trace_data["consumers"])),
+            tuple(sorted(trace_data["acceptance_consumers"])),
             tuple(sorted(trace_data["use_cases"])),
             tuple(sorted(trace_data["promises"])),
         )
@@ -638,6 +867,7 @@ def business_service_plan(
 
     dependency_edges = sum(len(ticket.blocked_by) for ticket in tickets)
     return BusinessServicePlan(
+        shape_card=description,
         spec_sections=(
             "capability, ownership, and use cases",
             "consumer and support promises",
@@ -890,11 +1120,21 @@ def representative_forward_failures(root: Path) -> list[str]:
         "reference-product acceptance entry for Shopper",
         "returns-app acceptance entry for Returns Operators",
         "consumer contract acceptance for Fulfillment Partners",
+        "repository message-contract verification for warehouse-command",
+        "repository message-contract verification for accepted-event",
+        "repository architecture rules for fulfillment-local",
+        "repository architecture rules for support-remote",
+        "repository architecture rules for shopper-http",
+        "repository architecture rules for warehouse-command",
+        "repository architecture rules for policy-internal",
+        "repository architecture rules for accepted-event",
     }
     if not expected_service_targets.issubset(service_targets):
         failures.append("representative business-service plan is incomplete")
     if "returns synchronous Service API" not in service_targets:
         failures.append("direct support does not publish a synchronous Service API")
+    if service_plan.shape_card != representative_business_service_description():
+        failures.append("representative normalized shape card lost input content")
     async_only = business_service_plan(
         replace(
             representative_business_service_description(),

@@ -21,6 +21,7 @@ from delivery_contract import (  # noqa: E402
     AppSupport,
     BusinessServiceDescription,
     DECLARED_DEPENDENCY_ROOTS,
+    DeliveryContractError,
     DurableStateNeed,
     EXPECTED_ROUTES,
     ImplementationRoute,
@@ -178,10 +179,18 @@ class DeliveryForwardTest(unittest.TestCase):
         contract = load_business_service_contract(
             REPO / "docs/agents/new-business-service.md"
         )
-        plan = business_service_plan(
-            representative_business_service_description(), contract
-        )
+        description = representative_business_service_description()
+        plan = business_service_plan(description, contract)
 
+        self.assertEqual(description, plan.shape_card)
+        self.assertEqual(
+            "Decide returns and publish their outcome", plan.shape_card.capability
+        )
+        self.assertEqual("Returns Team", plan.shape_card.owner)
+        self.assertEqual(description.use_cases, plan.shape_card.use_cases)
+        self.assertEqual(description.dependencies, plan.shape_card.dependencies)
+        self.assertEqual(description.apps, plan.shape_card.apps)
+        self.assertEqual(description.durable_state, plan.shape_card.durable_state)
         self.assertEqual(
             (
                 "capability, ownership, and use cases",
@@ -223,10 +232,51 @@ class DeliveryForwardTest(unittest.TestCase):
         self.assertIn("reference-product acceptance entry for Shopper", targets)
         self.assertIn("returns-app acceptance entry for Returns Operators", targets)
         self.assertIn("consumer contract acceptance for Fulfillment Partners", targets)
+        self.assertIn(
+            "repository message-contract verification for warehouse-command", targets
+        )
+        self.assertIn(
+            "repository message-contract verification for accepted-event", targets
+        )
+        for promise in description.support_promises:
+            self.assertIn(
+                f"repository architecture rules for {promise.key}", targets
+            )
         for artifact in plan.artifacts:
             self.assertTrue(artifact.consumers)
             self.assertTrue(artifact.use_cases)
             self.assertTrue(artifact.support_promises)
+        artifacts = {artifact.target: artifact for artifact in plan.artifacts}
+        self.assertEqual(
+            ("Shopper",),
+            artifacts[
+                "reference-product acceptance entry for Shopper"
+            ].acceptance_consumers,
+        )
+        self.assertEqual(
+            ("Returns Operators",),
+            artifacts[
+                "returns-app acceptance entry for Returns Operators"
+            ].acceptance_consumers,
+        )
+        self.assertEqual(
+            ("Customer Support", "Fulfillment", "Returns Policy"),
+            artifacts[
+                "returns-app acceptance entry for Returns Operators"
+            ].consumers,
+        )
+        self.assertEqual(
+            ("Fulfillment Partners",),
+            artifacts[
+                "consumer contract acceptance for Fulfillment Partners"
+            ].acceptance_consumers,
+        )
+        self.assertEqual(
+            ("Finance", "Returns", "Warehouse"),
+            artifacts[
+                "consumer contract acceptance for Fulfillment Partners"
+            ].consumers,
+        )
         self.assertEqual(
             targets,
             {target for ticket in plan.tickets for target in ticket.artifacts},
@@ -300,7 +350,7 @@ class DeliveryForwardTest(unittest.TestCase):
             REPO / "docs/agents/new-business-service.md"
         )
         description = representative_business_service_description()
-        with self.assertRaisesRegex(ValueError, "lowercase hyphenated identifier"):
+        with self.assertRaisesRegex(ValueError, "unsafe value|lowercase hyphenated"):
             business_service_plan(replace(description, name="../../returns"), contract)
         with self.assertRaisesRegex(ValueError, "duplicate"):
             business_service_plan(replace(
@@ -339,6 +389,44 @@ class DeliveryForwardTest(unittest.TestCase):
                     replace(promise, verification="")
                     if promise.key == remote.key else promise
                     for promise in description.support_promises
+                ),
+            ), contract)
+
+    def test_acceptance_cannot_cross_single_or_multiple_promise_apps(self) -> None:
+        contract = load_business_service_contract(
+            REPO / "docs/agents/new-business-service.md"
+        )
+        description = representative_business_service_description()
+        shopper = description.acceptance_consumers[0]
+        with self.assertRaisesRegex(ValueError, "crosses promise App boundaries"):
+            business_service_plan(replace(
+                description,
+                acceptance_consumers=(
+                    replace(shopper, app="fulfillment-app"),
+                    *description.acceptance_consumers[1:],
+                ),
+            ), contract)
+
+        operators = description.acceptance_consumers[1]
+        with self.assertRaisesRegex(ValueError, "crosses promise App boundaries"):
+            business_service_plan(replace(
+                description,
+                acceptance_consumers=(
+                    description.acceptance_consumers[0],
+                    replace(
+                        operators,
+                        app="fulfillment-app",
+                        support_promises=(
+                            "fulfillment-local",
+                            "support-remote",
+                            "warehouse-command",
+                            "policy-internal",
+                        ),
+                    ),
+                    replace(
+                        description.acceptance_consumers[2],
+                        support_promises=("accepted-event",),
+                    ),
                 ),
             ), contract)
 
@@ -463,6 +551,23 @@ Stop after reporting the selected delivery stage.
             "empty internal API module": lambda payload: payload["scenarios"][
                 "internal"
             ]["artifact_roles"].append("provider-api"),
+            "scenario removed": lambda payload: payload["scenarios"].pop(
+                "message-event"
+            ),
+            "App topology removed": lambda payload: payload[
+                "app_topologies"
+            ].remove("multi-service"),
+            "acceptance topology removed": lambda payload: payload[
+                "acceptance_topologies"
+            ].pop("consumer-contract"),
+            "architecture verification removed": lambda payload: payload[
+                "scenarios"
+            ]["http"]["artifact_roles"].remove("architecture-verification"),
+            "message verification removed": lambda payload: payload[
+                "scenarios"
+            ]["message-command"]["artifact_roles"].remove(
+                "message-verification"
+            ),
         }
         for name, mutation in mutations.items():
             with self.subTest(name=name):
@@ -473,6 +578,68 @@ Stop after reporting the selected delivery stage.
                 failures = representative_forward_failures(root)
 
                 self.assertTrue(failures, name)
+
+    def test_malformed_shape_contracts_have_bounded_diagnostics(self) -> None:
+        cases = (
+            (
+                "wrong scenarios type",
+                lambda payload: payload.update({"scenarios": 7}),
+                "Shape Contract invalid at scenarios: expected nonempty object",
+            ),
+            (
+                "unknown nested key",
+                lambda payload: payload["scenarios"]["http"].update(
+                    {"unexpected": "value"}
+                ),
+                "Shape Contract invalid at scenarios.http: "
+                "object keys do not match schema",
+            ),
+            (
+                "numeric artifact roles",
+                lambda payload: payload["scenarios"]["http"].update(
+                    {"artifact_roles": 7}
+                ),
+                "Shape Contract invalid at scenarios.http.artifact_roles: "
+                "expected nonempty string list",
+            ),
+            (
+                "malformed template",
+                lambda payload: payload["artifact_templates"].update(
+                    {"service": "{service"}
+                ),
+                "Shape Contract invalid at artifact_templates.service: "
+                "malformed template",
+            ),
+            (
+                "unavailable placeholder",
+                lambda payload: payload["artifact_templates"].update(
+                    {"provider-api": "services/{consumer}/api"}
+                ),
+                "Shape Contract invalid at artifact_templates.provider-api: "
+                "placeholder is unavailable at use site",
+            ),
+            (
+                "field list wrong type",
+                lambda payload: payload.update(
+                    {"required_acceptance_fields": "name"}
+                ),
+                "Shape Contract invalid at required_acceptance_fields: "
+                "expected nonempty string list",
+            ),
+        )
+        for name, mutation, expected in cases:
+            with self.subTest(name=name):
+                temporary, root = self.isolated_checkout()
+                self.addCleanup(temporary.cleanup)
+                self.mutate_shape_contract(root, mutation)
+
+                with self.assertRaises(DeliveryContractError) as caught:
+                    load_business_service_contract(
+                        root / "docs/agents/new-business-service.md"
+                    )
+
+                self.assertEqual(expected, str(caught.exception))
+                self.assertLess(len(str(caught.exception)), 180)
 
     def test_cross_platform_personal_skill_paths_fail_closed(self) -> None:
         for personal_path in (
