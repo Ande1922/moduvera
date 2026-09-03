@@ -264,11 +264,13 @@ class ModuveraMonolithApplicationIT {
                         "SELECT component_name FROM moduvera_database_components ORDER BY component_name",
                         String.class))
                 .containsExactly("catalog", "inventory", "messaging", "order");
-        assertThat(migrationScripts("catalog")).containsExactly("V1__create_catalog.sql");
+        assertThat(migrationScripts("catalog"))
+                .containsExactly("V1__create_catalog.sql", "V2__narrow_tenant_id.sql");
         assertThat(migrationScripts("order")).containsExactly("V1__create_order.sql");
         assertThat(migrationScripts("inventory")).containsExactly("V1__create_inventory.sql");
         assertThat(migrationScripts("messaging"))
-                .containsExactly("V1__create_moduvera_messaging.sql");
+                .containsExactly(
+                        "V1__create_moduvera_messaging.sql", "V2__narrow_tenant_id.sql");
     }
 
     @Test
