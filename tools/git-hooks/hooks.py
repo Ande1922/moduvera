@@ -116,10 +116,12 @@ def _scoped_hook_values(repo: Path) -> list[tuple[str, str]]:
     return list(zip(values[::2], values[1::2], strict=True))
 
 
+def _has_worktree_hook_value(scoped: list[tuple[str, str]]) -> bool:
+    return any(scope == "worktree" for scope, _value in scoped)
+
+
 def _foreign_worktree_override(scoped: list[tuple[str, str]]) -> bool:
-    return any(scope == "worktree" for scope, _value in scoped) and (
-        scoped[-1][1] != HOOKS_PATH
-    )
+    return _has_worktree_hook_value(scoped) and scoped[-1][1] != HOOKS_PATH
 
 
 def _single_asset_entry(output: bytes, label: str) -> tuple[bytes, bytes, bytes]:
@@ -193,14 +195,13 @@ def install(repo: Path) -> None:
 def uninstall(repo: Path) -> None:
     local = _local_hook_values(repo)
     scoped = _scoped_hook_values(repo)
-    if _foreign_worktree_override(scoped):
+    if _has_worktree_hook_value(scoped):
         raise HookError("a worktree core.hooksPath override is active; no changes made")
     if not local:
         print("repository pre-push hook is already disabled")
         return
     if local != [HOOKS_PATH]:
         raise HookError("local core.hooksPath is not owned by this repository; no changes made")
-    _validate_install_assets(repo)
     removed = _git(repo, ["config", "--local", "--unset-all", "core.hooksPath"])
     if removed.returncode != 0:
         raise HookError("local hook configuration could not be removed")

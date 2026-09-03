@@ -13,17 +13,19 @@ to `.githooks`. Repeating the command is safe when that one local value is
 already present. The installer makes no change when a local, global, system, or
 other effective hooks path would be displaced, and it does not enable Git's
 worktree-specific configuration. Empty or multiple local values are conflicts,
-not an absent setting. The installer also verifies that both the hook and its
-Python implementation are unchanged executable files whose worktree, index,
-and `HEAD` identities match.
+not an absent setting. Before installation, the installer also verifies that
+both the hook and its Python implementation are unchanged executable files
+whose worktree, index, and `HEAD` identities match.
 
 Repository-local configuration is shared by linked worktrees. Enabling this
 hook from one linked worktree therefore selects `.githooks` for its siblings as
 well; a sibling whose checkout does not contain the integrated hook could skip
 the intended gate. Install only after the hook commit has been integrated into
 every push-capable linked worktree. An active worktree-scoped override is never
-replaced, and a foreign effective override blocks install, idempotent install,
-and uninstall without changing either configuration.
+replaced. A foreign effective override blocks installation, while any
+worktree-scoped hooks-path entry blocks uninstall without changing either
+configuration because removing the shared local value could not prove that the
+hook was effectively disabled.
 
 Disable the hook with:
 
@@ -33,7 +35,9 @@ python3 tools/git-hooks/hooks.py uninstall
 
 Uninstall removes only a single local value that is still exactly
 `.githooks`. A foreign or multiple local value is left untouched and reported
-as a conflict. Any global configuration is always left untouched.
+as a conflict. Any global configuration is always left untouched. Uninstall is
+an escape hatch: once the sole local value is confirmed as owned, missing,
+modified, staged, or non-executable hook assets do not prevent its removal.
 
 ## Push behavior
 
