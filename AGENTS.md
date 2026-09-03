@@ -25,6 +25,14 @@ Use four-space Java indentation, `UpperCamelCase` types, `lowerCamelCase` member
 
 ## Agent skills
 
+### New Business Service
+
+For requests to add a Business Service or choose its direct, message,
+internal, persistence, migration, App Assembly, or verification shape, read
+the [new Business Service recipe](docs/agents/new-business-service.md) and use
+the project
+[`add-business-service` Skill](.agents/skills/add-business-service/SKILL.md).
+
 ### Delivery workflow
 
 For requirement decisions, specifications, ticket breakdown, implementation,

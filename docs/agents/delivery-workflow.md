@@ -13,6 +13,14 @@ rules reached from `AGENTS.md`.
 
 ## Route by task shape
 
+For a new Business Service, start with the project
+[`add-business-service` Skill](../../.agents/skills/add-business-service/SKILL.md).
+It reads the authoritative
+[service-shaping recipe](new-business-service.md), accounts for consumers,
+contracts, persistence, and App Assemblies, then selects one existing shape
+key below. It is an intake route, not a second specification, ticket, or
+implementation process.
+
 The `Shape key` column is stable input for the repository forward test.
 
 | Shape key | Project Skill or stage | Stop condition |
