@@ -110,6 +110,7 @@ class BusinessServiceContract:
     artifact_templates: dict[str, str]
     scenarios: dict[str, dict[str, Any]]
     state_required_fields: tuple[str, ...]
+    state_required_roles: tuple[str, ...]
     state_artifact_roles: tuple[str, ...]
     app_topologies: tuple[str, ...]
     acceptance_topologies: dict[str, str]
@@ -526,7 +527,9 @@ def load_business_service_contract(recipe: Path) -> BusinessServiceContract:
         }
 
     durable = _schema_object(
-        raw["durable_state"], "durable_state", {"required_fields", "artifact_roles"}
+        raw["durable_state"],
+        "durable_state",
+        {"required_fields", "required_roles", "artifact_roles"},
     )
     state_required = _schema_string_list(
         durable["required_fields"], "durable_state.required_fields"
@@ -537,8 +540,17 @@ def load_business_service_contract(recipe: Path) -> BusinessServiceContract:
     state_roles = _schema_string_list(
         durable["artifact_roles"], "durable_state.artifact_roles"
     )
+    state_required_roles = _schema_string_list(
+        durable["required_roles"], "durable_state.required_roles"
+    )
     if not set(state_roles).issubset(artifact_templates):
         raise _schema_error("durable_state.artifact_roles", "unknown artifact role")
+    if not set(state_required_roles).issubset(artifact_templates):
+        raise _schema_error("durable_state.required_roles", "unknown artifact role")
+    if not set(state_required_roles).issubset(state_roles):
+        raise _schema_error(
+            "durable_state.artifact_roles", "required artifact role is missing"
+        )
     for role in state_roles:
         role_contexts.setdefault(role, []).append({"service", "state"})
 
@@ -578,6 +590,7 @@ def load_business_service_contract(recipe: Path) -> BusinessServiceContract:
         artifact_templates,
         scenarios,
         state_required,
+        state_required_roles,
         state_roles,
         app_topologies,
         acceptance_topologies,
@@ -1168,6 +1181,25 @@ def representative_forward_failures(root: Path) -> list[str]:
         return failures
     if service_plan.shape_card != representative_business_service_description():
         failures.append("representative normalized shape card lost input content")
+
+    exercised_scenarios = {
+        promise.kind for promise in service_plan.shape_card.support_promises
+    }
+    if exercised_scenarios != set(contract.scenarios):
+        failures.append("representative shape does not exercise every contract scenario")
+    exercised_app_topologies = {
+        app.topology for app in service_plan.shape_card.apps
+    }
+    if exercised_app_topologies != set(contract.app_topologies):
+        failures.append("representative shape does not exercise every App topology")
+    exercised_acceptance_topologies = {
+        acceptance.topology
+        for acceptance in service_plan.shape_card.acceptance_consumers
+    }
+    if exercised_acceptance_topologies != set(contract.acceptance_topologies):
+        failures.append(
+            "representative shape does not exercise every acceptance topology"
+        )
 
     scenario_roles = {
         role

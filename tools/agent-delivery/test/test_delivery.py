@@ -581,6 +581,21 @@ Stop after reporting the selected delivery stage.
             ]["message-command"]["artifact_roles"].remove(
                 "message-verification"
             ),
+            "HTTP service removed": lambda payload: payload["scenarios"][
+                "http"
+            ]["artifact_roles"].remove("service"),
+            "message assembly removed": lambda payload: payload["scenarios"][
+                "message-command"
+            ]["artifact_roles"].remove("assembly"),
+            "persistence adapter removed": lambda payload: payload[
+                "durable_state"
+            ]["artifact_roles"].remove("persistence-adapter"),
+            "service-owned migration removed": lambda payload: payload[
+                "durable_state"
+            ]["artifact_roles"].remove("service-owned-migration"),
+            "real database verification removed": lambda payload: payload[
+                "durable_state"
+            ]["artifact_roles"].remove("real-database-verification"),
         }
         for name, mutation in mutations.items():
             with self.subTest(name=name):
@@ -591,6 +606,38 @@ Stop after reporting the selected delivery stage.
                 failures = representative_forward_failures(root)
 
                 self.assertTrue(failures, name)
+
+    def test_forward_validation_requires_samples_for_contract_set_evolution(self) -> None:
+        evolutions = {
+            "scenario": (
+                lambda payload: payload["scenarios"].update(
+                    {"partner-http": dict(payload["scenarios"]["http"])}
+                ),
+                "every contract scenario",
+            ),
+            "App topology": (
+                lambda payload: payload["app_topologies"].append("federated"),
+                "every App topology",
+            ),
+            "acceptance topology": (
+                lambda payload: payload["acceptance_topologies"].update(
+                    {"external-suite": "external acceptance for {consumer}"}
+                ),
+                "every acceptance topology",
+            ),
+        }
+        for name, (mutation, expected) in evolutions.items():
+            with self.subTest(name=name):
+                temporary, root = self.isolated_checkout()
+                self.addCleanup(temporary.cleanup)
+                self.mutate_shape_contract(root, mutation)
+
+                load_business_service_contract(
+                    root / "docs/agents/new-business-service.md"
+                )
+                failures = representative_forward_failures(root)
+
+                self.assertTrue(any(expected in failure for failure in failures))
 
     def test_forward_validation_accepts_artifact_template_evolution(self) -> None:
         temporary, root = self.isolated_checkout()
