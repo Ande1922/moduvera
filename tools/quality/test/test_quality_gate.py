@@ -786,7 +786,7 @@ class QualityGateEvidenceTest(unittest.TestCase):
             with self.assertRaises(ProcessLookupError):
                 os.kill(child_pid, 0)
 
-    def test_detached_setsid_descendant_is_killed_and_step_cannot_pass(self) -> None:
+    def test_known_detached_setsid_descendant_is_cleaned_before_step_result(self) -> None:
         self.install_gate()
         python = shlex.quote(sys.executable)
         extension = self.fixture.root / "tools/quality/checks.d/common/10-detach"
@@ -813,7 +813,7 @@ class QualityGateEvidenceTest(unittest.TestCase):
             os.kill(detached_pid, 0)
         self.assertTrue((run_dir / "completed").is_file())
 
-    def test_interruption_kills_detached_setsid_descendant_before_evidence(self) -> None:
+    def test_interruption_cleans_known_detached_descendant_before_evidence(self) -> None:
         self.install_gate()
         python = shlex.quote(sys.executable)
         extension = self.fixture.root / "tools/quality/checks.d/common/10-detached-wait"
@@ -946,18 +946,14 @@ class QualityGateEvidenceTest(unittest.TestCase):
         self.assertIn("status: INTERRUPTED", (run_dir / "summary.txt").read_text())
         self.assertTrue((run_dir / "completed").is_file())
 
-    def test_pending_signal_after_completion_cannot_leave_pass_evidence(self) -> None:
+    def test_signal_in_final_unblocked_handoff_cannot_leave_pass_evidence(self) -> None:
         self.install_gate()
         core = self.fixture.root / "tools/quality/quality_gate.py"
         source = core.read_text(encoding="utf-8")
-        needle = (
-            "        finalization_mask = signal.pthread_sigmask(\n"
-            "            signal.SIG_BLOCK, set(watched_signals)\n"
-            "        )\n"
-        )
+        needle = "        signal.pthread_sigmask(signal.SIG_SETMASK, handoff_mask)\n"
         instrumented = (
             needle
-            + '        (evidence.run_dir / "signals-blocked").write_text("ready\\n")\n'
+            + '        (evidence.run_dir / "signals-unblocked").write_text("ready\\n")\n'
             + "        time.sleep(0.5)\n"
         )
         self.assertIn(needle, source)
@@ -985,11 +981,11 @@ class QualityGateEvidenceTest(unittest.TestCase):
             latest = self.fixture.root / ".quality-gate/latest"
             if latest.is_file():
                 candidate = self.fixture.root / ".quality-gate/runs" / latest.read_text().strip()
-                if (candidate / "signals-blocked").is_file():
+                if (candidate / "signals-unblocked").is_file():
                     run_dir = candidate
                     break
             time.sleep(0.01)
-        self.assertIsNotNone(run_dir, "did not enter blocked post-completion window")
+        self.assertIsNotNone(run_dir, "did not enter final unblocked handoff window")
         assert run_dir is not None
         os.kill(process.pid, signal.SIGTERM)
         stdout, stderr = process.communicate(timeout=10)

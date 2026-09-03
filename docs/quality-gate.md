@@ -73,16 +73,20 @@ credential block scalars (`|` and `>`, including chomping and indentation
 indicators and compact sequence mappings such as `- password: |`) are scanned
 and redacted through their indentation-defined dedent; oversized open blocks
 remain suppressed under a bounded state limit.
+Gate phases are trusted, committed repository code executed from the pinned
+private checkout; process lifecycle handling is not an adversarial code sandbox.
 SIGINT/SIGTERM is masked through child launch and process group capture. Cleanup
-then tracks the group through descendant exit, escalates resistant members to
-SIGKILL, and completes interrupted evidence only after the direct child has
-been reaped. Descendants are also tracked by process birth identity and by a
-private lifecycle descriptor they inherit, so a child that creates a new session
-cannot escape cleanup or let a step PASS while it remains alive. The first
-interrupt remains recorded through snapshot cleanup, evidence finalization,
-and retention pruning. Watched signals pending in the final blocked window are
-consumed into the interrupted record before handlers and masks are restored;
-later signals are suppressed while that record is completed.
+tracks the ordinary process group through descendant exit, escalates resistant
+members to SIGKILL, and completes interrupted evidence only after the direct
+child has been reaped. Birth-identity and inherited lifecycle-descriptor
+tracking adds best-effort cleanup for known detached descendants, but does not
+claim containment against hostile code that deliberately double-forks, creates
+a new session, and closes inherited descriptors. The first interrupt remains
+recorded through snapshot cleanup, evidence finalization, and retention pruning.
+Watched signals pending in the final blocked window are consumed, then the gate
+handlers remain installed while those signals are unblocked. The authoritative
+interrupted summary is refreshed before the caller's handlers and mask are
+restored; later signals follow the caller's original disposition.
 
 Run the deterministic policy and fixture suite directly with:
 

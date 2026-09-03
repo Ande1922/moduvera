@@ -1239,6 +1239,11 @@ def _path_holder_pids(path: Path) -> list[int]:
 
 
 class DescendantTracker:
+    """Track ordinary descendants of trusted checks for lifecycle cleanup.
+
+    This supplements process-group cleanup; it is not an adversarial sandbox.
+    """
+
     def __init__(self, root_pid: int, inherited_path: Path) -> None:
         root = _process_identity(root_pid)
         self.root_pid = root_pid
@@ -1739,29 +1744,56 @@ def gate(arguments: list[str]) -> int:
             lines.append(f"failure: {failure}")
         return "\n".join(lines) + "\n"
 
+    def refresh_interrupted_summary() -> None:
+        while True:
+            observed = signal_state.first_signum
+            before_refresh = interrupted_signum
+            absorb_signal()
+            if (
+                interrupted_signum != before_refresh
+                and _lstat(evidence.summary_path) is not None
+            ):
+                evidence.replace_summary(render_summary())
+            if signal_state.first_signum == observed:
+                return
+
     absorb_signal()
     summary = render_summary()
     finalization_mask: set[signal.Signals] | None = None
+    handlers_restored = False
     try:
         evidence.complete(summary)
         finalization_mask = signal.pthread_sigmask(
             signal.SIG_BLOCK, set(watched_signals)
         )
         consume_pending_watched_signals(signal_state, watched_signals)
-        before_refresh = interrupted_signum
-        absorb_signal()
-        if interrupted_signum != before_refresh:
-            evidence.replace_summary(render_summary())
-    finally:
-        if finalization_mask is None:
-            signal.pthread_sigmask(signal.SIG_BLOCK, set(watched_signals))
-        consume_pending_watched_signals(signal_state, watched_signals)
-        before_restore = interrupted_signum
-        absorb_signal()
-        if interrupted_signum != before_restore and _lstat(evidence.summary_path) is not None:
-            evidence.replace_summary(render_summary())
+        refresh_interrupted_summary()
+
+        # Unblock while the gate handlers are still installed. A signal pending
+        # in, or arriving during, this handoff is therefore recorded before the
+        # caller's handlers and mask are restored.
+        handoff_mask = set(finalization_mask) - set(watched_signals)
+        signal.pthread_sigmask(signal.SIG_SETMASK, handoff_mask)
+        refresh_interrupted_summary()
+        before_handler_restore = signal_state.first_signum
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
+        handlers_restored = True
+        if signal_state.first_signum != before_handler_restore:
+            refresh_interrupted_summary()
+    finally:
+        if not handlers_restored:
+            signal.pthread_sigmask(signal.SIG_BLOCK, set(watched_signals))
+            consume_pending_watched_signals(signal_state, watched_signals)
+            refresh_interrupted_summary()
+            blocked_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+            signal.pthread_sigmask(
+                signal.SIG_SETMASK,
+                set(blocked_mask) - set(watched_signals),
+            )
+            refresh_interrupted_summary()
+            for signum, handler in previous_handlers.items():
+                signal.signal(signum, handler)
         signal.pthread_sigmask(signal.SIG_SETMASK, previous_signal_mask)
     with _open_existing_private(evidence.summary_path, evidence.run_dir, "rb") as summary_file:
         print(summary_file.read().decode("utf-8", "replace"), end="")
