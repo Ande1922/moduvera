@@ -783,6 +783,7 @@ class Runner:
                         stdout=log,
                         stderr=subprocess.STDOUT,
                         start_new_session=True,
+                        preexec_fn=_unblock_watched_signals,
                     )
                     process_group = os.getpgid(process.pid)
                 finally:
@@ -837,6 +838,10 @@ def run_pinned_step(
                     ],
                 )
             raise
+
+
+def _unblock_watched_signals() -> None:
+    signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT, signal.SIGTERM})
 
 
 def extension_commands(repo: Path, head: str, groups: tuple[str, ...]) -> list[tuple[str, list[str]]]:
@@ -914,6 +919,7 @@ def gate(arguments: list[str]) -> int:
     failure: str | None = None
     interrupted_signum: int | None = None
     watched_signals = (signal.SIGINT, signal.SIGTERM)
+    previous_signal_mask = signal.pthread_sigmask(signal.SIG_UNBLOCK, set(watched_signals))
     previous_handlers = {signum: signal.getsignal(signum) for signum in watched_signals}
 
     def interrupt(signum: int, _frame: object) -> None:
@@ -1035,6 +1041,7 @@ def gate(arguments: list[str]) -> int:
     finally:
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous_signal_mask)
     if interrupted_signum:
         return 128 + interrupted_signum
     return 0 if failure is None else 1

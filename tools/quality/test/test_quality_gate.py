@@ -626,7 +626,11 @@ class QualityGateEvidenceTest(unittest.TestCase):
         )
         extension.chmod(0o755)
         self.base = self.fixture.commit("install launch-signal extension")
-        result = self.run_gate("normal", "--base", self.base, "--head", self.base)
+        previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
+        try:
+            result = self.run_gate("normal", "--base", self.base, "--head", self.base)
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
         self.assertEqual(128 + signal.SIGTERM, result.returncode, result.stdout + result.stderr)
         self.assertIn("status: INTERRUPTED", result.stdout)
         run_dir = self.latest_run()
