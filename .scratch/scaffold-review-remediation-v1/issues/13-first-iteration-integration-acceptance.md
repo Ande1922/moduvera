@@ -1,5 +1,5 @@
 Type: issue
-Status: blocked
+Status: ready-for-agent
 Blocked by: 05, 06, 07, 09, 10, 11, 12
 
 # 13 — 完成第一迭代集成验收
