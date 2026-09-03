@@ -114,12 +114,12 @@ class QualityGatePolicyTest(unittest.TestCase):
         quality_gate.check_skill_structure(self.fixture.root, valid)
 
     def test_sensitive_added_content_fails_without_echoing_secret(self) -> None:
-        secret = "ghp_" + "123456789012345678901234567890"
-        self.fixture.write("notes.md", f"token={secret}\n")
+        exposed_value = "ghp_" + "123456789012345678901234567890"
+        self.fixture.write("notes.md", f"token={exposed_value}\n")
         head = self.fixture.commit("credential")
         with self.assertRaises(quality_gate.GateError) as caught:
             quality_gate.check_sensitive_content(self.fixture.root, self.base, head)
-        self.assertNotIn(secret, str(caught.exception))
+        self.assertNotIn(exposed_value, str(caught.exception))
 
     def test_common_credential_key_forms_are_scanned_and_redacted(self) -> None:
         value = "credential-" + "v@lue:1234567890!"
