@@ -17,8 +17,10 @@ import io.github.ande1922.moduvera.message.outbox.ClaimedOutboxBatch;
 import io.github.ande1922.moduvera.message.outbox.MessageTransport;
 import io.github.ande1922.moduvera.message.outbox.OutboxWorker;
 import io.github.ande1922.moduvera.message.outbox.PublicationObserver;
+import io.github.ande1922.moduvera.migration.DatabaseComponent;
+import io.github.ande1922.moduvera.migration.DatabaseMigrator;
+import io.github.ande1922.moduvera.migration.MigrationPlan;
 import java.net.URI;
-import java.sql.Connection;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -36,12 +38,10 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
-import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
-import org.springframework.jdbc.datasource.init.ScriptUtils;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -63,15 +63,14 @@ class OutboxRelayIT {
     private TransactionTemplate transactions;
 
     @BeforeAll
-    void setUpDatabase() throws Exception {
+    void setUpDatabase() {
         DataSource dataSource = new DriverManagerDataSource(
                 POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
-        try (Connection connection = dataSource.getConnection()) {
-            ScriptUtils.executeSqlScript(
-                    connection,
-                    new ClassPathResource(
-                            "db/moduvera-messaging/postgresql/V1__create_moduvera_messaging.sql"));
-        }
+        new DatabaseMigrator(dataSource)
+                .migrate(new MigrationPlan(
+                        new DatabaseComponent("messaging"),
+                        List.of("classpath:db/moduvera-messaging/postgresql"),
+                        true));
         jdbc = new JdbcTemplate(dataSource);
         transactions = new TransactionTemplate(new DataSourceTransactionManager(dataSource));
         var named = new NamedParameterJdbcTemplate(dataSource);
