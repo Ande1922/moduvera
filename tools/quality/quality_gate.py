@@ -783,12 +783,22 @@ def _open_private_lock(path: Path, parent: Path) -> int:
     parent_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
     parent_descriptor = os.open(parent, parent_flags)
     try:
-        descriptor = os.open(
-            path.name,
-            os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
-            0o600,
-            dir_fd=parent_descriptor,
-        )
+        try:
+            descriptor = os.open(
+                path.name,
+                os.O_RDWR
+                | os.O_CREAT
+                | os.O_EXCL
+                | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+                dir_fd=parent_descriptor,
+            )
+        except FileExistsError:
+            descriptor = os.open(
+                path.name,
+                os.O_RDWR | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=parent_descriptor,
+            )
     finally:
         os.close(parent_descriptor)
     try:
