@@ -1150,11 +1150,11 @@ class BoundedTailTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "compact-yaml.log"
             credential_key = "pass" + "word"
-            secret = "compact-yaml-secret-" + "1234567890"
+            exposed = "compact-yaml-secret-" + "1234567890"
             content = (
                 "credentials:\n"
                 f"  - {credential_key}: |+\n"
-                f"      {secret}\n"
+                f"      {exposed}\n"
                 "      second-secret-line\n"
                 "    enabled: true\n"
                 f"  - {credential_key}: >2-\n"
@@ -1165,7 +1165,7 @@ class BoundedTailTest(unittest.TestCase):
             tail = quality_gate.redacted_tail(path)
             direct = quality_gate.redact(content)
         retained = "\n".join(tail)
-        for fragment in (secret, "second-secret-line", "another-secret-line"):
+        for fragment in (exposed, "second-secret-line", "another-secret-line"):
             self.assertNotIn(fragment, retained)
             self.assertNotIn(fragment, direct)
         self.assertIn("- password: [REDACTED]", retained)
