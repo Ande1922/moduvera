@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -10,8 +11,16 @@ import subprocess
 import tempfile
 import unittest
 
+from tools.quality.quality_gate import classify
+
 
 SOURCE_ROOT = Path(__file__).resolve().parents[3]
+
+
+def expected_gate_ref(*remote_refs: str) -> str:
+    payload = "\0".join(sorted(remote_refs)).encode("utf-8")
+    digest = hashlib.sha256(payload).hexdigest()
+    return f"pre-push:refs={len(remote_refs)}:sha256={digest}"
 
 
 def run(
@@ -156,6 +165,18 @@ class HookRepository:
     def gate_arguments(self) -> list[str]:
         return self.gate_log.read_text(encoding="utf-8").splitlines()
 
+    def local_hook_config(self) -> str:
+        result = self.git(
+            "config", "--local", "--null", "--get-all", "core.hooksPath", check=False
+        )
+        self.assert_config_read(result)
+        return result.stdout
+
+    @staticmethod
+    def assert_config_read(result: subprocess.CompletedProcess[str]) -> None:
+        if result.returncode not in (0, 1):
+            raise AssertionError(f"could not read fixture config: {result.stderr!r}")
+
 
 class GitHookTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -182,6 +203,37 @@ class GitHookTest(unittest.TestCase):
         result = self.fixture.command("install")
         self.assertNotEqual(0, result.returncode)
         self.assertEqual(2, len(self.fixture.git("config", "--local", "--get-all", "core.hooksPath").stdout.splitlines()))
+
+    def test_install_preserves_empty_and_multiple_local_values(self) -> None:
+        for values in (("",), ("", ".githooks"), (".githooks", "")):
+            with self.subTest(values=values):
+                self.fixture.git("config", "--local", "--unset-all", "core.hooksPath", check=False)
+                for value in values:
+                    self.fixture.git("config", "--local", "--add", "core.hooksPath", value)
+                before = self.fixture.local_hook_config()
+                result = self.fixture.command("install")
+                self.assertNotEqual(0, result.returncode)
+                self.assertEqual(before, self.fixture.local_hook_config())
+
+    def test_worktree_override_blocks_install_idempotence_and_uninstall(self) -> None:
+        self.fixture.git("config", "extensions.worktreeConfig", "true")
+        self.fixture.git("config", "--local", "core.hooksPath", ".githooks")
+        self.fixture.git("config", "--worktree", "core.hooksPath", "foreign-worktree")
+        before = self.fixture.local_hook_config()
+        worktree_before = self.fixture.git(
+            "config", "--worktree", "--null", "--get-all", "core.hooksPath"
+        ).stdout
+        for action in ("install", "uninstall"):
+            with self.subTest(action=action):
+                result = self.fixture.command(action)
+                self.assertNotEqual(0, result.returncode)
+                self.assertEqual(before, self.fixture.local_hook_config())
+                self.assertEqual(
+                    worktree_before,
+                    self.fixture.git(
+                        "config", "--worktree", "--null", "--get-all", "core.hooksPath"
+                    ).stdout,
+                )
 
     def test_install_protects_global_value_without_changing_it(self) -> None:
         self.fixture.git("config", "--global", "core.hooksPath", "global-sentinel")
@@ -213,11 +265,64 @@ class GitHookTest(unittest.TestCase):
         hook.symlink_to("../tools/git-hooks/hooks.py")
         self.assertNotEqual(0, self.fixture.command("install").returncode)
 
+    def test_install_requires_identical_owned_hook_assets(self) -> None:
+        assets = (".githooks/pre-push", "tools/git-hooks/hooks.py")
+        mutations = ("untracked", "staged", "unstaged", "symlink", "mode")
+        for asset in assets:
+            for mutation in mutations:
+                with self.subTest(asset=asset, mutation=mutation):
+                    self.fixture.git("reset", "--hard", "HEAD")
+                    self.fixture.git(
+                        "config", "--local", "--unset-all", "core.hooksPath", check=False
+                    )
+                    path = self.fixture.root / asset
+                    if mutation == "untracked":
+                        self.fixture.git("rm", "--cached", asset)
+                    elif mutation in ("staged", "unstaged"):
+                        path.write_text(
+                            path.read_text(encoding="utf-8") + "# mutation\n",
+                            encoding="utf-8",
+                        )
+                        if mutation == "staged":
+                            self.fixture.git("add", asset)
+                    elif mutation == "symlink":
+                        path.unlink()
+                        path.symlink_to(self.fixture.root / "README.md")
+                    else:
+                        path.chmod(path.stat().st_mode & ~0o111)
+                    before = self.fixture.local_hook_config()
+                    result = self.fixture.command("install")
+                    self.assertNotEqual(0, result.returncode)
+                    self.assertEqual(before, self.fixture.local_hook_config())
+
+    def test_uninstall_requires_identical_owned_hook_assets(self) -> None:
+        for asset in (".githooks/pre-push", "tools/git-hooks/hooks.py"):
+            with self.subTest(asset=asset):
+                self.fixture.git("reset", "--hard", "HEAD")
+                self.fixture.git("config", "--local", "core.hooksPath", ".githooks")
+                path = self.fixture.root / asset
+                path.write_text(
+                    path.read_text(encoding="utf-8") + "# mutation\n",
+                    encoding="utf-8",
+                )
+                before = self.fixture.local_hook_config()
+                result = self.fixture.command("uninstall")
+                self.assertNotEqual(0, result.returncode)
+                self.assertEqual(before, self.fixture.local_hook_config())
+
     def test_existing_ref_uses_advertised_remote_old_commit(self) -> None:
         result = self.fixture.invoke(self.fixture.record())
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(
-            ["auto", "--base", self.fixture.remote_base, "--head", self.fixture.head, "--ref", "pre-push:refs/heads/main"],
+            [
+                "auto",
+                "--base",
+                self.fixture.remote_base,
+                "--head",
+                self.fixture.head,
+                "--ref",
+                expected_gate_ref("refs/heads/main"),
+            ],
             self.fixture.gate_arguments(),
         )
 
@@ -227,7 +332,9 @@ class GitHookTest(unittest.TestCase):
         )
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(self.fixture.remote_base, self.fixture.gate_arguments()[2])
-        self.assertEqual("pre-push:refs/heads/feature", self.fixture.gate_arguments()[-1])
+        self.assertEqual(
+            expected_gate_ref("refs/heads/feature"), self.fixture.gate_arguments()[-1]
+        )
 
     def test_multiple_refs_aggregate_to_oldest_ancestor_and_run_once(self) -> None:
         second_base = self.fixture.head
@@ -240,13 +347,53 @@ class GitHookTest(unittest.TestCase):
         result = self.fixture.invoke(records)
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(self.fixture.remote_base, self.fixture.gate_arguments()[2])
-        self.assertEqual("pre-push:refs/heads/main,refs/heads/topic", self.fixture.gate_arguments()[-1])
+        self.assertEqual(
+            expected_gate_ref("refs/heads/main", "refs/heads/topic"),
+            self.fixture.gate_arguments()[-1],
+        )
+
+    def test_same_local_source_may_update_two_remote_targets(self) -> None:
+        records = self.fixture.record(remote_ref="refs/heads/main")
+        records += self.fixture.record(remote_ref="refs/heads/release")
+        result = self.fixture.invoke(records)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(
+            expected_gate_ref("refs/heads/main", "refs/heads/release"),
+            self.fixture.gate_arguments()[-1],
+        )
 
     def test_mixed_delete_is_validated_but_not_used_as_base(self) -> None:
         zero = "0" * len(self.fixture.head)
         records = self.fixture.record()
-        records += self.fixture.record(local_ref="(delete)", local_oid=zero, remote_ref="refs/heads/old", remote_oid=self.fixture.remote_base)
+        records += self.fixture.record(
+            local_ref="(delete)",
+            local_oid=zero,
+            remote_ref="refs/heads/old-one",
+            remote_oid="1" * len(self.fixture.head),
+        )
+        records += self.fixture.record(
+            local_ref="(delete)",
+            local_oid=zero,
+            remote_ref="refs/heads/old-two",
+            remote_oid="2" * len(self.fixture.head),
+        )
         result = self.fixture.invoke(records)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(self.fixture.remote_base, self.fixture.gate_arguments()[2])
+
+    def test_annotated_tag_oids_are_peeled_to_commits(self) -> None:
+        self.fixture.git("tag", "-a", "old-tag", self.fixture.remote_base, "-m", "old")
+        self.fixture.git("tag", "-a", "new-tag", self.fixture.head, "-m", "new")
+        old_tag = self.fixture.rev("old-tag^{tag}")
+        new_tag = self.fixture.rev("new-tag^{tag}")
+        result = self.fixture.invoke(
+            self.fixture.record(
+                local_ref="refs/tags/release",
+                local_oid=new_tag,
+                remote_ref="refs/tags/release",
+                remote_oid=old_tag,
+            )
+        )
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(self.fixture.remote_base, self.fixture.gate_arguments()[2])
 
@@ -266,10 +413,30 @@ class GitHookTest(unittest.TestCase):
             "only three fields here\n",
             self.fixture.record(local_oid="f" * 64),
             self.fixture.record(local_ref="not-a-ref"),
-            self.fixture.record() + self.fixture.record(local_ref="refs/heads/other"),
+            self.fixture.record()
+            + self.fixture.record(
+                local_ref="refs/heads/other", remote_ref="refs/heads/main"
+            ),
         ]
         for records in cases:
             with self.subTest(records=records[:40]):
+                self.fixture.gate_log.unlink(missing_ok=True)
+                result = self.fixture.invoke(records)
+                self.assertNotEqual(0, result.returncode)
+                self.assertFalse(self.fixture.gate_log.exists())
+
+    def test_rejects_noncanonical_record_framing(self) -> None:
+        canonical = self.fixture.record()
+        cases = {
+            "missing-final-lf": canonical.removesuffix("\n"),
+            "tab": canonical.replace(" ", "\t", 1),
+            "double-space": canonical.replace(" ", "  ", 1),
+            "crlf": canonical.removesuffix("\n") + "\r\n",
+            "vertical-tab": canonical.replace(" ", "\v", 1),
+            "nonbreaking-space": canonical.replace(" ", "\u00a0", 1),
+        }
+        for name, records in cases.items():
+            with self.subTest(name=name):
                 self.fixture.gate_log.unlink(missing_ok=True)
                 result = self.fixture.invoke(records)
                 self.assertNotEqual(0, result.returncode)
@@ -356,6 +523,63 @@ class GitHookTest(unittest.TestCase):
         self.assertNotIn("super-secret", combined)
         self.assertNotIn("private.git", combined)
         self.assertLessEqual(len(combined.splitlines()), 4)
+
+    def test_ref_label_never_discloses_ref_text_or_unicode_controls(self) -> None:
+        marker = "pass" + "word=opaque-value"
+        bidi = "\u202e"
+        remote_ref = f"refs/heads/{marker}-{bidi}hidden"
+        result = self.fixture.invoke(self.fixture.record(remote_ref=remote_ref))
+        self.assertEqual(0, result.returncode, result.stderr)
+        arguments = self.fixture.gate_arguments()
+        public_text = result.stdout + result.stderr + "\n".join(arguments)
+        self.assertNotIn(marker, public_text)
+        self.assertNotIn(bidi, public_text)
+        self.assertEqual(expected_gate_ref(remote_ref), arguments[-1])
+
+        self.fixture.gate_log.unlink(missing_ok=True)
+        control = "\x1b"
+        invalid_ref = f"refs/heads/hidden-{control}-value"
+        rejected = self.fixture.invoke(self.fixture.record(remote_ref=invalid_ref))
+        self.assertNotEqual(0, rejected.returncode)
+        self.assertNotIn(control, rejected.stdout + rejected.stderr)
+        self.assertFalse(self.fixture.gate_log.exists())
+
+    def test_aggregate_diff_uses_real_classifier_and_strictest_profile(self) -> None:
+        aggregate_base = self.fixture.head
+        self.fixture.git("push", "origin", "main")
+        (self.fixture.root / "report.md").write_text("report only\n", encoding="utf-8")
+        (self.fixture.root / "normal.input").write_text("normal path\n", encoding="utf-8")
+        self.fixture.git("add", "report.md", "normal.input")
+        self.fixture.git("commit", "-m", "mixed classifier fixture")
+        self.fixture.head = self.fixture.rev("HEAD")
+        remote_ref = "refs/heads/main"
+        result = self.fixture.invoke(
+            self.fixture.record(remote_ref=remote_ref, remote_oid=aggregate_base)
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        arguments = self.fixture.gate_arguments()
+        profile, reason, entries = classify(
+            self.fixture.root, aggregate_base, self.fixture.head
+        )
+        self.assertEqual("normal", profile)
+        self.assertIn("non-Markdown path changed", reason)
+        self.assertEqual(2, len(entries))
+        self.assertEqual("auto", arguments[0])
+        summary = {
+            "base": arguments[2],
+            "head": arguments[4],
+            "ref": arguments[6],
+            "profile": profile,
+        }
+        self.assertEqual(
+            {
+                "base": aggregate_base,
+                "head": self.fixture.head,
+                "ref": expected_gate_ref(remote_ref),
+                "profile": "normal",
+            },
+            summary,
+        )
 
     def test_gate_exit_code_and_signal_are_preserved(self) -> None:
         failed = self.fixture.invoke(self.fixture.record(), extra_env={"GATE_EXIT": "37"})
