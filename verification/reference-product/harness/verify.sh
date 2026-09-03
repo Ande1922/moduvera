@@ -14,6 +14,8 @@ case "$TOPOLOGY" in
     ;;
 esac
 
+"$HARNESS_DIR/tests/test-port-plan.sh"
+
 if [[ "${REFERENCE_SKIP_BUILD:-0}" != "1" ]]; then
   "$PROJECT_ROOT/mvnw" -q clean install
   # These topology-specific tests inject duplicate deliveries below the public seam. Exposing a
@@ -28,4 +30,8 @@ else
   "$HARNESS_DIR/run-topology.sh" "$TOPOLOGY"
 fi
 
-echo "Reference product verification: PASS (selection=$TOPOLOGY)"
+if [[ "${REFERENCE_PREFLIGHT_ONLY:-0}" == "1" ]]; then
+  echo "Reference harness preflight-only verification: PASS (selection=$TOPOLOGY)"
+else
+  echo "Reference product verification: PASS (selection=$TOPOLOGY)"
+fi

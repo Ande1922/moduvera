@@ -20,7 +20,7 @@ def main(specifications: list[str]) -> int:
 
             reservation = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             try:
-                reservation.bind(("0.0.0.0", port))
+                reservation.bind(("127.0.0.1", port))
             except OSError as failure:
                 reservation.close()
                 print(

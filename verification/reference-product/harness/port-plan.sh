@@ -4,6 +4,9 @@
 # This file is sourced by run-topology.sh and can also be executed for static verification.
 
 REFERENCE_PORT_STRIDE=100
+REFERENCE_LOCK_OWNER="${REFERENCE_LOCK_OWNER:-}"
+REFERENCE_LOCK_PID="${REFERENCE_LOCK_PID:-}"
+REFERENCE_OWNED_LOCK_PATHS=()
 
 reference_fail() {
   echo "$*" >&2
@@ -39,7 +42,7 @@ reference_derived_port() {
 }
 
 reference_configure_port_plan() {
-  local topology="$1" label port i
+  local topology="$1" label port i j
 
   case "$topology" in
     microservices|business-core-monolith) ;;
@@ -100,6 +103,12 @@ reference_configure_port_plan() {
 
   for ((i = 0; i < ${#REFERENCE_REQUIRED_PORTS[@]}; i++)); do
     reference_validate_port "${REFERENCE_REQUIRED_PORT_LABELS[$i]}" "${REFERENCE_REQUIRED_PORTS[$i]}" || return
+    for ((j = 0; j < i; j++)); do
+      if [[ "${REFERENCE_REQUIRED_PORTS[$i]}" == "${REFERENCE_REQUIRED_PORTS[$j]}" ]]; then
+        reference_fail "Required ports overlap in the plan: ${REFERENCE_REQUIRED_PORT_LABELS[$j]} and ${REFERENCE_REQUIRED_PORT_LABELS[$i]} both use ${REFERENCE_REQUIRED_PORTS[$i]}"
+        return
+      fi
+    done
   done
 
   export RUN_SLOT REFERENCE_DEBUG
@@ -187,23 +196,170 @@ reference_preflight_ports() {
   python3 "$harness_dir/preflight_ports.py" "${arguments[@]}"
 }
 
-reference_acquire_slot() {
-  local lock_root="${REFERENCE_SLOT_LOCK_ROOT:-${TMPDIR:-/tmp}}" lock_path
-  lock_path="$lock_root/moduvera-reference-slot-$RUN_SLOT.lock"
-  if ! mkdir "$lock_path" 2>/dev/null; then
-    echo "Reference run slot $RUN_SLOT is already active (lock: $lock_path)" >&2
+reference_prepare_locking() {
+  REFERENCE_LOCK_ROOT="${REFERENCE_LOCK_ROOT:-${REFERENCE_SLOT_LOCK_ROOT:-${TMPDIR:-/tmp}}}"
+  if [[ ! -e "$REFERENCE_LOCK_ROOT" ]]; then
+    echo "Reference lock root is missing: $REFERENCE_LOCK_ROOT" >&2
+    return 72
+  fi
+  if [[ ! -d "$REFERENCE_LOCK_ROOT" ]]; then
+    echo "Reference lock root is not a directory: $REFERENCE_LOCK_ROOT" >&2
+    return 72
+  fi
+  if [[ ! -w "$REFERENCE_LOCK_ROOT" ]]; then
+    echo "Reference lock root is not writable: $REFERENCE_LOCK_ROOT" >&2
     return 73
   fi
-  REFERENCE_SLOT_LOCK_PATH="$lock_path"
-  chmod 700 "$REFERENCE_SLOT_LOCK_PATH"
-  printf '%s\n' "$$" > "$REFERENCE_SLOT_LOCK_PATH/pid"
+
+  REFERENCE_LOCK_PID="${REFERENCE_LOCK_PID:-$$}"
+  REFERENCE_LOCK_OWNER="${REFERENCE_LOCK_OWNER:-$REFERENCE_LOCK_PID-$(date +%s)-$RANDOM}"
+  if [[ ! "$REFERENCE_LOCK_PID" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Invalid reference lock PID: $REFERENCE_LOCK_PID" >&2
+    return 64
+  fi
+  if [[ ! "$REFERENCE_LOCK_OWNER" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    echo "Invalid reference lock owner token" >&2
+    return 64
+  fi
+  REFERENCE_OWNED_LOCK_PATHS=()
 }
 
-reference_release_slot() {
-  if [[ -n "${REFERENCE_SLOT_LOCK_PATH:-}" && -d "$REFERENCE_SLOT_LOCK_PATH" ]]; then
-    rm -f "$REFERENCE_SLOT_LOCK_PATH/pid"
-    rmdir "$REFERENCE_SLOT_LOCK_PATH" 2>/dev/null || true
+reference_pid_is_active() {
+  local pid="$1"
+  kill -0 "$pid" 2>/dev/null && return 0
+  ps -p "$pid" -o pid= 2>/dev/null | grep -q '[0-9]'
+}
+
+reference_record_owned_lock() {
+  local lock_path="$1" owner_file
+  owner_file="$lock_path/owner"
+  if ! chmod 700 "$lock_path" || ! (umask 077; printf '%s:%s\n' "$REFERENCE_LOCK_PID" "$REFERENCE_LOCK_OWNER" > "$owner_file"); then
+    rm -f "$owner_file"
+    rmdir "$lock_path" 2>/dev/null || true
+    echo "Unable to record ownership for reference lock: $lock_path" >&2
+    return 73
   fi
+  REFERENCE_OWNED_LOCK_PATHS+=("$lock_path")
+}
+
+reference_remove_stale_tombstone() {
+  local tombstone="$1"
+  rm -f "$tombstone/owner" "$tombstone/pid"
+  if ! rmdir "$tombstone" 2>/dev/null; then
+    echo "Reclaimed lock left a non-empty tombstone for manual inspection: $tombstone" >&2
+  fi
+}
+
+reference_acquire_named_lock() {
+  local lock_name="$1" description="$2" lock_path owner_file legacy_pid_file
+  local owner_record owner_pid owner_metadata_file tombstone attempt
+  lock_path="$REFERENCE_LOCK_ROOT/moduvera-reference-$lock_name.lock"
+  owner_file="$lock_path/owner"
+  legacy_pid_file="$lock_path/pid"
+
+  for attempt in 1 2 3; do
+    if mkdir "$lock_path" 2>/dev/null; then
+      reference_record_owned_lock "$lock_path"
+      return
+    fi
+
+    if [[ ! -e "$lock_path" ]]; then
+      echo "Unable to create $description lock in writable root $REFERENCE_LOCK_ROOT" >&2
+      return 73
+    fi
+    if [[ ! -d "$lock_path" ]]; then
+      echo "$description lock has missing ownership metadata; refusing to reclaim: $lock_path" >&2
+      return 73
+    fi
+
+    if [[ -f "$owner_file" ]]; then
+      owner_metadata_file="$owner_file"
+      owner_record="$(<"$owner_file")"
+      owner_pid="${owner_record%%:*}"
+      if [[ ! "$owner_record" =~ ^[1-9][0-9]*:.+ || "$owner_pid" == "$owner_record" ]]; then
+        echo "$description lock has invalid ownership metadata; refusing to reclaim: $lock_path" >&2
+        return 73
+      fi
+    elif [[ -f "$legacy_pid_file" ]]; then
+      owner_metadata_file="$legacy_pid_file"
+      owner_record="$(<"$legacy_pid_file")"
+      owner_pid="$owner_record"
+      if [[ ! "$owner_pid" =~ ^[1-9][0-9]*$ ]]; then
+        echo "$description lock has invalid legacy PID metadata; refusing to reclaim: $lock_path" >&2
+        return 73
+      fi
+    else
+      echo "$description lock has missing ownership metadata; refusing to reclaim: $lock_path" >&2
+      return 73
+    fi
+    if [[ ! "$owner_pid" =~ ^[1-9][0-9]*$ ]]; then
+      echo "$description lock has invalid ownership metadata; refusing to reclaim: $lock_path" >&2
+      return 73
+    fi
+    if reference_pid_is_active "$owner_pid"; then
+      echo "$description lock is active (pid=$owner_pid): $lock_path" >&2
+      return 73
+    fi
+
+    tombstone="$lock_path.stale.$REFERENCE_LOCK_OWNER.$attempt"
+    if mv "$lock_path" "$tombstone" 2>/dev/null; then
+      owner_metadata_file="$tombstone/$(basename "$owner_metadata_file")"
+      if [[ ! -f "$owner_metadata_file" || "$(<"$owner_metadata_file")" != "$owner_record" ]]; then
+        echo "$description lock ownership changed during stale-lock recovery; refusing to reclaim" >&2
+        mv "$tombstone" "$lock_path" 2>/dev/null || true
+        return 73
+      fi
+      echo "Reclaiming stale $description lock owned by dead pid $owner_pid: $lock_path" >&2
+      reference_remove_stale_tombstone "$tombstone"
+    fi
+  done
+
+  echo "Unable to acquire $description lock after concurrent stale-lock recovery: $lock_path" >&2
+  return 73
+}
+
+reference_sort_required_ports() {
+  local i j key
+  REFERENCE_SORTED_REQUIRED_PORTS=("${REFERENCE_REQUIRED_PORTS[@]}")
+  for ((i = 1; i < ${#REFERENCE_SORTED_REQUIRED_PORTS[@]}; i++)); do
+    key="${REFERENCE_SORTED_REQUIRED_PORTS[$i]}"
+    j=$((i - 1))
+    while (( j >= 0 )); do
+      if (( REFERENCE_SORTED_REQUIRED_PORTS[$j] <= key )); then
+        break
+      fi
+      REFERENCE_SORTED_REQUIRED_PORTS[$((j + 1))]="${REFERENCE_SORTED_REQUIRED_PORTS[$j]}"
+      j=$((j - 1))
+    done
+    REFERENCE_SORTED_REQUIRED_PORTS[$((j + 1))]="$key"
+  done
+}
+
+reference_acquire_run_locks() {
+  local port
+  reference_prepare_locking || return
+  reference_acquire_named_lock "slot-$RUN_SLOT" "Reference run slot $RUN_SLOT" || return
+  reference_sort_required_ports || return
+  for port in "${REFERENCE_SORTED_REQUIRED_PORTS[@]}"; do
+    reference_acquire_named_lock "port-$port" "Required host port $port" || return
+  done
+}
+
+reference_release_run_locks() {
+  local i lock_path owner_file expected_owner
+  [[ -n "${REFERENCE_LOCK_OWNER:-}" ]] || return 0
+  expected_owner="${REFERENCE_LOCK_PID:-}:${REFERENCE_LOCK_OWNER:-}"
+  for ((i = ${#REFERENCE_OWNED_LOCK_PATHS[@]} - 1; i >= 0; i--)); do
+    lock_path="${REFERENCE_OWNED_LOCK_PATHS[$i]}"
+    owner_file="$lock_path/owner"
+    if [[ -f "$owner_file" && "$(<"$owner_file")" == "$expected_owner" ]]; then
+      rm -f "$owner_file"
+      rmdir "$lock_path" 2>/dev/null || true
+    elif [[ -e "$lock_path" ]]; then
+      echo "Reference lock ownership changed; refusing to release: $lock_path" >&2
+    fi
+  done
+  REFERENCE_OWNED_LOCK_PATHS=()
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

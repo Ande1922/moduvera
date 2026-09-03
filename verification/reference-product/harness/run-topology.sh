@@ -73,7 +73,7 @@ cleanup() {
   if [[ $COMPOSE_STARTED -eq 1 ]]; then
     compose down -v --remove-orphans >/dev/null 2>&1 || true
   fi
-  reference_release_slot
+  reference_release_run_locks
   rm -rf "$RUN_DIR"
   exit "$exit_code"
 }
@@ -86,7 +86,7 @@ start_app() {
   shift 2
   if [[ "$REFERENCE_DEBUG" == "1" ]]; then
     debug_port="$(reference_debug_port "$app")"
-    java_tool_options="$java_tool_options -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:$debug_port"
+    java_tool_options="$java_tool_options -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=127.0.0.1:$debug_port"
   fi
   env "JAVA_TOOL_OPTIONS=$java_tool_options" "$@" \
     "$JAVA_BIN" -jar "$PROJECT_ROOT/$jar" >"$RUN_DIR/$app.log" 2>&1 &
@@ -193,7 +193,7 @@ stop_business_apps() { local app; for app in "${BUSINESS_APPS[@]}"; do stop_app 
 
 cd "$PROJECT_ROOT"
 reference_write_port_manifest "$TOPOLOGY" "$PORT_MANIFEST"
-reference_acquire_slot
+reference_acquire_run_locks
 reference_preflight_ports "$HARNESS_DIR"
 echo "Reference port preflight: PASS"
 if [[ "${REFERENCE_PREFLIGHT_ONLY:-0}" == "1" ]]; then

@@ -14,6 +14,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
+stop_lock_holder() {
+  if [[ -n "$LOCK_HOLDER_PID" ]]; then
+    kill "$LOCK_HOLDER_PID" 2>/dev/null || true
+    wait "$LOCK_HOLDER_PID" 2>/dev/null || true
+    LOCK_HOLDER_PID=""
+  fi
+}
+
 fail() {
   echo "port-plan test failed: $*" >&2
   exit 1
@@ -90,6 +98,9 @@ expect_failure "Invalid RUN_SLOT '999999999999999999999999'; derived ports excee
   env RUN_SLOT=999999999999999999999999 \
   "$HARNESS_DIR/port-plan.sh" microservices "$TEST_DIR/overflow.json"
 
+LOCK_ROOT="$TEST_DIR/locks"
+mkdir "$LOCK_ROOT"
+
 python3 - "$TEST_DIR/occupied-port" <<'PY' &
 import pathlib
 import socket
@@ -108,7 +119,10 @@ for _ in {1..40}; do [[ -s "$TEST_DIR/occupied-port" ]] && break; sleep 0.05; do
 OCCUPIED_PORT="$(<"$TEST_DIR/occupied-port")"
 expect_failure "Required port is unavailable before startup: gateway=$OCCUPIED_PORT" \
   env RUN_SLOT=50 REFERENCE_GATEWAY_PORT="$OCCUPIED_PORT" REFERENCE_PREFLIGHT_ONLY=1 \
+  REFERENCE_LOCK_ROOT="$LOCK_ROOT" \
   "$HARNESS_DIR/run-topology.sh" microservices
+[[ -z "$(find "$LOCK_ROOT" -mindepth 1 -maxdepth 1 -print -quit)" ]] \
+  || fail "occupied-port failure did not release its owned locks"
 kill "$PORT_HOLDER_PID" 2>/dev/null || true
 wait "$PORT_HOLDER_PID" 2>/dev/null || true
 
@@ -116,31 +130,141 @@ wait "$PORT_HOLDER_PID" 2>/dev/null || true
   # shellcheck source=../port-plan.sh
   source "$HARNESS_DIR/port-plan.sh"
   RUN_SLOT=7
-  REFERENCE_SLOT_LOCK_ROOT="$TEST_DIR"
+  REFERENCE_LOCK_ROOT="$LOCK_ROOT"
   reference_configure_port_plan microservices
-  reference_acquire_slot
+  reference_acquire_run_locks
+  trap reference_release_run_locks EXIT
   sleep 30
 ) &
 LOCK_HOLDER_PID=$!
-for _ in {1..40}; do [[ -d "$TEST_DIR/moduvera-reference-slot-7.lock" ]] && break; sleep 0.05; done
-[[ -d "$TEST_DIR/moduvera-reference-slot-7.lock" ]] || fail "slot-lock helper did not start"
-expect_failure "Reference run slot 7 is already active" bash -c '
+for _ in {1..40}; do [[ -d "$LOCK_ROOT/moduvera-reference-slot-7.lock" ]] && break; sleep 0.05; done
+[[ -d "$LOCK_ROOT/moduvera-reference-slot-7.lock" ]] || fail "slot-lock helper did not start"
+expect_failure "Reference run slot 7 lock is active" bash -c '
   set -euo pipefail
   source "$1"
   RUN_SLOT=7
-  REFERENCE_SLOT_LOCK_ROOT="$2"
+  REFERENCE_LOCK_ROOT="$2"
   reference_configure_port_plan microservices
-  reference_acquire_slot
-' bash "$HARNESS_DIR/port-plan.sh" "$TEST_DIR"
-[[ -d "$TEST_DIR/moduvera-reference-slot-7.lock" ]] \
+  trap reference_release_run_locks EXIT
+  reference_acquire_run_locks
+' bash "$HARNESS_DIR/port-plan.sh" "$LOCK_ROOT"
+[[ -d "$LOCK_ROOT/moduvera-reference-slot-7.lock" ]] \
   || fail "failed acquisition removed the active slot lock"
-kill "$LOCK_HOLDER_PID" 2>/dev/null || true
-wait "$LOCK_HOLDER_PID" 2>/dev/null || true
-LOCK_HOLDER_PID=""
+stop_lock_holder
 
+(
+  # shellcheck source=../port-plan.sh
+  source "$HARNESS_DIR/port-plan.sh"
+  RUN_SLOT=8
+  REFERENCE_GATEWAY_PORT=62000
+  REFERENCE_LOCK_ROOT="$LOCK_ROOT"
+  reference_configure_port_plan microservices
+  reference_acquire_run_locks
+  trap reference_release_run_locks EXIT
+  sleep 30
+) &
+LOCK_HOLDER_PID=$!
+for _ in {1..40}; do [[ -d "$LOCK_ROOT/moduvera-reference-port-62000.lock" ]] && break; sleep 0.05; done
+[[ -d "$LOCK_ROOT/moduvera-reference-port-62000.lock" ]] || fail "port-lock helper did not start"
+expect_failure "Required host port 62000 lock is active" bash -c '
+  set -euo pipefail
+  source "$1"
+  RUN_SLOT=9
+  REFERENCE_GATEWAY_PORT=62000
+  REFERENCE_LOCK_ROOT="$2"
+  reference_configure_port_plan microservices
+  trap reference_release_run_locks EXIT
+  reference_acquire_run_locks
+' bash "$HARNESS_DIR/port-plan.sh" "$LOCK_ROOT"
+[[ -d "$LOCK_ROOT/moduvera-reference-port-62000.lock" ]] \
+  || fail "cross-slot collision removed the active port lock"
+stop_lock_holder
+
+STALE_LOCK="$LOCK_ROOT/moduvera-reference-slot-11.lock"
+mkdir "$STALE_LOCK"
+printf '%s\n' '999999' > "$STALE_LOCK/pid"
+bash -c '
+  set -euo pipefail
+  source "$1"
+  RUN_SLOT=11
+  REFERENCE_LOCK_ROOT="$2"
+  REFERENCE_LOCK_OWNER=recovery-owner
+  reference_configure_port_plan business-core-monolith
+  reference_acquire_run_locks
+  grep -F ":recovery-owner" "$2/moduvera-reference-slot-11.lock/owner" >/dev/null
+  reference_release_run_locks
+' bash "$HARNESS_DIR/port-plan.sh" "$LOCK_ROOT" 2>"$TEST_DIR/stale-recovery.err"
+grep -F "Reclaiming stale Reference run slot 11 lock owned by dead pid 999999" \
+  "$TEST_DIR/stale-recovery.err" >/dev/null || fail "stale lock was not diagnosed"
+[[ ! -e "$STALE_LOCK" ]] || fail "recovered lock was not released"
+
+MISSING_OWNER_LOCK="$LOCK_ROOT/moduvera-reference-slot-12.lock"
+mkdir "$MISSING_OWNER_LOCK"
+expect_failure "lock has missing ownership metadata; refusing to reclaim" bash -c '
+  set -euo pipefail
+  source "$1"
+  RUN_SLOT=12
+  REFERENCE_LOCK_ROOT="$2"
+  reference_configure_port_plan business-core-monolith
+  trap reference_release_run_locks EXIT
+  reference_acquire_run_locks
+' bash "$HARNESS_DIR/port-plan.sh" "$LOCK_ROOT"
+rmdir "$MISSING_OWNER_LOCK"
+
+expect_failure "Reference lock root is missing" bash -c '
+  set -euo pipefail
+  source "$1"
+  RUN_SLOT=13
+  REFERENCE_LOCK_ROOT="$2/missing-lock-root"
+  reference_configure_port_plan business-core-monolith
+  reference_acquire_run_locks
+' bash "$HARNESS_DIR/port-plan.sh" "$LOCK_ROOT"
+
+UNWRITABLE_LOCK_ROOT="$TEST_DIR/unwritable-lock-root"
+mkdir "$UNWRITABLE_LOCK_ROOT"
+chmod 500 "$UNWRITABLE_LOCK_ROOT"
+expect_failure "Reference lock root is not writable" bash -c '
+  set -euo pipefail
+  source "$1"
+  RUN_SLOT=14
+  REFERENCE_LOCK_ROOT="$2"
+  reference_configure_port_plan business-core-monolith
+  reference_acquire_run_locks
+' bash "$HARNESS_DIR/port-plan.sh" "$UNWRITABLE_LOCK_ROOT"
+chmod 700 "$UNWRITABLE_LOCK_ROOT"
+
+bash -c '
+  set -euo pipefail
+  source "$1"
+  REFERENCE_LOCK_ROOT="$2"
+  REFERENCE_LOCK_OWNER=original-owner
+  reference_prepare_locking
+  reference_acquire_named_lock ownership-test "Ownership test"
+  printf "%s\n" "$$:replacement-owner" > "$2/moduvera-reference-ownership-test.lock/owner"
+  reference_release_run_locks
+  [[ -d "$2/moduvera-reference-ownership-test.lock" ]]
+' bash "$HARNESS_DIR/port-plan.sh" "$LOCK_ROOT" 2>"$TEST_DIR/ownership.err"
+grep -F "Reference lock ownership changed; refusing to release" "$TEST_DIR/ownership.err" >/dev/null \
+  || fail "ownership-safe cleanup was not diagnosed"
+rm -f "$LOCK_ROOT/moduvera-reference-ownership-test.lock/owner"
+rmdir "$LOCK_ROOT/moduvera-reference-ownership-test.lock"
+
+LOCK_LINE="$(grep -n 'reference_acquire_run_locks' "$HARNESS_DIR/run-topology.sh" | cut -d: -f1)"
 PREFLIGHT_LINE="$(grep -n 'reference_preflight_ports' "$HARNESS_DIR/run-topology.sh" | tail -1 | cut -d: -f1)"
 COMPOSE_UP_LINE="$(grep -n 'compose up -d' "$HARNESS_DIR/run-topology.sh" | cut -d: -f1)"
+(( LOCK_LINE < PREFLIGHT_LINE )) || fail "host-port locks do not precede the advisory bind probe"
 (( PREFLIGHT_LINE < COMPOSE_UP_LINE )) || fail "port preflight does not precede Compose startup"
+
+grep -F 'address=127.0.0.1:$debug_port' "$HARNESS_DIR/run-topology.sh" >/dev/null \
+  || fail "JDWP does not bind explicitly to loopback"
+if grep -F 'address=*:$debug_port' "$HARNESS_DIR/run-topology.sh" >/dev/null; then
+  fail "JDWP still binds to all interfaces"
+fi
+
+HARNESS_TEST_LINE="$(grep -n 'tests/test-port-plan.sh' "$HARNESS_DIR/verify.sh" | cut -d: -f1)"
+TOPOLOGY_START_LINE="$(grep -n 'run-topology.sh' "$HARNESS_DIR/verify.sh" | head -1 | cut -d: -f1)"
+(( HARNESS_TEST_LINE < TOPOLOGY_START_LINE )) \
+  || fail "verify.sh does not run harness regression tests before topology startup"
 
 KAFKA_PROBE='kafka-topics --bootstrap-server localhost:29092 --list'
 grep -F "$KAFKA_PROBE" "$HARNESS_DIR/run-topology.sh" >/dev/null \
