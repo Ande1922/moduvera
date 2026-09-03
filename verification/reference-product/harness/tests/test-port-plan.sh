@@ -43,13 +43,16 @@ RUN_SLOT=0 "$HARNESS_DIR/port-plan.sh" microservices "$TEST_DIR/slot-0.json" >/d
 RUN_SLOT=2 "$HARNESS_DIR/port-plan.sh" microservices "$TEST_DIR/slot-2.json" >/dev/null
 RUN_SLOT=1 REFERENCE_DEBUG=1 \
   "$HARNESS_DIR/port-plan.sh" business-core-monolith "$TEST_DIR/slot-1-debug.json" >/dev/null
+RUN_SLOT=0 REFERENCE_POSTGRES_PORT=07777 REFERENCE_KAFKA_PORT=08080 \
+  "$HARNESS_DIR/port-plan.sh" business-core-monolith "$TEST_DIR/canonical-ports.json" >/dev/null
 
-python3 - "$TEST_DIR/slot-0.json" "$TEST_DIR/slot-2.json" "$TEST_DIR/slot-1-debug.json" <<'PY'
+python3 - "$TEST_DIR/slot-0.json" "$TEST_DIR/slot-2.json" \
+  "$TEST_DIR/slot-1-debug.json" "$TEST_DIR/canonical-ports.json" <<'PY'
 import json
 import pathlib
 import sys
 
-slot0, slot2, slot1_debug = (
+slot0, slot2, slot1_debug, canonical = (
     json.loads(pathlib.Path(path).read_text(encoding="utf-8")) for path in sys.argv[1:]
 )
 
@@ -86,6 +89,8 @@ assert slot1_debug["ports"]["apps"]["gateway"] == {
     "management": 58180,
     "debug": 50180,
 }
+assert canonical["ports"]["postgres"] == 7777
+assert canonical["ports"]["kafka"] == 8080
 PY
 
 expect_failure "Invalid RUN_SLOT '-1'" \
@@ -108,7 +113,7 @@ import sys
 import time
 
 listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-listener.bind(("127.0.0.1", 0))
+listener.bind(("0.0.0.0", 0))
 listener.listen()
 pathlib.Path(sys.argv[1]).write_text(str(listener.getsockname()[1]), encoding="ascii")
 time.sleep(30)
@@ -156,7 +161,7 @@ stop_lock_holder
   # shellcheck source=../port-plan.sh
   source "$HARNESS_DIR/port-plan.sh"
   RUN_SLOT=8
-  REFERENCE_GATEWAY_PORT=62000
+  REFERENCE_GATEWAY_PORT=07777
   REFERENCE_LOCK_ROOT="$LOCK_ROOT"
   reference_configure_port_plan microservices
   reference_acquire_run_locks
@@ -164,20 +169,20 @@ stop_lock_holder
   sleep 30
 ) &
 LOCK_HOLDER_PID=$!
-for _ in {1..40}; do [[ -d "$LOCK_ROOT/moduvera-reference-port-62000.lock" ]] && break; sleep 0.05; done
-[[ -d "$LOCK_ROOT/moduvera-reference-port-62000.lock" ]] || fail "port-lock helper did not start"
-expect_failure "Required host port 62000 lock is active" bash -c '
+for _ in {1..40}; do [[ -d "$LOCK_ROOT/moduvera-reference-port-7777.lock" ]] && break; sleep 0.05; done
+[[ -d "$LOCK_ROOT/moduvera-reference-port-7777.lock" ]] || fail "canonical port-lock helper did not start"
+expect_failure "Required host port 7777 lock is active" bash -c '
   set -euo pipefail
   source "$1"
   RUN_SLOT=9
-  REFERENCE_GATEWAY_PORT=62000
+  REFERENCE_GATEWAY_PORT=7777
   REFERENCE_LOCK_ROOT="$2"
   reference_configure_port_plan microservices
   trap reference_release_run_locks EXIT
   reference_acquire_run_locks
 ' bash "$HARNESS_DIR/port-plan.sh" "$LOCK_ROOT"
-[[ -d "$LOCK_ROOT/moduvera-reference-port-62000.lock" ]] \
-  || fail "cross-slot collision removed the active port lock"
+[[ -d "$LOCK_ROOT/moduvera-reference-port-7777.lock" ]] \
+  || fail "equivalent cross-slot collision removed the active canonical port lock"
 stop_lock_holder
 
 STALE_LOCK="$LOCK_ROOT/moduvera-reference-slot-11.lock"
@@ -233,7 +238,7 @@ expect_failure "Reference lock root is not writable" bash -c '
 ' bash "$HARNESS_DIR/port-plan.sh" "$UNWRITABLE_LOCK_ROOT"
 chmod 700 "$UNWRITABLE_LOCK_ROOT"
 
-bash -c '
+expect_failure "Reference lock ownership changed; refusing to release" bash -c '
   set -euo pipefail
   source "$1"
   REFERENCE_LOCK_ROOT="$2"
@@ -242,10 +247,9 @@ bash -c '
   reference_acquire_named_lock ownership-test "Ownership test"
   printf "%s\n" "$$:replacement-owner" > "$2/moduvera-reference-ownership-test.lock/owner"
   reference_release_run_locks
-  [[ -d "$2/moduvera-reference-ownership-test.lock" ]]
-' bash "$HARNESS_DIR/port-plan.sh" "$LOCK_ROOT" 2>"$TEST_DIR/ownership.err"
-grep -F "Reference lock ownership changed; refusing to release" "$TEST_DIR/ownership.err" >/dev/null \
-  || fail "ownership-safe cleanup was not diagnosed"
+' bash "$HARNESS_DIR/port-plan.sh" "$LOCK_ROOT"
+[[ -d "$LOCK_ROOT/moduvera-reference-ownership-test.lock" ]] \
+  || fail "ownership-safe cleanup removed a lock owned by another run"
 rm -f "$LOCK_ROOT/moduvera-reference-ownership-test.lock/owner"
 rmdir "$LOCK_ROOT/moduvera-reference-ownership-test.lock"
 

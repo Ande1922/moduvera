@@ -7,6 +7,37 @@ import socket
 import sys
 
 
+def reserve_wildcard(
+    family: socket.AddressFamily,
+    address: str,
+    port: int,
+    label: str,
+    reservations: list[socket.socket],
+) -> bool:
+    try:
+        reservation = socket.socket(family, socket.SOCK_STREAM)
+    except OSError:
+        return False
+    if family == socket.AF_INET6:
+        try:
+            reservation.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+        except (AttributeError, OSError):
+            reservation.close()
+            return False
+    try:
+        reservation.bind((address, port))
+    except OSError as failure:
+        reservation.close()
+        print(
+            f"Required port is unavailable before startup: {label}={port} "
+            f"on wildcard {address} ({failure.strerror or failure})",
+            file=sys.stderr,
+        )
+        raise
+    reservations.append(reservation)
+    return True
+
+
 def main(specifications: list[str]) -> int:
     reservations: list[socket.socket] = []
     try:
@@ -18,18 +49,12 @@ def main(specifications: list[str]) -> int:
                 print(f"Invalid port specification: {specification}", file=sys.stderr)
                 return 64
 
-            reservation = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             try:
-                reservation.bind(("127.0.0.1", port))
-            except OSError as failure:
-                reservation.close()
-                print(
-                    f"Required port is unavailable before startup: {label}={port} "
-                    f"({failure.strerror or failure})",
-                    file=sys.stderr,
-                )
+                reserve_wildcard(socket.AF_INET, "0.0.0.0", port, label, reservations)
+                if socket.has_ipv6:
+                    reserve_wildcard(socket.AF_INET6, "::", port, label, reservations)
+            except OSError:
                 return 69
-            reservations.append(reservation)
     finally:
         for reservation in reservations:
             reservation.close()

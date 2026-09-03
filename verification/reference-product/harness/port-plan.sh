@@ -18,7 +18,7 @@ reference_decimal() {
   echo $((10#$value))
 }
 
-reference_validate_port() {
+reference_canonical_port() {
   local label="$1" value="$2" decimal
   if [[ ! "$value" =~ ^[0-9]+$ || ${#value} -gt 5 ]]; then
     reference_fail "Invalid $label port '$value'; expected an integer from 1 through 65535"
@@ -29,16 +29,18 @@ reference_validate_port() {
     reference_fail "Invalid $label port '$value'; expected an integer from 1 through 65535"
     return
   fi
+  printf '%s\n' "$decimal"
 }
 
-reference_derived_port() {
-  local environment_name="$1" base="$2" configured
+reference_configure_port() {
+  local label="$1" environment_name="$2" base="$3" variable_name="$4" configured canonical
   configured="${!environment_name:-}"
   if [[ -n "$configured" ]]; then
-    echo "$configured"
+    canonical="$(reference_canonical_port "$label" "$configured")" || return
   else
-    echo $((base + RUN_SLOT * REFERENCE_PORT_STRIDE))
+    canonical="$(reference_canonical_port "$label" "$((base + RUN_SLOT * REFERENCE_PORT_STRIDE))")" || return
   fi
+  printf -v "$variable_name" '%s' "$canonical"
 }
 
 reference_configure_port_plan() {
@@ -66,21 +68,21 @@ reference_configure_port_plan() {
     return
   fi
 
-  POSTGRES_PORT="$(reference_derived_port REFERENCE_POSTGRES_PORT 55432)"
-  KAFKA_PORT="$(reference_derived_port REFERENCE_KAFKA_PORT 59092)"
-  GATEWAY_PORT="$(reference_derived_port REFERENCE_GATEWAY_PORT 58080)"
-  IDENTITY_PORT="$(reference_derived_port REFERENCE_IDENTITY_PORT 58081)"
-  CATALOG_PORT="$(reference_derived_port REFERENCE_CATALOG_PORT 58082)"
-  ORDER_PORT="$(reference_derived_port REFERENCE_ORDER_PORT 58083)"
-  INVENTORY_PORT="$(reference_derived_port REFERENCE_INVENTORY_PORT 58084)"
-  MONOLITH_PORT="$(reference_derived_port REFERENCE_MONOLITH_PORT 58085)"
+  reference_configure_port postgres REFERENCE_POSTGRES_PORT 55432 POSTGRES_PORT || return
+  reference_configure_port kafka REFERENCE_KAFKA_PORT 59092 KAFKA_PORT || return
+  reference_configure_port gateway REFERENCE_GATEWAY_PORT 58080 GATEWAY_PORT || return
+  reference_configure_port identity REFERENCE_IDENTITY_PORT 58081 IDENTITY_PORT || return
+  reference_configure_port catalog REFERENCE_CATALOG_PORT 58082 CATALOG_PORT || return
+  reference_configure_port order REFERENCE_ORDER_PORT 58083 ORDER_PORT || return
+  reference_configure_port inventory REFERENCE_INVENTORY_PORT 58084 INVENTORY_PORT || return
+  reference_configure_port monolith REFERENCE_MONOLITH_PORT 58085 MONOLITH_PORT || return
 
-  GATEWAY_DEBUG_PORT="$(reference_derived_port REFERENCE_GATEWAY_DEBUG_PORT 50080)"
-  IDENTITY_DEBUG_PORT="$(reference_derived_port REFERENCE_IDENTITY_DEBUG_PORT 50081)"
-  CATALOG_DEBUG_PORT="$(reference_derived_port REFERENCE_CATALOG_DEBUG_PORT 50082)"
-  ORDER_DEBUG_PORT="$(reference_derived_port REFERENCE_ORDER_DEBUG_PORT 50083)"
-  INVENTORY_DEBUG_PORT="$(reference_derived_port REFERENCE_INVENTORY_DEBUG_PORT 50084)"
-  MONOLITH_DEBUG_PORT="$(reference_derived_port REFERENCE_MONOLITH_DEBUG_PORT 50085)"
+  reference_configure_port gateway-debug REFERENCE_GATEWAY_DEBUG_PORT 50080 GATEWAY_DEBUG_PORT || return
+  reference_configure_port identity-debug REFERENCE_IDENTITY_DEBUG_PORT 50081 IDENTITY_DEBUG_PORT || return
+  reference_configure_port catalog-debug REFERENCE_CATALOG_DEBUG_PORT 50082 CATALOG_DEBUG_PORT || return
+  reference_configure_port order-debug REFERENCE_ORDER_DEBUG_PORT 50083 ORDER_DEBUG_PORT || return
+  reference_configure_port inventory-debug REFERENCE_INVENTORY_DEBUG_PORT 50084 INVENTORY_DEBUG_PORT || return
+  reference_configure_port monolith-debug REFERENCE_MONOLITH_DEBUG_PORT 50085 MONOLITH_DEBUG_PORT || return
 
   if [[ "$topology" == "microservices" ]]; then
     REFERENCE_SELECTED_APPS=(gateway identity catalog order inventory)
@@ -102,7 +104,6 @@ reference_configure_port_plan() {
   done
 
   for ((i = 0; i < ${#REFERENCE_REQUIRED_PORTS[@]}; i++)); do
-    reference_validate_port "${REFERENCE_REQUIRED_PORT_LABELS[$i]}" "${REFERENCE_REQUIRED_PORTS[$i]}" || return
     for ((j = 0; j < i; j++)); do
       if [[ "${REFERENCE_REQUIRED_PORTS[$i]}" == "${REFERENCE_REQUIRED_PORTS[$j]}" ]]; then
         reference_fail "Required ports overlap in the plan: ${REFERENCE_REQUIRED_PORT_LABELS[$j]} and ${REFERENCE_REQUIRED_PORT_LABELS[$i]} both use ${REFERENCE_REQUIRED_PORTS[$i]}"
@@ -365,20 +366,27 @@ reference_acquire_run_locks() {
 }
 
 reference_release_run_locks() {
-  local i lock_path owner_file expected_owner
+  local i lock_path owner_file expected_owner release_status=0
   [[ -n "${REFERENCE_LOCK_OWNER:-}" ]] || return 0
   expected_owner="${REFERENCE_LOCK_PID:-}:${REFERENCE_LOCK_OWNER:-}"
   for ((i = ${#REFERENCE_OWNED_LOCK_PATHS[@]} - 1; i >= 0; i--)); do
     lock_path="${REFERENCE_OWNED_LOCK_PATHS[$i]}"
     owner_file="$lock_path/owner"
     if [[ -f "$owner_file" && "$(<"$owner_file")" == "$expected_owner" ]]; then
-      rm -f "$owner_file"
-      rmdir "$lock_path" 2>/dev/null || true
+      if ! rm -f "$owner_file"; then
+        echo "Unable to remove reference lock ownership metadata: $owner_file" >&2
+        release_status=74
+      elif ! rmdir "$lock_path" 2>/dev/null; then
+        echo "Unable to remove owned reference lock: $lock_path" >&2
+        release_status=74
+      fi
     elif [[ -e "$lock_path" ]]; then
       echo "Reference lock ownership changed; refusing to release: $lock_path" >&2
+      release_status=74
     fi
   done
   REFERENCE_OWNED_LOCK_PATHS=()
+  return "$release_status"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

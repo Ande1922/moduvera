@@ -74,15 +74,29 @@ stop_app() {
 }
 
 cleanup() {
-  local exit_code=$?
+  local primary_status=$? cleanup_status=0
+  trap - EXIT INT TERM
+  set +e
   for app in gateway monolith inventory order catalog identity; do stop_app "$app"; done
-  if [[ $FAILED -ne 0 && $exit_code -ne 0 && $COMPOSE_STARTED -eq 1 ]]; then diagnostics; fi
+  if [[ $FAILED -ne 0 && $primary_status -ne 0 && $COMPOSE_STARTED -eq 1 ]]; then diagnostics; fi
   if [[ $COMPOSE_STARTED -eq 1 ]]; then
-    compose down -v --remove-orphans >/dev/null 2>&1 || true
+    if ! compose down -v --remove-orphans >/dev/null 2>&1; then
+      echo "Reference cleanup failure: docker compose down failed for $COMPOSE_PROJECT" >&2
+      cleanup_status=70
+    fi
   fi
-  reference_release_run_locks
-  rm -rf "$RUN_DIR"
-  exit "$exit_code"
+  if ! reference_release_run_locks; then
+    echo "Reference cleanup failure: one or more owned run locks could not be released" >&2
+    cleanup_status=70
+  fi
+  if ! rm -rf "$RUN_DIR"; then
+    echo "Reference cleanup failure: unable to remove temporary directory $RUN_DIR" >&2
+    cleanup_status=70
+  fi
+  if [[ $primary_status -ne 0 ]]; then
+    exit "$primary_status"
+  fi
+  exit "$cleanup_status"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
@@ -213,7 +227,7 @@ for executable in docker curl uv; do
 done
 [[ -n "$JAVA_BIN" ]] || { echo "Required executable is unavailable: java" >&2; exit 127; }
 
-compose down -v --remove-orphans >/dev/null 2>&1 || true
+compose down -v --remove-orphans >/dev/null 2>&1
 COMPOSE_STARTED=1
 compose up -d postgres zookeeper kafka
 wait_postgres
