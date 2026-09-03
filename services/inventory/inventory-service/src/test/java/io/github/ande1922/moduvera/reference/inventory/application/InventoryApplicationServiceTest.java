@@ -15,8 +15,13 @@ import io.github.ande1922.moduvera.reference.inventory.api.InventoryReservationR
 import io.github.ande1922.moduvera.reference.inventory.api.InventoryReserved;
 import io.github.ande1922.moduvera.reference.inventory.api.ReserveInventoryCommand;
 import io.github.ande1922.moduvera.reference.inventory.api.ReserveInventoryLine;
+import io.github.ande1922.moduvera.reference.inventory.domain.AllOrNothingReservationPolicy;
 import io.github.ande1922.moduvera.reference.inventory.domain.InventoryStore;
 import io.github.ande1922.moduvera.reference.inventory.domain.ReservationDecision;
+import io.github.ande1922.moduvera.reference.inventory.domain.ReservationExecution;
+import io.github.ande1922.moduvera.reference.inventory.domain.ReservationPolicy;
+import io.github.ande1922.moduvera.reference.inventory.domain.ReservationRequest;
+import io.github.ande1922.moduvera.reference.inventory.domain.ReservationRequestLine;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -31,11 +36,16 @@ class InventoryApplicationServiceTest {
     private static final Clock CLOCK = Clock.fixed(NOW, ZoneOffset.UTC);
     private static final ReserveInventoryCommand COMMAND = new ReserveInventoryCommand(
             "reserve-order-42", 42, List.of(new ReserveInventoryLine(7, 2)));
+    private static final ReservationPolicy POLICY = new AllOrNothingReservationPolicy();
 
     @Test
     void authorizationRejectsTheReservationBeforeStoreOrPublication() {
-        var result = new InventoryReserved(COMMAND.commandId(), COMMAND.orderId(), NOW);
-        var store = new ScriptedStore(new ReservationDecision(result, true));
+        var store = new ScriptedStore(new ReservationExecution(
+                COMMAND.commandId(),
+                COMMAND.orderId(),
+                ReservationDecision.reserved(),
+                NOW,
+                true));
         var publisher = new RecordingPublisher();
         var service = service(store, publisher);
 
@@ -50,7 +60,12 @@ class InventoryApplicationServiceTest {
     @Test
     void newlyCreatedReservationReturnsAndPublishesTheScriptedResult() {
         var result = new InventoryReserved(COMMAND.commandId(), COMMAND.orderId(), NOW);
-        var store = new ScriptedStore(new ReservationDecision(result, true));
+        var store = new ScriptedStore(new ReservationExecution(
+                COMMAND.commandId(),
+                COMMAND.orderId(),
+                ReservationDecision.reserved(),
+                NOW,
+                true));
         var publisher = new RecordingPublisher();
         var service = service(store, publisher);
 
@@ -58,15 +73,25 @@ class InventoryApplicationServiceTest {
                 context(Set.of(InventoryApplicationService.RESERVE.value())),
                 () -> service.reserve(COMMAND));
 
-        assertThat(returned).isSameAs(result);
+        assertThat(returned).isEqualTo(result);
         assertThat(store.calls()).isEqualTo(1);
+        assertThat(store.request())
+                .isEqualTo(new ReservationRequest(
+                        COMMAND.commandId(),
+                        COMMAND.orderId(),
+                        List.of(new ReservationRequestLine(7, 2))));
+        assertThat(store.policy()).isSameAs(POLICY);
         assertThat(publisher.published()).containsExactly(result);
     }
 
     @Test
-    void duplicateReservationReturnsTheScriptedResultWithoutPublishingAgain() {
-        var result = new InventoryRejected(COMMAND.commandId(), COMMAND.orderId(), List.of(7L), NOW);
-        var store = new ScriptedStore(new ReservationDecision(result, false));
+    void newlyCreatedRejectionIsConvertedAndPublishedWithoutDatabaseTypes() {
+        var store = new ScriptedStore(new ReservationExecution(
+                COMMAND.commandId(),
+                COMMAND.orderId(),
+                ReservationDecision.rejected(List.of(7L)),
+                NOW,
+                true));
         var publisher = new RecordingPublisher();
         var service = service(store, publisher);
 
@@ -74,14 +99,37 @@ class InventoryApplicationServiceTest {
                 context(Set.of(InventoryApplicationService.RESERVE.value())),
                 () -> service.reserve(COMMAND));
 
-        assertThat(returned).isSameAs(result);
+        assertThat(returned)
+                .isEqualTo(new InventoryRejected(
+                        COMMAND.commandId(), COMMAND.orderId(), List.of(7L), NOW));
+        assertThat(publisher.published()).containsExactly(returned);
+    }
+
+    @Test
+    void duplicateReservationReturnsTheScriptedResultWithoutPublishingAgain() {
+        var result = new InventoryRejected(COMMAND.commandId(), 99, List.of(7L), NOW);
+        var store = new ScriptedStore(new ReservationExecution(
+                result.commandId(),
+                result.orderId(),
+                ReservationDecision.rejected(result.unavailableProductIds()),
+                result.rejectedAt(),
+                false));
+        var publisher = new RecordingPublisher();
+        var service = service(store, publisher);
+
+        var returned = ExecutionContextHolder.call(
+                context(Set.of(InventoryApplicationService.RESERVE.value())),
+                () -> service.reserve(COMMAND));
+
+        assertThat(returned).isEqualTo(result);
         assertThat(store.calls()).isEqualTo(1);
         assertThat(publisher.published()).isEmpty();
     }
 
     private static InventoryApplicationService service(
             InventoryStore store, InventoryResultPublisher publisher) {
-        return new InventoryApplicationService(store, new UseCaseAuthorizer(), CLOCK, publisher);
+        return new InventoryApplicationService(
+                store, new UseCaseAuthorizer(), CLOCK, publisher, POLICY);
     }
 
     private static ExecutionContext context(Set<String> permissions) {
@@ -91,21 +139,34 @@ class InventoryApplicationServiceTest {
 
     private static final class ScriptedStore implements InventoryStore {
 
-        private final ReservationDecision decision;
+        private final ReservationExecution execution;
         private int calls;
+        private ReservationRequest request;
+        private ReservationPolicy policy;
 
-        private ScriptedStore(ReservationDecision decision) {
-            this.decision = decision;
+        private ScriptedStore(ReservationExecution execution) {
+            this.execution = execution;
         }
 
         @Override
-        public ReservationDecision reserve(ReserveInventoryCommand command, Instant now) {
+        public ReservationExecution reserve(
+                ReservationRequest request, Instant now, ReservationPolicy policy) {
             calls++;
-            return decision;
+            this.request = request;
+            this.policy = policy;
+            return execution;
         }
 
         private int calls() {
             return calls;
+        }
+
+        private ReservationRequest request() {
+            return request;
+        }
+
+        private ReservationPolicy policy() {
+            return policy;
         }
     }
 

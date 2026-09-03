@@ -21,11 +21,12 @@ import io.github.ande1922.moduvera.message.inbox.InboxRepository;
 import io.github.ande1922.moduvera.messaging.kafka.KafkaMessageMapper;
 import io.github.ande1922.moduvera.messaging.kafka.ReliableInboundEndpoint;
 import io.github.ande1922.moduvera.messaging.kafka.ReliableMessageConsumerFactory;
-import io.github.ande1922.moduvera.reference.inventory.api.InventoryReserved;
 import io.github.ande1922.moduvera.reference.inventory.api.ReserveInventoryCommand;
 import io.github.ande1922.moduvera.reference.inventory.api.ReserveInventoryLine;
 import io.github.ande1922.moduvera.reference.inventory.application.InventoryApplicationService;
+import io.github.ande1922.moduvera.reference.inventory.domain.AllOrNothingReservationPolicy;
 import io.github.ande1922.moduvera.reference.inventory.domain.ReservationDecision;
+import io.github.ande1922.moduvera.reference.inventory.domain.ReservationExecution;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
@@ -145,14 +146,26 @@ class ReserveInventoryCommandInboundConfigurationTest {
 
     private static InventoryApplicationService service(Consumer<ReserveInventoryCommand> behavior) {
         return new InventoryApplicationService(
-                (command, now) -> {
+                (request, now, policy) -> {
+                    var command = new ReserveInventoryCommand(
+                            request.commandId(),
+                            request.orderId(),
+                            request.lines().stream()
+                                    .map(line -> new ReserveInventoryLine(
+                                            line.productId(), line.quantity()))
+                                    .toList());
                     behavior.accept(command);
-                    return new ReservationDecision(
-                            new InventoryReserved(command.commandId(), command.orderId(), now), true);
+                    return new ReservationExecution(
+                            command.commandId(),
+                            command.orderId(),
+                            ReservationDecision.reserved(),
+                            now,
+                            true);
                 },
                 new UseCaseAuthorizer(),
                 Clock.systemUTC(),
-                ignored -> {});
+                ignored -> {},
+                new AllOrNothingReservationPolicy());
     }
 
     private ReliableMessageConsumerFactory consumerFactory() {
