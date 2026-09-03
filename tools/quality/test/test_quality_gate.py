@@ -152,6 +152,7 @@ class QualityGateEvidenceTest(unittest.TestCase):
 
     def test_docs_only_gate_has_private_evidence_and_redacted_bounded_failure(self) -> None:
         self.install_gate()
+        self.base = self.fixture.commit("install gate")
         self.fixture.write("guide.md", "# Guide\n")
         head = self.fixture.commit("docs")
         extension = self.fixture.root / "tools/quality/checks.d/common/10-fail.sh"
@@ -161,6 +162,7 @@ class QualityGateEvidenceTest(unittest.TestCase):
         extension.chmod(0o755)
         result = self.run_gate("auto", "--base", self.base, "--head", head, "--ref", "fixture")
         self.assertNotEqual(0, result.returncode)
+        self.assertIn("profile: docs-only", result.stdout)
         self.assertNotIn("very-secret-token", result.stdout)
         self.assertIn("Bearer [REDACTED]", result.stdout)
         latest = (self.fixture.root / ".quality-gate/latest").resolve()
@@ -176,8 +178,20 @@ class QualityGateEvidenceTest(unittest.TestCase):
         self.assertIn("very-secret-token", (latest / "full.log").read_text())
         self.assertLessEqual((latest / "summary.txt").stat().st_size, quality_gate.MAX_SUMMARY_BYTES)
 
+    def test_docs_only_gate_passes_without_maven(self) -> None:
+        self.install_gate()
+        self.base = self.fixture.commit("install gate")
+        self.fixture.write("docs/target.md", "# Target\n")
+        self.fixture.write("docs/guide.md", "[target](./target.md)\n")
+        head = self.fixture.commit("docs")
+        result = self.run_gate("auto", "--base", self.base, "--head", head)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn("profile: docs-only", result.stdout)
+        self.assertNotIn("maven-clean-verify", result.stdout)
+
     def test_normal_gate_runs_exact_clean_verify_and_post_maven_extension(self) -> None:
         self.install_gate()
+        self.base = self.fixture.commit("install gate")
         self.fixture.write("src.txt", "code\n")
         head = self.fixture.commit("code")
         mvnw = self.fixture.root / "mvnw"
