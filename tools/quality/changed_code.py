@@ -14,6 +14,7 @@ import re
 import stat
 import subprocess
 import sys
+import tempfile
 from typing import Any, NamedTuple
 import xml.etree.ElementTree as ET
 
@@ -67,6 +68,14 @@ class Artifact(NamedTuple):
     path: str
     sha256: str
     mtime_ns: int
+
+
+class ManifestEntry(NamedTuple):
+    sha256: str
+    size: int
+    mtime_ns: int
+    device: int
+    inode: int
 
 
 class AnalysisResult(NamedTuple):
@@ -241,35 +250,64 @@ def changed_files(repo: Path, base: str, head: str) -> tuple[Change, ...]:
     return tuple(changes)
 
 
-def _safe_regular(path: Path, root: Path, label: str) -> os.stat_result:
+def _read_regular_snapshot(
+    path: Path, root: Path, label: str, maximum_bytes: int | None = None
+) -> tuple[bytes, os.stat_result]:
     try:
-        state = path.lstat()
+        path_state = path.lstat()
     except FileNotFoundError as error:
         raise ChangedCodeError(f"missing {label}: {path}") from error
-    if stat.S_ISLNK(state.st_mode) or not stat.S_ISREG(state.st_mode):
+    if stat.S_ISLNK(path_state.st_mode) or not stat.S_ISREG(path_state.st_mode):
         raise ChangedCodeError(f"{label} must be a regular non-symlink file: {path}")
     if not path.resolve(strict=True).is_relative_to(root.resolve(strict=True)):
         raise ChangedCodeError(f"{label} escapes expected root: {path}")
-    return state
-
-
-def _read_json_regular(path: Path) -> dict[str, Any]:
-    state = _safe_regular(path, path.parent, "Maven provenance")
-    if state.st_size > 16 * 1024:
-        raise ChangedCodeError("Maven provenance is unexpectedly large")
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or (opened.st_dev, opened.st_ino)
+            != (path_state.st_dev, path_state.st_ino)
+        ):
+            raise ChangedCodeError(f"{label} changed during no-follow open: {path}")
+        if maximum_bytes is not None and opened.st_size > maximum_bytes:
+            raise ChangedCodeError(f"{label} is unexpectedly large")
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if maximum_bytes is not None and total > maximum_bytes:
+                raise ChangedCodeError(f"{label} is unexpectedly large")
+            chunks.append(chunk)
+        after = os.fstat(descriptor)
+        if (
+            (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+            != (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns)
+        ):
+            raise ChangedCodeError(f"{label} changed while being read: {path}")
+        return b"".join(chunks), after
+    finally:
+        os.close(descriptor)
+
+
+def _read_json_regular(path: Path, label: str) -> tuple[dict[str, Any], bytes, os.stat_result]:
+    raw, state = _read_regular_snapshot(path, path.parent, label, 1024 * 1024)
+    try:
+        payload = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise ChangedCodeError("invalid Maven provenance JSON") from error
+        raise ChangedCodeError(f"invalid {label} JSON") from error
     if not isinstance(payload, dict):
-        raise ChangedCodeError("invalid Maven provenance object")
-    return payload
+        raise ChangedCodeError(f"invalid {label} object")
+    return payload, raw, state
 
 
 def _validate_provenance(
     path: Path, base: str, head: str
-) -> tuple[int, int, dict[str, Any]]:
-    payload = _read_json_regular(path)
+) -> tuple[int, int, dict[str, Any], bytes, os.stat_result]:
+    payload, raw, state = _read_json_regular(path, "Maven provenance")
     if payload.get("base") != base:
         raise ChangedCodeError("provenance base mismatch")
     if payload.get("head") != head:
@@ -287,7 +325,54 @@ def _validate_provenance(
         or completed < started
     ):
         raise ChangedCodeError("invalid Maven provenance time window")
-    return started, completed, payload
+    return started, completed, payload, raw, state
+
+
+def _validate_manifest(
+    path: Path,
+    provenance: dict[str, Any],
+    base: str,
+    head: str,
+) -> dict[str, ManifestEntry]:
+    binding = provenance.get("artifactManifest")
+    if not isinstance(binding, dict) or binding.get("name") != path.name:
+        raise ChangedCodeError("provenance artifact manifest identity mismatch")
+    payload, raw, _state = _read_json_regular(path, "Maven artifact manifest")
+    if binding.get("sha256") != hashlib.sha256(raw).hexdigest():
+        raise ChangedCodeError("Maven artifact manifest digest mismatch")
+    if payload.get("schema") != 1 or payload.get("base") != base or payload.get("head") != head:
+        raise ChangedCodeError("Maven artifact manifest revision mismatch")
+    raw_artifacts = payload.get("artifacts")
+    if not isinstance(raw_artifacts, dict):
+        raise ChangedCodeError("invalid Maven artifact manifest entries")
+    artifacts: dict[str, ManifestEntry] = {}
+    for relative, raw_entry in raw_artifacts.items():
+        if not isinstance(relative, str) or not isinstance(raw_entry, dict):
+            raise ChangedCodeError("invalid Maven artifact manifest entry")
+        digest = raw_entry.get("sha256")
+        size = raw_entry.get("size")
+        mtime_ns = raw_entry.get("mtime_ns")
+        device = raw_entry.get("device")
+        inode = raw_entry.get("inode")
+        if (
+            not isinstance(digest, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", digest)
+            or not isinstance(size, int)
+            or isinstance(size, bool)
+            or size < 0
+            or not isinstance(mtime_ns, int)
+            or isinstance(mtime_ns, bool)
+            or mtime_ns <= 0
+            or not isinstance(device, int)
+            or isinstance(device, bool)
+            or device < 0
+            or not isinstance(inode, int)
+            or isinstance(inode, bool)
+            or inode <= 0
+        ):
+            raise ChangedCodeError("invalid Maven artifact manifest metadata")
+        artifacts[relative] = ManifestEntry(digest, size, mtime_ns, device, inode)
+    return artifacts
 
 
 def _artifact(
@@ -296,31 +381,40 @@ def _artifact(
     label: str,
     started_ns: int,
     completed_ns: int,
-) -> Artifact:
-    state = _safe_regular(path, repo, label)
+    manifest: dict[str, ManifestEntry],
+) -> tuple[Artifact, bytes]:
+    raw, state = _read_regular_snapshot(path, repo, label)
     if not started_ns <= state.st_mtime_ns <= completed_ns:
         raise ChangedCodeError(f"{label} is outside Maven build window: {path}")
     relative = path.relative_to(repo).as_posix()
-    return Artifact(relative, hashlib.sha256(path.read_bytes()).hexdigest(), state.st_mtime_ns)
+    digest = hashlib.sha256(raw).hexdigest()
+    expected = manifest.get(relative)
+    if expected != ManifestEntry(
+        digest, state.st_size, state.st_mtime_ns, state.st_dev, state.st_ino
+    ):
+        raise ChangedCodeError(f"{label} does not match post-Maven manifest: {path}")
+    return Artifact(relative, digest, state.st_mtime_ns), raw
 
 
-def _source_artifact(path: Path, repo: Path) -> Artifact:
-    state = _safe_regular(path, repo, "changed production source")
+def _source_artifact(
+    path: Path, repo: Path, manifest: dict[str, ManifestEntry]
+) -> Artifact:
+    raw, state = _read_regular_snapshot(path, repo, "changed production source")
     relative = path.relative_to(repo).as_posix()
-    return Artifact(
-        relative,
-        hashlib.sha256(path.read_bytes()).hexdigest(),
-        state.st_mtime_ns,
-    )
+    digest = hashlib.sha256(raw).hexdigest()
+    expected = manifest.get(relative)
+    if expected != ManifestEntry(
+        digest, state.st_size, state.st_mtime_ns, state.st_dev, state.st_ino
+    ):
+        raise ChangedCodeError(
+            f"changed production source does not match post-Maven manifest: {path}"
+        )
+    return Artifact(relative, digest, state.st_mtime_ns)
 
 
 def _provenance_artifact(path: Path) -> Artifact:
-    state = _safe_regular(path, path.parent, "Maven provenance")
-    return Artifact(
-        path.name,
-        hashlib.sha256(path.read_bytes()).hexdigest(),
-        state.st_mtime_ns,
-    )
+    raw, state = _read_regular_snapshot(path, path.parent, "Maven provenance")
+    return Artifact(path.name, hashlib.sha256(raw).hexdigest(), state.st_mtime_ns)
 
 
 def _counter(element: ET.Element, counter_type: str) -> tuple[int, int]:
@@ -339,10 +433,10 @@ def _counter(element: ET.Element, counter_type: str) -> tuple[int, int]:
     return missed, covered
 
 
-def load_jacoco(path: Path) -> JacocoReport:
+def load_jacoco(raw: bytes, path: Path) -> JacocoReport:
     try:
-        root = ET.parse(path).getroot()
-    except (ET.ParseError, OSError) as error:
+        root = ET.fromstring(raw)
+    except ET.ParseError as error:
         raise ChangedCodeError(f"cannot parse JaCoCo report: {path}") from error
     if root.tag != "report":
         raise ChangedCodeError(f"unexpected JaCoCo root element: {root.tag}")
@@ -430,29 +524,43 @@ def javap_line_tables(
     class_name: str,
     started_ns: int,
     completed_ns: int,
+    manifest: dict[str, ManifestEntry],
+    snapshot_dir: Path,
 ) -> tuple[dict[tuple[str, str, str], set[int]], Artifact]:
     class_file = classes / f"{class_name}.class"
-    artifact = _artifact(class_file, repo, "compiled class", started_ns, completed_ns)
+    artifact, class_bytes = _artifact(
+        class_file,
+        repo,
+        "compiled class",
+        started_ns,
+        completed_ns,
+        manifest,
+    )
     environment = os.environ.copy()
     environment.update({"LC_ALL": "C", "LANG": "C"})
-    result = subprocess.run(
-        [
-            "javap",
-            "-p",
-            "-c",
-            "-s",
-            "-l",
-            "-classpath",
-            str(classes),
-            class_name.replace("/", "."),
-        ],
-        cwd=repo,
-        env=environment,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
+    with tempfile.NamedTemporaryFile(
+        prefix=".changed-code-class-",
+        suffix=".class",
+        dir=snapshot_dir,
+        delete=False,
+    ) as snapshot:
+        snapshot_path = Path(snapshot.name)
+        os.fchmod(snapshot.fileno(), 0o600)
+        snapshot.write(class_bytes)
+        snapshot.flush()
+        os.fsync(snapshot.fileno())
+    try:
+        result = subprocess.run(
+            ["javap", "-p", "-c", "-s", "-l", str(snapshot_path)],
+            cwd=repo,
+            env=environment,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+    finally:
+        snapshot_path.unlink(missing_ok=True)
     if result.returncode != 0:
         raise ChangedCodeError(
             result.stderr.strip() or f"javap failed for {class_name}"
@@ -531,14 +639,16 @@ def analyze(
     base_revision: str,
     head_revision: str,
     provenance_path: Path,
+    manifest_path: Path,
 ) -> AnalysisResult:
     repo = repo.resolve(strict=True)
     base = _resolve(repo, base_revision, "base")
     head = _resolve(repo, head_revision, "head")
     _require_clean_head(repo, head)
-    started_ns, completed_ns, _provenance = _validate_provenance(
+    started_ns, completed_ns, provenance, _raw_provenance, _provenance_state = _validate_provenance(
         provenance_path, base, head
     )
+    manifest = _validate_manifest(manifest_path, provenance, base, head)
     provenance_artifact = _provenance_artifact(provenance_path)
 
     lines: list[LineScore] = []
@@ -568,14 +678,20 @@ def analyze(
         if not (module / "pom.xml").is_file():
             raise ChangedCodeError(f"cannot locate Maven module for {change.path}")
         source_path = repo / change.path
-        artifacts[change.path] = _source_artifact(source_path, repo)
+        artifacts[change.path] = _source_artifact(source_path, repo, manifest)
         report_path = module / "target/site/jacoco/jacoco.xml"
         report_key = report_path.relative_to(repo).as_posix()
         if report_key not in reports:
-            artifacts[report_key] = _artifact(
-                report_path, repo, "JaCoCo report", started_ns, completed_ns
+            report_artifact, report_bytes = _artifact(
+                report_path,
+                repo,
+                "JaCoCo report",
+                started_ns,
+                completed_ns,
+                manifest,
             )
-            reports[report_key] = load_jacoco(report_path)
+            artifacts[report_key] = report_artifact
+            reports[report_key] = load_jacoco(report_bytes, report_path)
         report = reports[report_key]
         source_key = (package, source_name)
         if source_key not in report.source_lines:
@@ -608,6 +724,8 @@ def analyze(
                         class_name,
                         started_ns,
                         completed_ns,
+                        manifest,
+                        provenance_path.parent.resolve(strict=True),
                     )
                     javap_cache[cache_key] = tables
                     artifacts[class_artifact.path] = class_artifact
@@ -777,6 +895,7 @@ def main(arguments: list[str]) -> int:
     parser.add_argument("--base", required=True)
     parser.add_argument("--head", required=True)
     parser.add_argument("--provenance", required=True)
+    parser.add_argument("--manifest", required=True)
     parser.add_argument("--run-dir", required=True)
     parser.add_argument("--details", required=True)
     parser.add_argument("--summary", required=True)
@@ -788,6 +907,7 @@ def main(arguments: list[str]) -> int:
             options.base,
             options.head,
             Path(options.provenance),
+            Path(options.manifest),
         )
         summary = write_evidence(
             result,

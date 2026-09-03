@@ -7,6 +7,7 @@ for required in \
   QUALITY_GATE_PROFILE \
   QUALITY_GATE_RUN_DIR \
   QUALITY_GATE_MAVEN_PROVENANCE \
+  QUALITY_GATE_MAVEN_MANIFEST \
   QUALITY_GATE_SUMMARY_PATH; do
   if [[ -z "${!required:-}" ]]; then
     printf 'changed-code evidence requires %s\n' "$required" >&2
@@ -27,6 +28,7 @@ exec python3 "$REPOSITORY_ROOT/tools/quality/changed_code.py" \
   --base "$QUALITY_GATE_BASE" \
   --head "$QUALITY_GATE_HEAD" \
   --provenance "$QUALITY_GATE_MAVEN_PROVENANCE" \
+  --manifest "$QUALITY_GATE_MAVEN_MANIFEST" \
   --run-dir "$QUALITY_GATE_RUN_DIR" \
   --details "$QUALITY_GATE_RUN_DIR/changed-code.json" \
   --summary "$QUALITY_GATE_SUMMARY_PATH"

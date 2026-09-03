@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -12,6 +13,7 @@ import unittest
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "changed_code.py"
+REPOSITORY_ROOT = MODULE_PATH.parents[2]
 SPEC = importlib.util.spec_from_file_location("changed_code", MODULE_PATH)
 assert SPEC and SPEC.loader
 changed_code = importlib.util.module_from_spec(SPEC)
@@ -118,6 +120,35 @@ class ChangedCodeFixture:
         started_ns: int,
         completed_ns: int,
     ) -> Path:
+        artifacts: dict[str, dict[str, int | str]] = {}
+        candidates = [
+            path
+            for path in self.root.rglob("*")
+            if path.is_file()
+            and (
+                "/src/main/java/" in "/" + path.relative_to(self.root).as_posix()
+                or path.name == "jacoco.xml"
+                or path.suffix == ".class"
+            )
+        ]
+        for artifact in sorted(candidates):
+            state = artifact.stat()
+            relative = artifact.relative_to(self.root).as_posix()
+            artifacts[relative] = {
+                "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+                "size": state.st_size,
+                "mtime_ns": state.st_mtime_ns,
+                "device": state.st_dev,
+                "inode": state.st_ino,
+            }
+        manifest_text = json.dumps(
+            {"schema": 1, "base": base, "head": head, "artifacts": artifacts},
+            indent=2,
+            sort_keys=True,
+        ) + "\n"
+        manifest = self.evidence / "maven-artifacts.json"
+        manifest.write_text(manifest_text, encoding="utf-8")
+        manifest.chmod(0o600)
         path = self.evidence / "maven-provenance.json"
         path.write_text(
             json.dumps(
@@ -128,6 +159,10 @@ class ChangedCodeFixture:
                     "started_ns": started_ns,
                     "completed_ns": completed_ns,
                     "status": "PASS",
+                    "artifactManifest": {
+                        "name": manifest.name,
+                        "sha256": hashlib.sha256(manifest_text.encode()).hexdigest(),
+                    },
                 }
             )
             + "\n",
@@ -142,6 +177,7 @@ class ChangedCodeFixture:
             base,
             head,
             self.evidence / "maven-provenance.json",
+            self.evidence / "maven-artifacts.json",
         )
 
 
@@ -289,6 +325,48 @@ class ChangedCodeAnalysisTest(unittest.TestCase):
         self.assertEqual(0, result.scoreable_lines)
         self.assertEqual("non-executable production Java line", result.exclusions[0].reason)
 
+    def test_post_build_mutation_and_path_replacement_fail_manifest_binding(self) -> None:
+        head, report = self.fixture.add_java_change(
+            "services/sample/sample-service/src/main/java/example/domain/Policy.java"
+        )
+        base = self.fixture.git("rev-parse", "HEAD^")
+        original = report.read_bytes()
+        original_state = report.stat()
+        report.write_bytes(original.replace(b'covered="1"', b'covered="0"'))
+        os.utime(
+            report,
+            ns=(original_state.st_atime_ns, original_state.st_mtime_ns),
+        )
+        with self.assertRaisesRegex(
+            changed_code.ChangedCodeError, "does not match post-Maven manifest"
+        ):
+            self.fixture.analyze(base, head)
+
+        report.unlink()
+        report.write_bytes(original)
+        os.utime(
+            report,
+            ns=(original_state.st_atime_ns, original_state.st_mtime_ns),
+        )
+        with self.assertRaisesRegex(
+            changed_code.ChangedCodeError, "does not match post-Maven manifest"
+        ):
+            self.fixture.analyze(base, head)
+
+    def test_symlinked_analysis_artifact_fails_before_consumption(self) -> None:
+        head, report = self.fixture.add_java_change(
+            "services/sample/sample-service/src/main/java/example/domain/Policy.java"
+        )
+        base = self.fixture.git("rev-parse", "HEAD^")
+        target = self.fixture.evidence / "report-copy.xml"
+        target.write_bytes(report.read_bytes())
+        report.unlink()
+        report.symlink_to(target)
+        with self.assertRaisesRegex(
+            changed_code.ChangedCodeError, "regular non-symlink"
+        ):
+            self.fixture.analyze(base, head)
+
     def test_summary_is_bounded_and_report_only(self) -> None:
         head, _report = self.fixture.add_java_change(
             "services/sample/sample-service/src/main/java/example/domain/Policy.java",
@@ -327,6 +405,9 @@ class ChangedCodeAnalysisTest(unittest.TestCase):
                 "QUALITY_GATE_MAVEN_PROVENANCE": str(
                     self.fixture.evidence / "maven-provenance.json"
                 ),
+                "QUALITY_GATE_MAVEN_MANIFEST": str(
+                    self.fixture.evidence / "maven-artifacts.json"
+                ),
                 "QUALITY_GATE_SUMMARY_PATH": str(summary),
             }
         )
@@ -354,6 +435,263 @@ class ChangedCodeAnalysisTest(unittest.TestCase):
         self.assertEqual(0o600, detail.stat().st_mode & 0o777)
         self.assertEqual(0o600, summary.stat().st_mode & 0o777)
         self.assertIn("numeric policy: report-only", summary.read_text())
+
+
+class RealMavenNormalCalibrationTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name) / "real-normal"
+        self.root.mkdir()
+        self.git("init", "-q")
+        self.git("config", "user.email", "real-calibration@example.invalid")
+        self.git("config", "user.name", "Real Calibration Fixture")
+        self._install_gate()
+        self._install_maven_project()
+        self.commit("baseline real calibration project")
+
+    def git(self, *arguments: str) -> str:
+        return subprocess.run(
+            ["git", *arguments],
+            cwd=self.root,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout.strip()
+
+    def write(self, relative: str, content: str) -> Path:
+        path = self.root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        return path
+
+    def commit(self, message: str) -> str:
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", message)
+        return self.git("rev-parse", "HEAD")
+
+    def _install_gate(self) -> None:
+        for relative in (
+            "tools/quality/quality_gate.py",
+            "tools/quality/quality-gate.sh",
+            "tools/quality/changed_code.py",
+            "tools/quality/checks.d/normal/40-changed-code",
+            "mvnw",
+        ):
+            target = self.root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(REPOSITORY_ROOT / relative, target)
+        shutil.copytree(REPOSITORY_ROOT / ".mvn", self.root / ".mvn")
+        runner = self.write(
+            "tools/quality/test/run-tests.sh",
+            "#!/usr/bin/env bash\nset -euo pipefail\nexit 0\n",
+        )
+        runner.chmod(0o755)
+        self.write(".gitignore", ".quality-gate/\ntarget/\n")
+
+    def _install_maven_project(self) -> None:
+        self.write(
+            "pom.xml",
+            """<project xmlns="http://maven.apache.org/POM/4.0.0"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>example</groupId><artifactId>fixture-parent</artifactId><version>1</version>
+  <packaging>pom</packaging><modules><module>sample</module></modules>
+</project>
+""",
+        )
+        self.write(
+            "sample/pom.xml",
+            """<project xmlns="http://maven.apache.org/POM/4.0.0"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <parent><groupId>example</groupId><artifactId>fixture-parent</artifactId><version>1</version></parent>
+  <artifactId>sample</artifactId>
+  <properties><maven.compiler.release>17</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding></properties>
+  <dependencies><dependency><groupId>org.junit.jupiter</groupId>
+    <artifactId>junit-jupiter</artifactId><version>6.0.3</version><scope>test</scope>
+  </dependency></dependencies>
+  <build><plugins>
+    <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-compiler-plugin</artifactId><version>3.15.0</version></plugin>
+    <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId><version>3.5.6</version></plugin>
+    <plugin><groupId>org.jacoco</groupId><artifactId>jacoco-maven-plugin</artifactId><version>0.8.15</version>
+      <executions><execution><goals><goal>prepare-agent</goal></goals></execution>
+        <execution><id>report</id><phase>verify</phase><goals><goal>report</goal></goals></execution>
+      </executions></plugin>
+  </plugins></build>
+</project>
+""",
+        )
+        self.write(
+            "sample/src/main/java/example/domain/DomainPolicy.java",
+            """package example.domain;
+import java.util.function.IntSupplier;
+public final class DomainPolicy {
+    private final int offset;
+    public DomainPolicy(int offset) { this.offset = offset; }
+    public int decide(int value) { return value + offset; }
+    public String decide(String value) { return value.trim(); }
+    public IntSupplier supplier() { return () -> offset; }
+}
+""",
+        )
+        self.write(
+            "sample/src/main/java/example/adapter/Store.java",
+            """package example.adapter;
+public final class Store {
+    public int save(int value) { return value; }
+}
+""",
+        )
+        self.write(
+            "sample/src/main/java/example/config/SampleConfiguration.java",
+            """package example.config;
+public final class SampleConfiguration {
+    public int assemble(int value) { return value; }
+}
+""",
+        )
+        self.write(
+            "sample/src/test/java/example/CalibrationTest.java",
+            """package example;
+import example.adapter.Store;
+import example.config.SampleConfiguration;
+import example.domain.DomainPolicy;
+import org.junit.jupiter.api.Test;
+final class CalibrationTest {
+    @Test void exercisesAllShapes() {
+        DomainPolicy policy = new DomainPolicy(1);
+        policy.decide(2); policy.decide(" value "); policy.supplier().getAsInt();
+        new Store().save(2); new SampleConfiguration().assemble(2);
+    }
+}
+""",
+        )
+        self.write("README.md", "# Real calibration fixture\n")
+
+    def _normal(self, base: str, head: str) -> tuple[subprocess.CompletedProcess[str], Path]:
+        result = subprocess.run(
+            [
+                str(self.root / "tools/quality/quality-gate.sh"),
+                "normal",
+                "--base",
+                base,
+                "--head",
+                head,
+                "--ref",
+                "real-calibration",
+            ],
+            cwd=self.root,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        latest = (self.root / ".quality-gate/latest").read_text().strip()
+        return result, self.root / ".quality-gate/runs" / latest
+
+    def _change_and_run(
+        self, relative: str, old: str, new: str, message: str
+    ) -> tuple[dict[str, object], str]:
+        base = self.git("rev-parse", "HEAD")
+        path = self.root / relative
+        path.write_text(path.read_text().replace(old, new), encoding="utf-8")
+        head = self.commit(message)
+        result, evidence = self._normal(base, head)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        summary = (evidence / "extension-summary-000.txt").read_text()
+        self.assertLessEqual(len(summary.encode()), changed_code.MAX_EXTENSION_SUMMARY_BYTES)
+        detail = json.loads((evidence / "changed-code.json").read_text())
+        return detail, summary
+
+    def test_four_real_normal_calibrations_and_method_shapes(self) -> None:
+        domain, domain_summary = self._change_and_run(
+            "sample/src/main/java/example/domain/DomainPolicy.java",
+            "this.offset = offset; }\n"
+            "    public int decide(int value) { return value + offset; }\n"
+            "    public String decide(String value) { return value.trim(); }\n"
+            "    public IntSupplier supplier() { return () -> offset; }",
+            "this.offset = Math.max(0, offset); }\n"
+            "    public int decide(int value) { return value + offset + 1; }\n"
+            "    public String decide(String value) { return value.strip(); }\n"
+            "    public IntSupplier supplier() { return () -> offset + 1; }",
+            "calibrate domain",
+        )
+        identities = {
+            (method["name"], method["descriptor"])
+            for method in domain["methods"]
+        }
+        self.assertIn(("<init>", "(I)V"), identities)
+        self.assertIn(("decide", "(I)I"), identities)
+        self.assertIn(
+            ("decide", "(Ljava/lang/String;)Ljava/lang/String;"), identities
+        )
+        self.assertTrue(any(name.startswith("lambda$") for name, _desc in identities))
+        self.assertIn(
+            "scoreable scope: 4 changed executable line(s), 5 changed method(s)",
+            domain_summary,
+        )
+        self.assertIn("changed-line coverage: 100.00% (4/4)", domain_summary)
+        self.assertIn("highest changed-method CRAP: 1.000", domain_summary)
+
+        _adapter, adapter_summary = self._change_and_run(
+            "sample/src/main/java/example/adapter/Store.java",
+            "return value;",
+            "return value + 1;",
+            "calibrate adapter",
+        )
+        self.assertIn(
+            "scoreable scope: 1 changed executable line(s), 1 changed method(s)",
+            adapter_summary,
+        )
+        self.assertIn("changed-line coverage: 100.00% (1/1)", adapter_summary)
+        self.assertIn("highest changed-method CRAP: 1.000", adapter_summary)
+        _config, config_summary = self._change_and_run(
+            "sample/src/main/java/example/config/SampleConfiguration.java",
+            "return value;",
+            "return value + 1;",
+            "calibrate configuration",
+        )
+        self.assertIn(
+            "scoreable scope: 1 changed executable line(s), 1 changed method(s)",
+            config_summary,
+        )
+        self.assertIn("changed-line coverage: 100.00% (1/1)", config_summary)
+        self.assertIn("highest changed-method CRAP: 1.000", config_summary)
+        _docs, docs_summary = self._change_and_run(
+            "README.md",
+            "# Real calibration fixture",
+            "# Real calibration fixture updated",
+            "calibrate docs",
+        )
+        self.assertIn("0 changed executable line(s)", docs_summary)
+        self.assertIn("documentation or build change=1", docs_summary)
+
+    def test_real_post_build_report_mutation_is_rejected(self) -> None:
+        mutator = self.write(
+            "tools/quality/checks.d/normal/35-mutate-report",
+            "#!/usr/bin/env bash\n"
+            "set -euo pipefail\n"
+            "python3 -c 'import os; from pathlib import Path; "
+            "path=Path(\"sample/target/site/jacoco/jacoco.xml\"); "
+            "state=path.stat(); data=path.read_bytes(); "
+            "path.write_bytes(data.replace(b\"covered=\\\"1\\\"\", b\"covered=\\\"0\\\"\", 1)); "
+            "os.utime(path, ns=(state.st_atime_ns, state.st_mtime_ns))'\n",
+        )
+        mutator.chmod(0o755)
+        base = self.git("rev-parse", "HEAD")
+        source = self.root / "sample/src/main/java/example/adapter/Store.java"
+        source.write_text(
+            source.read_text().replace("return value;", "return value + 2;"),
+            encoding="utf-8",
+        )
+        head = self.commit("mutate real report after Maven")
+        result, _evidence = self._normal(base, head)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("extension:normal/40-changed-code: FAIL", result.stdout)
+        self.assertIn("does not match post-Maven manifest", result.stdout)
 
 
 if __name__ == "__main__":

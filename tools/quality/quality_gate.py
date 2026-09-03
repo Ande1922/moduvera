@@ -14,6 +14,7 @@ import contextlib
 import ctypes
 import datetime as dt
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -27,6 +28,7 @@ import sys
 import threading
 import time
 from typing import Callable, NamedTuple
+import unicodedata
 import urllib.parse
 
 
@@ -40,6 +42,8 @@ MAX_OPEN_CREDENTIAL_CHARS = 256 * 1024
 MAX_SUMMARY_BYTES = 8192
 MAX_EXTENSION_SUMMARY_BYTES = 4096
 MAX_EXTENSION_SUMMARY_LINES = 12
+MAX_EXTENSION_SUMMARIES_BYTES = 6144
+MAX_EXTENSION_SUMMARIES_LINES = 24
 EVIDENCE_LOCK_SECONDS = 10.0
 PROCESS_GROUP_TERM_SECONDS = 2.0
 PROCESS_GROUP_KILL_SECONDS = 5.0
@@ -1891,6 +1895,84 @@ def extension_commands(repo: Path, head: str, groups: tuple[str, ...]) -> list[t
     return commands
 
 
+def _artifact_snapshot(path: Path, repo: Path, label: str) -> tuple[bytes, os.stat_result]:
+    try:
+        path_state = path.lstat()
+    except FileNotFoundError as error:
+        raise GateError(f"missing {label}: {path}") from error
+    if stat.S_ISLNK(path_state.st_mode) or not stat.S_ISREG(path_state.st_mode):
+        raise GateError(f"{label} must be a regular non-symlink file: {path}")
+    if not path.resolve(strict=True).is_relative_to(repo.resolve(strict=True)):
+        raise GateError(f"{label} escapes repository: {path}")
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or (opened.st_dev, opened.st_ino)
+            != (path_state.st_dev, path_state.st_ino)
+        ):
+            raise GateError(f"{label} changed during no-follow open: {path}")
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        after = os.fstat(descriptor)
+        if (
+            (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+            != (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns)
+        ):
+            raise GateError(f"{label} changed while being read: {path}")
+        return b"".join(chunks), after
+    finally:
+        os.close(descriptor)
+
+
+def build_maven_artifact_manifest(repo: Path, base: str, head: str) -> str:
+    modules: set[Path] = set()
+    source_paths: set[Path] = set()
+    marker = "/src/main/java/"
+    for status_text, paths in changed_entries(repo, base, head):
+        path_text = paths[-1]
+        normalized = "/" + path_text
+        if status_text[:1] == "D" or marker not in normalized or not path_text.endswith(".java"):
+            continue
+        module_text = path_text.split(marker, 1)[0]
+        modules.add(repo / module_text)
+        source_paths.add(repo / path_text)
+
+    candidates = set(source_paths)
+    for module in modules:
+        candidates.add(module / "target/site/jacoco/jacoco.xml")
+        classes = module / "target/classes"
+        try:
+            classes_state = classes.lstat()
+        except FileNotFoundError as error:
+            raise GateError(f"missing compiled classes directory: {classes}") from error
+        if stat.S_ISLNK(classes_state.st_mode) or not stat.S_ISDIR(classes_state.st_mode):
+            raise GateError(f"compiled classes path must be a real directory: {classes}")
+        candidates.update(classes.rglob("*.class"))
+
+    artifacts: dict[str, dict[str, int | str]] = {}
+    for path in sorted(candidates):
+        payload, state = _artifact_snapshot(path, repo, "Maven analysis artifact")
+        relative = path.relative_to(repo).as_posix()
+        artifacts[relative] = {
+            "sha256": hashlib.sha256(payload).hexdigest(),
+            "size": state.st_size,
+            "mtime_ns": state.st_mtime_ns,
+            "device": state.st_dev,
+            "inode": state.st_ino,
+        }
+    return json.dumps(
+        {"schema": 1, "base": base, "head": head, "artifacts": artifacts},
+        indent=2,
+        sort_keys=True,
+    ) + "\n"
+
+
 def read_extension_summary(path: Path, run_dir: Path) -> list[str]:
     """Read a small, private extension result without trusting terminal output."""
     state = _validate_regular(path, run_dir)
@@ -1904,6 +1986,13 @@ def read_extension_summary(path: Path, run_dir: Path) -> list[str]:
         text = payload.decode("utf-8")
     except UnicodeDecodeError as error:
         raise GateError(f"extension summary is not UTF-8: {path.name}") from error
+    for character in text:
+        if character in {"\n", "\t"}:
+            continue
+        if character.isspace() and character != " ":
+            raise GateError(f"extension summary contains unsafe whitespace: {path.name}")
+        if unicodedata.category(character).startswith("C"):
+            raise GateError(f"extension summary contains unsafe controls: {path.name}")
     lines = redact(text).splitlines()
     if len(lines) > MAX_EXTENSION_SUMMARY_LINES:
         raise GateError(f"extension summary has too many lines: {path.name}")
@@ -1915,6 +2004,22 @@ def read_extension_summary(path: Path, run_dir: Path) -> list[str]:
             )
         sanitized.append(line.replace("\t", "    "))
     return sanitized
+
+
+def add_extension_summary(
+    summaries: list[tuple[str, list[str]]], name: str, lines: list[str]
+) -> None:
+    candidate = [*summaries, (name, lines)]
+    line_count = sum(len(summary_lines) for _summary_name, summary_lines in candidate)
+    byte_count = sum(
+        len((summary_name + "\n" + "\n".join(summary_lines)).encode("utf-8"))
+        for summary_name, summary_lines in candidate
+    )
+    if line_count > MAX_EXTENSION_SUMMARIES_LINES:
+        raise GateError("successful extension summaries exceed global line budget")
+    if byte_count > MAX_EXTENSION_SUMMARIES_BYTES:
+        raise GateError("successful extension summaries exceed global byte budget")
+    summaries.append((name, lines))
 
 
 def internal_check(arguments: list[str]) -> int:
@@ -2018,6 +2123,9 @@ def gate(arguments: list[str]) -> int:
                 "QUALITY_GATE_MAVEN_PROVENANCE": str(
                     evidence.run_dir / "maven-provenance.json"
                 ),
+                "QUALITY_GATE_MAVEN_MANIFEST": str(
+                    evidence.run_dir / "maven-artifacts.json"
+                ),
             }
         )
         core = str(checkout / "tools/quality/quality_gate.py")
@@ -2105,6 +2213,14 @@ def gate(arguments: list[str]) -> int:
             if not maven_succeeded:
                 failure = "step failed: maven-clean-verify"
             else:
+                manifest_text = build_maven_artifact_manifest(
+                    checkout, base, head
+                )
+                _replace_private_text(
+                    Path(environment["QUALITY_GATE_MAVEN_MANIFEST"]),
+                    evidence.run_dir,
+                    manifest_text,
+                )
                 _replace_private_text(
                     Path(environment["QUALITY_GATE_MAVEN_PROVENANCE"]),
                     evidence.run_dir,
@@ -2125,6 +2241,12 @@ def gate(arguments: list[str]) -> int:
                             "started_ns": maven_started_ns,
                             "completed_ns": maven_completed_ns,
                             "status": "PASS",
+                            "artifactManifest": {
+                                "name": "maven-artifacts.json",
+                                "sha256": hashlib.sha256(
+                                    manifest_text.encode("utf-8")
+                                ).hexdigest(),
+                            },
                         },
                         indent=2,
                         sort_keys=True,
@@ -2150,13 +2272,12 @@ def gate(arguments: list[str]) -> int:
                         failure = f"step failed: {name}"
                         break
                     if _lstat(summary_path) is not None:
-                        extension_summaries.append(
-                            (
-                                name,
-                                read_extension_summary(
-                                    summary_path, evidence.run_dir
-                                ),
-                            )
+                        add_extension_summary(
+                            extension_summaries,
+                            name,
+                            read_extension_summary(
+                                summary_path, evidence.run_dir
+                            ),
                         )
         del entries
     except GateInterrupted as interrupted:

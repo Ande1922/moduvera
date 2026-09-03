@@ -589,8 +589,11 @@ class QualityGateEvidenceTest(unittest.TestCase):
         self.assertIn("changed-line coverage: 66.67% (2/3)", result.stdout)
         self.assertIn("highest changed-method CRAP: 4.000", result.stdout)
         provenance = self.latest_run() / "maven-provenance.json"
+        manifest = self.latest_run() / "maven-artifacts.json"
         self.assertEqual(0o600, stat.S_IMODE(provenance.stat().st_mode))
+        self.assertEqual(0o600, stat.S_IMODE(manifest.stat().st_mode))
         self.assertEqual(head, json.loads(provenance.read_text())["head"])
+        self.assertEqual(head, json.loads(manifest.read_text())["head"])
 
     def test_successful_extension_summary_is_bounded_and_redacted(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -608,6 +611,73 @@ class QualityGateEvidenceTest(unittest.TestCase):
             )
             with self.assertRaisesRegex(quality_gate.GateError, "bounded size"):
                 quality_gate.read_extension_summary(summary_path, run_dir)
+
+    def test_successful_extension_summary_rejects_terminal_controls(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary)
+            run_dir.chmod(0o700)
+            summary_path = run_dir / "extension-summary.txt"
+            for name, character in (
+                ("c0", "\x1b"),
+                ("del", "\x7f"),
+                ("c1", "\x85"),
+                ("bidi", "\u202e"),
+                ("unicode-line-separator", "\u2028"),
+            ):
+                with self.subTest(name=name):
+                    summary_path.write_text(
+                        f"safe{character}sensitive-payload", encoding="utf-8"
+                    )
+                    summary_path.chmod(0o600)
+                    with self.assertRaises(quality_gate.GateError) as caught:
+                        quality_gate.read_extension_summary(summary_path, run_dir)
+                    self.assertNotIn("sensitive-payload", str(caught.exception))
+
+    def test_successful_extension_summaries_have_one_global_budget(self) -> None:
+        summaries: list[tuple[str, list[str]]] = []
+        quality_gate.add_extension_summary(
+            summaries,
+            "extension:normal/10-first",
+            ["a" * 3100],
+        )
+        with self.assertRaisesRegex(quality_gate.GateError, "global byte budget"):
+            quality_gate.add_extension_summary(
+                summaries,
+                "extension:normal/20-second",
+                ["b" * 3100],
+            )
+        self.assertEqual(1, len(summaries))
+
+    def test_normal_gate_fails_closed_on_aggregate_extension_summary_size(self) -> None:
+        self.install_gate()
+        mvnw = self.fixture.root / "mvnw"
+        mvnw.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+        mvnw.chmod(0o755)
+        for filename, character in (("30-first", "a"), ("40-changed-code", "b")):
+            extension = (
+                self.fixture.root / f"tools/quality/checks.d/normal/{filename}"
+            )
+            extension.parent.mkdir(parents=True, exist_ok=True)
+            extension.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                f"python3 -c 'import os; open(os.environ[\"QUALITY_GATE_SUMMARY_PATH\"], \"w\").write(\"{character}\" * 3100)'\n"
+                "chmod 600 \"$QUALITY_GATE_SUMMARY_PATH\"\n",
+                encoding="utf-8",
+            )
+            extension.chmod(0o755)
+        self.base = self.fixture.commit("install bounded normal extensions")
+        self.fixture.write("src.txt", "code\n")
+        head = self.fixture.commit("code")
+        result = self.run_gate("normal", "--base", self.base, "--head", head)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("extension:normal/30-first: PASS", result.stdout)
+        self.assertIn("extension:normal/40-changed-code: PASS", result.stdout)
+        self.assertIn("global byte budget", result.stdout)
+        self.assertLessEqual(
+            (self.latest_run() / "summary.txt").stat().st_size,
+            quality_gate.MAX_SUMMARY_BYTES,
+        )
 
     def test_public_entry_rejects_docs_only_mode(self) -> None:
         self.install_gate()
