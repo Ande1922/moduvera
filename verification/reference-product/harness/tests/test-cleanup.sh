@@ -17,6 +17,13 @@ mkdir "$STUB_BIN"
 cat > "$STUB_BIN/docker" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ " $* " == *" ps "* && "${STUB_CLEANUP_MODE:-}" == "diagnostics-hang" ]]; then
+  echo "$$" >> "$STUB_STATE_DIR/diagnostics-pids"
+  (trap '' INT TERM; while true; do sleep 1; done) &
+  echo "$!" >> "$STUB_STATE_DIR/diagnostics-pids"
+  trap '' INT TERM
+  while true; do sleep 1; done
+fi
 if [[ " $* " == *" logs postgres "* ]]; then
   echo "PostgreSQL init process complete"
   exit 0
@@ -105,7 +112,8 @@ run_case() {
     STUB_STATE_DIR="$case_dir/state" STUB_CLEANUP_MODE="$cleanup_mode" \
     STUB_PRIMARY_FAILURE="$primary_failure" STUB_JAVA_MODE="$java_mode" RUN_SLOT=50 \
     REFERENCE_PREFLIGHT_ONLY=0 REFERENCE_KEEP_RUNNING=0 \
-    REFERENCE_APP_STOP_TIMEOUT_SECONDS=1 REFERENCE_COMPOSE_DOWN_TIMEOUT_SECONDS=2 \
+    REFERENCE_APP_STOP_TIMEOUT_SECONDS=1 REFERENCE_DIAGNOSTICS_TIMEOUT_SECONDS=1 \
+    REFERENCE_COMPOSE_DOWN_TIMEOUT_SECONDS=2 \
     REFERENCE_LOCK_ROOT="$case_dir/locks" REFERENCE_PORT_MANIFEST="$case_dir/manifest.json" \
     "$HARNESS_DIR/run-topology.sh" microservices >"$case_dir/out" 2>"$case_dir/err"
   status=$?
@@ -191,6 +199,69 @@ while IFS= read -r pid; do
     fail "compose process $pid survived after its group leader exited on TERM"
   fi
 done < "$TEST_DIR/compose-leader-exits/state/docker-leader-exits-pids"
+
+EARLY_LEADER="$TEST_DIR/early-leader.py"
+cat > "$EARLY_LEADER" <<'PY'
+#!/usr/bin/env python3
+import os
+import pathlib
+import signal
+import time
+
+descendant = os.fork()
+if descendant == 0:
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    while True:
+        time.sleep(1)
+pathlib.Path(os.environ["EARLY_DESCENDANT_PID_FILE"]).write_text(
+    str(descendant), encoding="ascii"
+)
+PY
+chmod +x "$EARLY_LEADER"
+EARLY_DESCENDANT_PID_FILE="$TEST_DIR/early-descendant-pid" \
+  python3 "$HARNESS_DIR/bounded_process.py" 2 -- "$EARLY_LEADER" \
+  >"$TEST_DIR/early-leader.out" 2>"$TEST_DIR/early-leader.err" \
+  || fail "bounded wrapper did not preserve a successful leader status after draining its group"
+EARLY_DESCENDANT_PID="$(<"$TEST_DIR/early-descendant-pid")"
+for _ in {1..40}; do
+  if ! kill -0 "$EARLY_DESCENDANT_PID" 2>/dev/null; then break; fi
+  sleep 0.05
+done
+if kill -0 "$EARLY_DESCENDANT_PID" 2>/dev/null; then
+  fail "normal-exit command descendant survived bounded process-group drain"
+fi
+
+run_case diagnostics-hang diagnostics-hang 1
+[[ "$(<"$TEST_DIR/diagnostics-hang/status")" == "23" ]] \
+  || fail "hung diagnostics replaced the primary failure status"
+(( $(<"$TEST_DIR/diagnostics-hang/elapsed") < 6 )) \
+  || fail "hung diagnostics exceeded the bounded cleanup budget"
+grep -F "Reference diagnostics exceeded the 1s wall-clock deadline" \
+  "$TEST_DIR/diagnostics-hang/err" >/dev/null \
+  || fail "hung diagnostics timeout evidence is missing"
+[[ -f "$TEST_DIR/diagnostics-hang/state/compose-down-finished" ]] \
+  || fail "hung diagnostics prevented docker compose down"
+[[ -z "$(find "$TEST_DIR/diagnostics-hang/locks" -mindepth 1 -maxdepth 1 -print -quit)" ]] \
+  || fail "hung diagnostics prevented owned-lock release"
+DIAGNOSTICS_RUN_DIR="$($REAL_PYTHON - "$TEST_DIR/diagnostics-hang/manifest.json" <<'PY'
+import json
+import pathlib
+import sys
+
+print(json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))["resources"]["tempDirectory"])
+PY
+)"
+[[ ! -e "$DIAGNOSTICS_RUN_DIR" ]] || fail "hung diagnostics leaked temporary run directory"
+while IFS= read -r pid; do
+  for _ in {1..40}; do
+    if ! kill -0 "$pid" 2>/dev/null; then break; fi
+    sleep 0.05
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    fail "hung diagnostics process $pid survived watchdog escalation"
+  fi
+done < "$TEST_DIR/diagnostics-hang/state/diagnostics-pids"
 
 run_case lock-failure lock-failure 0
 [[ "$(<"$TEST_DIR/lock-failure/status")" == "70" ]] \

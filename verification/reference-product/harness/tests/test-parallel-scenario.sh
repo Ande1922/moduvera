@@ -144,6 +144,23 @@ case "${STUB_RUNNER_MODE:-success}:$topology" in
     echo "Reference cleanup failure: injected runner cleanup failure" >&2
     exit 70
     ;;
+  early-descendant:*)
+    python3 - "$STUB_STATE_DIR/$topology.early-descendant-pid" <<'PY'
+import os
+import pathlib
+import signal
+import sys
+import time
+
+descendant = os.fork()
+if descendant == 0:
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    while True:
+        time.sleep(1)
+pathlib.Path(sys.argv[1]).write_text(str(descendant), encoding="ascii")
+PY
+    ;;
   hang:*)
     trap '' INT TERM
     echo "$$" > "$STUB_STATE_DIR/$topology.wrapper-pid"
@@ -168,10 +185,21 @@ import signal
 import sys
 import time
 
-if os.environ.get("STUB_VALIDATOR_MODE") != "hang":
+mode = os.environ.get("STUB_VALIDATOR_MODE")
+state = pathlib.Path(os.environ["STUB_STATE_DIR"])
+if mode == "early-descendant":
+    descendant = os.fork()
+    if descendant == 0:
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        while True:
+            time.sleep(1)
+    (state / "validator.early-descendant-pid").write_text(
+        str(descendant), encoding="ascii"
+    )
+if mode != "hang":
     os.execv(sys.executable, [sys.executable, os.environ["REAL_VALIDATOR"], *sys.argv[1:]])
 
-state = pathlib.Path(os.environ["STUB_STATE_DIR"])
 signal.signal(signal.SIGINT, signal.SIG_IGN)
 signal.signal(signal.SIGTERM, signal.SIG_IGN)
 (state / "validator.wrapper-pid").write_text(str(os.getpid()), encoding="ascii")
@@ -187,6 +215,7 @@ chmod +x "$STUB_VALIDATOR"
 
 run_supervisor() {
   local name="$1" mode="$2" expected_status="$3" evidence_kind="$4"
+  local validator="${5:-$HARNESS_DIR/validate-parallel-scenario.py}"
   local case_dir="$TEST_DIR/$name" status
   mkdir "$case_dir" "$case_dir/state" "$case_dir/tmp"
   set +e
@@ -194,13 +223,13 @@ run_supervisor() {
     STUB_STATE_DIR="$case_dir/state" STUB_RUNNER_MODE="$mode" \
       REFERENCE_PARALLEL_EVIDENCE_DIR="$case_dir/evidence" \
       python3 "$HARNESS_DIR/parallel_supervisor.py" \
-        --runner "$STUB_RUNNER" --validator "$HARNESS_DIR/validate-parallel-scenario.py" \
+        --runner "$STUB_RUNNER" --validator "$validator" \
         20 21 >"$case_dir/out" 2>"$case_dir/err"
   else
     env -u REFERENCE_PARALLEL_EVIDENCE_DIR -u REFERENCE_KEEP_PARALLEL_EVIDENCE \
       STUB_STATE_DIR="$case_dir/state" STUB_RUNNER_MODE="$mode" TMPDIR="$case_dir/tmp" \
       python3 "$HARNESS_DIR/parallel_supervisor.py" \
-        --runner "$STUB_RUNNER" --validator "$HARNESS_DIR/validate-parallel-scenario.py" \
+        --runner "$STUB_RUNNER" --validator "$validator" \
         20 21 >"$case_dir/out" 2>"$case_dir/err"
   fi
   status=$?
@@ -218,6 +247,26 @@ grep -F 'Parallel reference product verification: PASS' "$TEST_DIR/success/out" 
 run_supervisor temporary-success success 0 temporary
 [[ -z "$(find "$TEST_DIR/temporary-success/tmp" -mindepth 1 -maxdepth 1 -print -quit)" ]] \
   || fail "successful temporary evidence was not removed"
+
+REFERENCE_PARALLEL_TERM_TIMEOUT_SECONDS=0.2 \
+  run_supervisor runner-early-descendant early-descendant 0 explicit
+for pid_file in "$TEST_DIR/runner-early-descendant/state"/*.early-descendant-pid; do
+  pid="$(<"$pid_file")"
+  for _ in {1..40}; do kill -0 "$pid" 2>/dev/null || break; sleep 0.05; done
+  if kill -0 "$pid" 2>/dev/null; then
+    fail "successful runner descendant $pid survived process-group drain"
+  fi
+done
+
+STUB_VALIDATOR_MODE=early-descendant \
+  REAL_VALIDATOR="$HARNESS_DIR/validate-parallel-scenario.py" \
+  REFERENCE_PARALLEL_TERM_TIMEOUT_SECONDS=0.2 \
+  run_supervisor validator-early-descendant success 0 explicit "$STUB_VALIDATOR"
+VALIDATOR_EARLY_PID="$(<"$TEST_DIR/validator-early-descendant/state/validator.early-descendant-pid")"
+for _ in {1..40}; do kill -0 "$VALIDATOR_EARLY_PID" 2>/dev/null || break; sleep 0.05; done
+if kill -0 "$VALIDATOR_EARLY_PID" 2>/dev/null; then
+  fail "successful validator descendant $VALIDATOR_EARLY_PID survived process-group drain"
+fi
 
 run_supervisor microservices-failure fail-microservices 1 explicit
 grep -F 'microservices=17' "$TEST_DIR/microservices-failure/err" >/dev/null \

@@ -7,12 +7,13 @@ import socket
 import sys
 
 
-def reserve_wildcard(
+def reserve_listener(
     family: socket.AddressFamily,
     address: str,
     port: int,
     label: str,
     reservations: list[socket.socket],
+    retain: bool,
 ) -> bool:
     try:
         reservation = socket.socket(family, socket.SOCK_STREAM)
@@ -36,11 +37,14 @@ def reserve_wildcard(
         reservation.close()
         print(
             f"Required port is unavailable before startup: {label}={port} "
-            f"on wildcard {address} ({failure.strerror or failure})",
+            f"on address {address} ({failure.strerror or failure})",
             file=sys.stderr,
         )
         raise
-    reservations.append(reservation)
+    if retain:
+        reservations.append(reservation)
+    else:
+        reservation.close()
     return True
 
 
@@ -56,9 +60,19 @@ def main(specifications: list[str]) -> int:
                 return 64
 
             try:
-                reserve_wildcard(socket.AF_INET, "0.0.0.0", port, label, reservations)
+                reserve_listener(
+                    socket.AF_INET, "127.0.0.1", port, label, reservations, False
+                )
+                reserve_listener(
+                    socket.AF_INET, "0.0.0.0", port, label, reservations, True
+                )
                 if socket.has_ipv6:
-                    reserve_wildcard(socket.AF_INET6, "::", port, label, reservations)
+                    reserve_listener(
+                        socket.AF_INET6, "::1", port, label, reservations, False
+                    )
+                    reserve_listener(
+                        socket.AF_INET6, "::", port, label, reservations, True
+                    )
             except OSError:
                 return 69
     finally:

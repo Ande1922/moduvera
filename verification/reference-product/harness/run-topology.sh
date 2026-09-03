@@ -26,10 +26,12 @@ INVENTORY_RESERVE_TOPIC="inventory-reserve-$RUN_ID"
 INVENTORY_RESULT_TOPIC="inventory-result-$RUN_ID"
 HEALTH_TIMEOUT_SECONDS="${REFERENCE_HEALTH_TIMEOUT_SECONDS:-180}"
 APP_STOP_TIMEOUT_SECONDS="${REFERENCE_APP_STOP_TIMEOUT_SECONDS:-5}"
+DIAGNOSTICS_TIMEOUT_SECONDS="${REFERENCE_DIAGNOSTICS_TIMEOUT_SECONDS:-5}"
 COMPOSE_DOWN_TIMEOUT_SECONDS="${REFERENCE_COMPOSE_DOWN_TIMEOUT_SECONDS:-10}"
 REFERENCE_JAVA_TOOL_OPTIONS="${REFERENCE_JAVA_TOOL_OPTIONS:--Xms64m -Xmx256m}"
 for timeout_specification in \
   "REFERENCE_APP_STOP_TIMEOUT_SECONDS=$APP_STOP_TIMEOUT_SECONDS" \
+  "REFERENCE_DIAGNOSTICS_TIMEOUT_SECONDS=$DIAGNOSTICS_TIMEOUT_SECONDS" \
   "REFERENCE_COMPOSE_DOWN_TIMEOUT_SECONDS=$COMPOSE_DOWN_TIMEOUT_SECONDS"; do
   timeout_name="${timeout_specification%%=*}"
   timeout_value="${timeout_specification#*=}"
@@ -60,22 +62,17 @@ compose_down() {
 }
 
 diagnostics() {
-  echo "Reference-product diagnostics for $REFERENCE_TOPOLOGY_NAME (secrets and payloads omitted)" >&2
-  compose ps >&2 || true
-  for database in orders inventory; do
-    if [[ "$(compose exec -T postgres psql -At -U postgres -d "$database" -c "SELECT to_regclass('moduvera_message_outbox')" 2>/dev/null || true)" == "moduvera_message_outbox" ]]; then
-      compose exec -T postgres psql -U postgres -d "$database" -c \
-        "SELECT message_id,status,attempt_count,next_attempt_at,published_at,terminal_at,last_failure FROM moduvera_message_outbox ORDER BY occurred_at DESC LIMIT 12" >&2 || true
-    fi
-  done
-  for app in identity catalog order inventory monolith gateway; do
-    if [[ -f "$RUN_DIR/$app.log" ]]; then
-      echo "--- $app (last 80 lines)" >&2
-      tail -80 "$RUN_DIR/$app.log" >&2 || true
-    fi
-  done
-  compose logs --tail=80 postgres kafka >&2 || true
-  compose exec -T kafka kafka-consumer-groups --bootstrap-server localhost:29092 --list >&2 || true
+  local diagnostics_status
+  python3 "$HARNESS_DIR/bounded_process.py" "$DIAGNOSTICS_TIMEOUT_SECONDS" -- \
+    "$HARNESS_DIR/diagnostics.sh" "$REFERENCE_TOPOLOGY_NAME" \
+      "$COMPOSE_PROJECT" "$COMPOSE_FILE" "$RUN_DIR" >&2
+  diagnostics_status=$?
+  if [[ $diagnostics_status -eq 124 ]]; then
+    echo "Reference diagnostics exceeded the ${DIAGNOSTICS_TIMEOUT_SECONDS}s wall-clock deadline" >&2
+  elif [[ $diagnostics_status -ne 0 ]]; then
+    echo "Reference diagnostics exited with status $diagnostics_status" >&2
+  fi
+  return "$diagnostics_status"
 }
 
 stop_apps() {

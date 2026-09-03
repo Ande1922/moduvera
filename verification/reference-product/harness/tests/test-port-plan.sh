@@ -4,8 +4,13 @@ set -euo pipefail
 HARNESS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/moduvera-port-plan-test.XXXXXX")"
 LOCK_HOLDER_PID=""
+SOCKET_HOLDER_PID=""
 
 cleanup() {
+  if [[ -n "$SOCKET_HOLDER_PID" ]]; then
+    kill "$SOCKET_HOLDER_PID" 2>/dev/null || true
+    wait "$SOCKET_HOLDER_PID" 2>/dev/null || true
+  fi
   if [[ -n "$LOCK_HOLDER_PID" ]]; then
     kill "$LOCK_HOLDER_PID" 2>/dev/null || true
     wait "$LOCK_HOLDER_PID" 2>/dev/null || true
@@ -129,6 +134,30 @@ TIME_WAIT_PORT="$(<"$TEST_DIR/time-wait-port")"
 python3 "$HARNESS_DIR/preflight_ports.py" "time-wait=$TIME_WAIT_PORT" \
   || fail "SO_REUSEADDR-compatible TIME_WAIT port was reported unavailable"
 
+python3 - "$TEST_DIR/loopback-occupied-port" <<'PY' &
+import pathlib
+import socket
+import sys
+import time
+
+listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+listener.bind(("127.0.0.1", 0))
+listener.listen()
+pathlib.Path(sys.argv[1]).write_text(str(listener.getsockname()[1]), encoding="ascii")
+time.sleep(30)
+PY
+LOOPBACK_HOLDER_PID=$!
+SOCKET_HOLDER_PID="$LOOPBACK_HOLDER_PID"
+for _ in {1..40}; do [[ -s "$TEST_DIR/loopback-occupied-port" ]] && break; sleep 0.05; done
+[[ -s "$TEST_DIR/loopback-occupied-port" ]] || fail "loopback listener helper did not start"
+LOOPBACK_OCCUPIED_PORT="$(<"$TEST_DIR/loopback-occupied-port")"
+expect_failure "Required port is unavailable before startup: loopback=$LOOPBACK_OCCUPIED_PORT on address 127.0.0.1" \
+  python3 "$HARNESS_DIR/preflight_ports.py" "loopback=$LOOPBACK_OCCUPIED_PORT"
+kill "$LOOPBACK_HOLDER_PID" 2>/dev/null || true
+wait "$LOOPBACK_HOLDER_PID" 2>/dev/null || true
+SOCKET_HOLDER_PID=""
+
 python3 - "$TEST_DIR/occupied-port" <<'PY' &
 import pathlib
 import socket
@@ -143,6 +172,7 @@ pathlib.Path(sys.argv[1]).write_text(str(listener.getsockname()[1]), encoding="a
 time.sleep(30)
 PY
 PORT_HOLDER_PID=$!
+SOCKET_HOLDER_PID="$PORT_HOLDER_PID"
 for _ in {1..40}; do [[ -s "$TEST_DIR/occupied-port" ]] && break; sleep 0.05; done
 [[ -s "$TEST_DIR/occupied-port" ]] || fail "occupied-port helper did not start"
 OCCUPIED_PORT="$(<"$TEST_DIR/occupied-port")"
@@ -154,6 +184,7 @@ expect_failure "Required port is unavailable before startup: gateway=$OCCUPIED_P
   || fail "occupied-port failure did not release its owned locks"
 kill "$PORT_HOLDER_PID" 2>/dev/null || true
 wait "$PORT_HOLDER_PID" 2>/dev/null || true
+SOCKET_HOLDER_PID=""
 
 (
   # shellcheck source=../port-plan.sh

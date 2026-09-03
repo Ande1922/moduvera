@@ -55,25 +55,34 @@ def signal_group(process: subprocess.Popen[bytes], requested_signal: signal.Sign
         pass
 
 
+def process_group_exists(process_group: int) -> bool:
+    try:
+        os.killpg(process_group, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
 def stop_process_groups(
     processes: dict[str, subprocess.Popen[bytes]], timeout: float
-) -> None:
+) -> bool:
     for process in processes.values():
         signal_group(process, signal.SIGTERM)
 
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if all(process.poll() is not None for process in processes.values()):
+        for process in processes.values():
+            process.poll()
+        if all(not process_group_exists(process.pid) for process in processes.values()):
             break
         time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
 
     for process in processes.values():
         # Signal the process group even when its leader already exited: descendants may remain.
-        try:
-            os.killpg(process.pid, 0)
-        except ProcessLookupError:
-            continue
-        signal_group(process, signal.SIGKILL)
+        if process_group_exists(process.pid):
+            signal_group(process, signal.SIGKILL)
 
     for process in processes.values():
         try:
@@ -83,6 +92,23 @@ def stop_process_groups(
                 f"Parallel supervisor could not reap topology wrapper pid {process.pid}",
                 file=sys.stderr,
             )
+    group_deadline = time.monotonic() + 1
+    while time.monotonic() < group_deadline:
+        if all(not process_group_exists(process.pid) for process in processes.values()):
+            return True
+        time.sleep(0.05)
+    remaining = [
+        str(process.pid)
+        for process in processes.values()
+        if process_group_exists(process.pid)
+    ]
+    if remaining:
+        print(
+            f"Parallel supervisor could not drain process groups: {', '.join(remaining)}",
+            file=sys.stderr,
+        )
+        return False
+    return True
 
 
 def tail(path: pathlib.Path, line_count: int = 80) -> str:
@@ -100,10 +126,11 @@ def main(arguments: list[str]) -> int:
     parser.add_argument("monolith_slot")
     options = parser.parse_args(arguments)
     runner_stop_timeout = parse_timeout("REFERENCE_APP_STOP_TIMEOUT_SECONDS", 5)
+    diagnostics_timeout = parse_timeout("REFERENCE_DIAGNOSTICS_TIMEOUT_SECONDS", 5)
     compose_down_timeout = parse_timeout("REFERENCE_COMPOSE_DOWN_TIMEOUT_SECONDS", 10)
     timeout = parse_timeout(
         "REFERENCE_PARALLEL_TERM_TIMEOUT_SECONDS",
-        runner_stop_timeout + compose_down_timeout + 5,
+        runner_stop_timeout + diagnostics_timeout + compose_down_timeout + 5,
     )
     validator_timeout = parse_timeout("REFERENCE_PARALLEL_VALIDATOR_TIMEOUT_SECONDS", 10)
     evidence, evidence_is_temporary = create_evidence_directory()
@@ -191,6 +218,13 @@ def main(arguments: list[str]) -> int:
                 print(tail(logs[topology]), end="", file=sys.stderr)
             return 1
 
+        if not stop_process_groups(processes, timeout):
+            print(
+                "Parallel reference scenario failed: completed runner process groups were not empty",
+                file=sys.stderr,
+            )
+            return 1
+
         for log_handle in log_handles:
             log_handle.flush()
         validator_process = subprocess.Popen(
@@ -230,6 +264,12 @@ def main(arguments: list[str]) -> int:
             return 128 + interrupted_signal
         if validator_status != 0:
             return validator_status
+        if not stop_process_groups({"validator": validator_process}, timeout):
+            print(
+                "Parallel reference scenario failed: completed validator process group was not empty",
+                file=sys.stderr,
+            )
+            return 1
 
         success = True
         print(

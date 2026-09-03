@@ -24,7 +24,7 @@ def process_group_exists(process_group: int) -> bool:
         return True
 
 
-def stop_process_group(process: subprocess.Popen[bytes]) -> None:
+def stop_process_group(process: subprocess.Popen[bytes]) -> bool:
     process_group = process.pid
     if process_group_exists(process_group):
         try:
@@ -33,6 +33,7 @@ def stop_process_group(process: subprocess.Popen[bytes]) -> None:
             pass
     deadline = time.monotonic() + TERM_GRACE_SECONDS
     while process_group_exists(process_group) and time.monotonic() < deadline:
+        process.poll()
         time.sleep(POLL_SECONDS)
     if process_group_exists(process_group):
         try:
@@ -46,6 +47,10 @@ def stop_process_group(process: subprocess.Popen[bytes]) -> None:
             f"Unable to reap command leader pid {process.pid} after escalation",
             file=sys.stderr,
         )
+    group_deadline = time.monotonic() + 1
+    while process_group_exists(process_group) and time.monotonic() < group_deadline:
+        time.sleep(POLL_SECONDS)
+    return not process_group_exists(process_group)
 
 
 def main(arguments: list[str]) -> int:
@@ -81,7 +86,14 @@ def main(arguments: list[str]) -> int:
             stop_process_group(process)
             return 124
         time.sleep(POLL_SECONDS)
-    return process.returncode
+    return_code = process.returncode
+    if process_group_exists(process.pid) and not stop_process_group(process):
+        print(
+            f"Command leader exited but process group {process.pid} could not be drained",
+            file=sys.stderr,
+        )
+        return 70
+    return return_code
 
 
 if __name__ == "__main__":
