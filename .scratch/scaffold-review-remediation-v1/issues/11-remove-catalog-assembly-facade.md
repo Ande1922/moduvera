@@ -29,5 +29,5 @@ Blocked by: None
 
 - 实现分支：`codex/remediation-v1-11-catalog-facade`，最终提交 `b00f142a9e27400bc2a3a3f46f33f04588dbe6f3`。
 - 最终 Standards Review 与 Spec Review 均为 no findings；deprecated service-root facade、专属兼容测试、ArchUnit predicate 与 negative fixture 已删除，通用所有权保护保留。
-- Catalog service 7/7、Assembly ArchUnit 23/23、Current scaffold 17/17、真实 PostgreSQL `CatalogApplicationIT` 8/8 通过；受影响 Reactor install 与 deleted-FQN/JAR scan 通过。
+- 验证结果：PASS。Catalog service 7/7、Assembly ArchUnit 23/23、Current scaffold 17/17、真实 PostgreSQL `CatalogApplicationIT` 8/8 通过；受影响 Reactor install 与 deleted-FQN/JAR scan 通过。
 - Catalog App 与 monolith 继续直接组合 module/API、persistence、HTTP inbound、migration 四个受支持 slice，`catalog.catalog` package/API/App Assembly 未改变。
