@@ -102,6 +102,38 @@ class QualityGatePolicyTest(unittest.TestCase):
                 self.fixture.root, head, quality_gate.changed_markdown_paths(entries)
             )
 
+    def test_renamed_and_copied_markdown_destinations_recheck_relative_links(self) -> None:
+        self.fixture.write("docs/target.md", "# Target\n")
+        self.fixture.write("docs/guide.md", "[target](./target.md)\n")
+        prior = self.fixture.commit("linked guide")
+        (self.fixture.root / "docs/moved").mkdir()
+        self.fixture.git("mv", "docs/guide.md", "docs/moved/guide.md")
+        renamed = self.fixture.commit("move guide")
+        renamed_entries = quality_gate.changed_entries(self.fixture.root, prior, renamed)
+        self.assertIn("docs/moved/guide.md", quality_gate.changed_markdown_paths(renamed_entries))
+        with self.assertRaises(quality_gate.GateError):
+            quality_gate.check_markdown_links(
+                self.fixture.root,
+                renamed,
+                quality_gate.changed_markdown_paths(renamed_entries),
+            )
+
+        self.fixture.write("docs/copy.md", "[target](./target.md)\n")
+        source = self.fixture.commit("copy source")
+        shutil.copyfile(
+            self.fixture.root / "docs/copy.md",
+            self.fixture.root / "docs/moved/copy.md",
+        )
+        copied = self.fixture.commit("copy guide")
+        copied_entries = quality_gate.changed_entries(self.fixture.root, source, copied)
+        self.assertIn("docs/moved/copy.md", quality_gate.changed_markdown_paths(copied_entries))
+        with self.assertRaises(quality_gate.GateError):
+            quality_gate.check_markdown_links(
+                self.fixture.root,
+                copied,
+                quality_gate.changed_markdown_paths(copied_entries),
+            )
+
     def test_project_skill_requires_structured_skill_file(self) -> None:
         self.fixture.write(".agents/skills/example/notes.md", "missing SKILL.md\n")
         head = self.fixture.commit("invalid skill")
@@ -266,6 +298,24 @@ class QualityGatePolicyTest(unittest.TestCase):
             quality_gate.check_sensitive_content(self.fixture.root, java_head, config_head)
         self.assertIn("config/application.properties", str(caught.exception))
 
+    def test_yaml_credential_block_scalars_are_scanned_without_echoing_payload(self) -> None:
+        credential_key = "pass" + "word"
+        payload = "spring-live-" + "credential-1234567890"
+        for index, indicator in enumerate(("|", ">-", "|2+")):
+            self.fixture.write(
+                f"config/application-{index}.yml",
+                "spring:\n"
+                f"  {credential_key}: {indicator}\n"
+                f"    {payload}\n"
+                "    second-secret-line\n"
+                "  profiles: test\n",
+            )
+        head = self.fixture.commit("YAML credential blocks")
+        with self.assertRaises(quality_gate.GateError) as caught:
+            quality_gate.check_sensitive_content(self.fixture.root, self.base, head)
+        self.assertNotIn(payload, str(caught.exception))
+        self.assertIn("config/application-", str(caught.exception))
+
     def test_unresolvable_base_fails_closed(self) -> None:
         with self.assertRaises(quality_gate.GateError):
             quality_gate.resolve_commit(self.fixture.root, "missing-revision", "base")
@@ -329,10 +379,13 @@ class QualityGateEvidenceTest(unittest.TestCase):
         single_multiline_value = (
             "single-secret-one\nescaped-\\'-middle\nsingle-secret-three"
         )
+        yaml_key = "pass" + "word"
+        yaml_payload = "yaml-secret-one\n  yaml-secret-two"
         credential_assignments += (
             f'"{credential_keys[0]}":\n  "{escaped_terminal_value}"',
             f'"{credential_keys[0]}": "{double_multiline_value}"',
             f"{credential_keys[2]}='{single_multiline_value}'",
+            f"{yaml_key}: |-\n  {yaml_payload}\nafter-yaml: visible",
         )
         credential_arguments = " ".join(
             shlex.quote(assignment) for assignment in credential_assignments
@@ -361,6 +414,7 @@ class QualityGateEvidenceTest(unittest.TestCase):
         self.assertNotIn(escaped_terminal_value, result.stdout)
         self.assertNotIn("double-secret", result.stdout)
         self.assertNotIn("single-secret", result.stdout)
+        self.assertNotIn("yaml-secret", result.stdout)
         self.assertIn('"client_secret": "[REDACTED]"', result.stdout)
         self.assertIn('"access-token": "[REDACTED]"', result.stdout)
         self.assertIn('"refresh-token": "[REDACTED]"', result.stdout)
@@ -393,20 +447,27 @@ class QualityGateEvidenceTest(unittest.TestCase):
         self.install_gate()
         mvnw = self.fixture.root / "mvnw"
         mvnw.write_text(
-            "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" > .maven-args\n",
+            "#!/usr/bin/env bash\n"
+            "printf '%s\\n' \"$*\" > \"$QUALITY_GATE_RUN_DIR/maven-args\"\n"
+            "chmod 600 \"$QUALITY_GATE_RUN_DIR/maven-args\"\n",
             encoding="utf-8",
         )
         mvnw.chmod(0o755)
         extension = self.fixture.root / "tools/quality/checks.d/normal/40-changed-code"
         extension.parent.mkdir(parents=True, exist_ok=True)
-        extension.write_text("#!/usr/bin/env bash\ntest -f .maven-args\n", encoding="utf-8")
+        extension.write_text(
+            "#!/usr/bin/env bash\ntest -f \"$QUALITY_GATE_RUN_DIR/maven-args\"\n",
+            encoding="utf-8",
+        )
         extension.chmod(0o755)
         self.base = self.fixture.commit("install gate and normal extension")
         self.fixture.write("src.txt", "code\n")
         head = self.fixture.commit("code")
         result = self.run_gate("normal", "--base", self.base, "--head", head)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-        self.assertEqual("-B -ntp clean verify\n", (self.fixture.root / ".maven-args").read_text())
+        self.assertEqual(
+            "-B -ntp clean verify\n", (self.latest_run() / "maven-args").read_text()
+        )
         self.assertIn("extension:normal/40-changed-code: PASS", result.stdout)
 
     def test_public_entry_rejects_docs_only_mode(self) -> None:
@@ -563,13 +624,15 @@ class QualityGateEvidenceTest(unittest.TestCase):
         self.assertNotIn("status: PASS", result.stdout)
         self.assertIn("unexpected-gate-output", result.stdout)
 
-    def test_concurrent_checkout_mutation_cannot_pass(self) -> None:
+    def test_concurrent_source_mutation_cannot_change_snapshot_inputs(self) -> None:
         self.install_gate()
         extension = self.fixture.root / "tools/quality/checks.d/common/10-coordinate"
         extension.write_text(
             "#!/usr/bin/env bash\n"
             "touch \"$QUALITY_GATE_RUN_DIR/ready\"\n"
-            "while [ ! -f \"$QUALITY_GATE_RUN_DIR/continue\" ]; do sleep 0.05; done\n",
+            "while [ ! -f \"$QUALITY_GATE_RUN_DIR/continue\" ]; do sleep 0.05; done\n"
+            "grep -q '# Fixture' README.md\n"
+            "touch \"$QUALITY_GATE_RUN_DIR/observed\"\n",
             encoding="utf-8",
         )
         extension.chmod(0o755)
@@ -605,12 +668,39 @@ class QualityGateEvidenceTest(unittest.TestCase):
         assert run_dir is not None
         self.fixture.write("README.md", "# Concurrent mutation\n")
         (run_dir / "continue").write_text("continue\n", encoding="utf-8")
+        observed_deadline = time.monotonic() + 10
+        while time.monotonic() < observed_deadline and not (run_dir / "observed").is_file():
+            time.sleep(0.01)
+        self.assertTrue((run_dir / "observed").is_file(), "snapshot did not observe pinned README")
+        self.fixture.write("README.md", "# Fixture\n")
         stdout, stderr = process.communicate(timeout=10)
-        self.assertNotEqual(0, process.returncode, stdout + stderr)
-        self.assertIn("status: FAIL", stdout)
-        self.assertNotIn("status: PASS", stdout)
-        self.assertIn("checkout must be clean", stdout)
+        self.assertEqual(0, process.returncode, stdout + stderr)
+        self.assertIn("status: PASS", stdout)
         self.assertTrue((run_dir / "completed").is_file())
+        self.assertFalse((run_dir / "checkout").exists())
+        self.assertEqual("", self.fixture.git("status", "--porcelain"))
+
+    def test_committed_extension_source_mutation_and_restore_cannot_affect_snapshot(self) -> None:
+        self.install_gate()
+        source_readme = shlex.quote(str(self.fixture.root / "README.md"))
+        extension = self.fixture.root / "tools/quality/checks.d/common/10-source-race"
+        extension.write_text(
+            "#!/usr/bin/env bash\n"
+            f"printf '# transient source mutation\\n' > {source_readme}\n"
+            "grep -q '# Fixture' README.md\n"
+            f"printf '# Fixture\\n' > {source_readme}\n",
+            encoding="utf-8",
+        )
+        extension.chmod(0o755)
+        self.base = self.fixture.commit("install transient source mutator")
+        self.fixture.write("guide.md", "# Guide\n")
+        head = self.fixture.commit("docs")
+        result = self.run_gate("auto", "--base", self.base, "--head", head)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn("extension:common/10-source-race: PASS", result.stdout)
+        self.assertIn("status: PASS", result.stdout)
+        self.assertEqual("# Fixture\n", (self.fixture.root / "README.md").read_text())
+        self.assertEqual("", self.fixture.git("status", "--porcelain"))
 
     def test_interruption_terminates_child_and_completes_evidence(self) -> None:
         self.install_gate()
@@ -694,6 +784,55 @@ class QualityGateEvidenceTest(unittest.TestCase):
         child_pid = int((run_dir / "launch.pid").read_text().strip())
         with self.assertRaises(ProcessLookupError):
             os.kill(child_pid, 0)
+
+    def test_signal_during_evidence_pruning_is_recorded_as_interrupted(self) -> None:
+        self.install_gate()
+        self.base = self.fixture.commit("install gate")
+        self.fixture.write("guide.md", "# Guide\n")
+        head = self.fixture.commit("docs")
+        runs = self.fixture.root / ".quality-gate/runs"
+        runs.mkdir(parents=True)
+        for index in range(45):
+            old_run = runs / f"20000101T000000.{index:06d}Z-1"
+            old_run.mkdir()
+            (old_run / "completed").write_text("complete\n", encoding="utf-8")
+            for item in range(80):
+                (old_run / f"artifact-{item:03d}").write_text("fixture\n", encoding="utf-8")
+        process = subprocess.Popen(
+            [
+                str(self.fixture.root / "tools/quality/quality-gate.sh"),
+                "auto",
+                "--base",
+                self.base,
+                "--head",
+                head,
+            ],
+            cwd=self.fixture.root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        run_dir: Path | None = None
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            latest = self.fixture.root / ".quality-gate/latest"
+            if latest.is_file():
+                candidate = runs / latest.read_text().strip()
+                completed_count = sum(
+                    1 for path in runs.iterdir() if (path / "completed").is_file()
+                )
+                if (candidate / "completed").is_file() and completed_count > 20:
+                    run_dir = candidate
+                    break
+            time.sleep(0.001)
+        self.assertIsNotNone(run_dir, "did not observe evidence finalization window")
+        assert run_dir is not None
+        os.kill(process.pid, signal.SIGTERM)
+        stdout, stderr = process.communicate(timeout=15)
+        self.assertEqual(128 + signal.SIGTERM, process.returncode, stdout + stderr)
+        self.assertIn("status: INTERRUPTED", stdout)
+        self.assertIn("status: INTERRUPTED", (run_dir / "summary.txt").read_text())
+        self.assertTrue((run_dir / "completed").is_file())
 
 
 class EvidencePathSafetyTest(unittest.TestCase):
@@ -815,6 +954,32 @@ class BoundedTailTest(unittest.TestCase):
             self.assertNotIn(payload_fragment, direct)
         self.assertGreaterEqual(retained.count("[REDACTED]"), 2)
         self.assertIn("after-redaction", retained)
+
+    def test_yaml_block_scalars_remain_redacted_until_dedent_with_bounded_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "yaml.log"
+            credential_key = "pass" + "word"
+            payload = "yaml-sensitive-payload-" * (
+                quality_gate.MAX_OPEN_CREDENTIAL_CHARS // 20
+            )
+            path.write_text(
+                f"spring:\n  {credential_key}: >2-\n    first-secret\n"
+                f"    {payload}\n"
+                "  profile: test\n"
+                f"  {credential_key}: |+\n    second-secret\n"
+                "  enabled: true\n",
+                encoding="utf-8",
+            )
+            tail = quality_gate.redacted_tail(path)
+            direct = quality_gate.redact(path.read_text(encoding="utf-8"))
+        retained = "\n".join(tail)
+        for fragment in ("first-secret", "yaml-sensitive-payload", "second-secret"):
+            self.assertNotIn(fragment, retained)
+            self.assertNotIn(fragment, direct)
+        self.assertIn("[REDACTED_YAML_BLOCK_LIMIT_EXCEEDED]", retained)
+        self.assertIn("profile: test", retained)
+        self.assertIn("enabled: true", retained)
+        self.assertGreaterEqual(retained.count("[REDACTED]"), 2)
 
 
 if __name__ == "__main__":

@@ -52,12 +52,19 @@ CREDENTIAL_QUOTED_START = re.compile(
     rf"(?i)(?P<prefix>(?P<key_quote>['\"]?)\b{CREDENTIAL_KEY}\b"
     rf"(?P=key_quote)\s*[:=]\s*)(?P<value_quote>['\"])"
 )
+YAML_BLOCK_CREDENTIAL_HEADER = re.compile(
+    rf"(?i)^(?P<indent> *)(?P<prefix>['\"]?{CREDENTIAL_KEY}['\"]?\s*:\s*)"
+    r"(?P<style>[|>])(?P<indicators>(?:[1-9][+-]?|[+-][1-9]?))?"
+    r"\s*(?:#.*)?(?:\r?\n)?$"
+)
 STANDALONE_SECRET_PATTERNS = (
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
     re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"),
     re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"),
     re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{16,}"),
 )
+
+
 def _redact_credential(match: re.Match[str]) -> str:
     value = match.group("value")
     if len(value) >= 2 and value[0] in {'"', "'"} and value[-1] == value[0]:
@@ -142,7 +149,16 @@ def resolve_commit(repo: Path, revision: str, label: str) -> str:
 
 def changed_entries(repo: Path, base: str, head: str) -> list[tuple[str, tuple[str, ...]]]:
     result = subprocess.run(
-        ["git", "diff", "--name-status", "-z", "--find-renames", base, head],
+        [
+            "git",
+            "diff",
+            "--name-status",
+            "-z",
+            "--find-renames",
+            "--find-copies-harder",
+            base,
+            head,
+        ],
         cwd=repo,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -198,7 +214,8 @@ def changed_markdown_paths(entries: list[tuple[str, tuple[str, ...]]]) -> list[s
     return [
         paths[-1]
         for status, paths in entries
-        if status[:1] in {"A", "M"} and PurePosixPath(paths[-1]).suffix.lower() in DOC_SUFFIXES
+        if status[:1] in {"A", "M", "R", "C"}
+        and PurePosixPath(paths[-1]).suffix.lower() in DOC_SUFFIXES
     ]
 
 
@@ -372,6 +389,39 @@ def _sensitive_spans(content: str, path: str) -> list[tuple[int, int]]:
         for match in CREDENTIAL_ASSIGNMENT.finditer(content)
         if is_sensitive_credential_assignment(match, path)
     )
+    if PurePosixPath(path).suffix.lower() in {".yaml", ".yml"}:
+        spans.extend(_yaml_block_spans(content))
+    return spans
+
+
+def _line_indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def _yaml_block_spans(content: str) -> list[tuple[int, int]]:
+    lines = content.splitlines(keepends=True)
+    offsets: list[int] = []
+    offset = 0
+    for line in lines:
+        offsets.append(offset)
+        offset += len(line)
+    spans: list[tuple[int, int]] = []
+    index = 0
+    while index < len(lines):
+        header = YAML_BLOCK_CREDENTIAL_HEADER.match(lines[index])
+        if header is None:
+            index += 1
+            continue
+        header_indent = len(header.group("indent"))
+        end_index = index + 1
+        while end_index < len(lines):
+            candidate = lines[end_index]
+            if candidate.strip() and _line_indent(candidate) <= header_indent:
+                break
+            end_index += 1
+        end_offset = offsets[end_index] if end_index < len(lines) else len(content)
+        spans.append((offsets[index], end_offset))
+        index = end_index
     return spans
 
 
@@ -427,6 +477,30 @@ def redact_credentials(text: str) -> str:
     return "".join(output)
 
 
+def redact_yaml_blocks(text: str) -> str:
+    output: list[str] = []
+    lines = text.splitlines(keepends=True)
+    index = 0
+    while index < len(lines):
+        header = YAML_BLOCK_CREDENTIAL_HEADER.match(lines[index])
+        if header is None:
+            output.append(lines[index])
+            index += 1
+            continue
+        ending = "\n" if lines[index].endswith("\n") else ""
+        output.append(
+            f"{header.group('indent')}{header.group('prefix')}[REDACTED]{ending}"
+        )
+        header_indent = len(header.group("indent"))
+        index += 1
+        while index < len(lines):
+            candidate = lines[index]
+            if candidate.strip() and _line_indent(candidate) <= header_indent:
+                break
+            index += 1
+    return "".join(output)
+
+
 def redact(text: str) -> str:
     redacted_lines: list[str] = []
     inside_private_key = False
@@ -441,7 +515,7 @@ def redact(text: str) -> str:
             inside_private_key = not bool(PRIVATE_KEY_END.search(line))
             continue
         redacted_lines.append(line)
-    result = redact_credentials("".join(redacted_lines))
+    result = redact_credentials(redact_yaml_blocks("".join(redacted_lines)))
     for pattern, replacement in REDACTIONS:
         result = pattern.sub(replacement, result)
     return result
@@ -510,6 +584,64 @@ def ensure_pinned_executable_inputs(repo: Path, head: str, command: list[str]) -
         digest = git(repo, "hash-object", relative, check=False)
         if digest.returncode != 0 or digest.stdout.strip() != object_id:
             raise GateError(f"executable input content does not match recorded head: {relative}")
+
+
+def materialize_pinned_checkout(source: Path, run_dir: Path, head: str) -> Path:
+    destination = run_dir / "checkout"
+    if _lstat(destination) is not None:
+        raise GateError(f"unexpected snapshot path already exists: {destination}")
+    old_umask = os.umask(0o077)
+    try:
+        try:
+            result = subprocess.run(
+                [
+                    "git",
+                    "clone",
+                    "--quiet",
+                    "--no-local",
+                    "--no-checkout",
+                    str(source),
+                    str(destination),
+                ],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+        except BaseException:
+            if _lstat(destination) is not None:
+                _remove_pinned_checkout(destination, run_dir)
+            raise
+    finally:
+        os.umask(old_umask)
+    if result.returncode != 0:
+        if _lstat(destination) is not None:
+            _remove_pinned_checkout(destination, run_dir)
+        raise GateError(result.stderr.strip() or "cannot materialize pinned checkout")
+    state = destination.lstat()
+    if (
+        stat.S_ISLNK(state.st_mode)
+        or not stat.S_ISDIR(state.st_mode)
+        or destination.resolve(strict=True).parent != run_dir.resolve(strict=True)
+    ):
+        raise GateError(f"unsafe materialized checkout: {destination}")
+    checkout = git(destination, "checkout", "--quiet", "--detach", head, check=False)
+    if checkout.returncode != 0:
+        _remove_pinned_checkout(destination, run_dir)
+        raise GateError(checkout.stderr.strip() or "cannot check out recorded head")
+    ensure_pinned_checkout(destination, head)
+    return destination
+
+
+def _remove_pinned_checkout(checkout: Path, run_dir: Path) -> None:
+    if checkout.parent != run_dir:
+        raise GateError(f"unsafe snapshot parent: {checkout}")
+    state = checkout.lstat()
+    if stat.S_ISLNK(state.st_mode) or not stat.S_ISDIR(state.st_mode):
+        raise GateError(f"snapshot path must be a real directory: {checkout}")
+    if checkout.resolve(strict=True).parent != run_dir.resolve(strict=True):
+        raise GateError(f"snapshot escapes evidence run: {checkout}")
+    shutil.rmtree(checkout)
 
 
 def _lstat(path: Path) -> os.stat_result | None:
@@ -663,16 +795,29 @@ class Evidence:
         os.replace(temporary, self.root / "latest")
         _validate_regular(latest, self.root)
 
-    def complete(self, summary: str) -> None:
+    @staticmethod
+    def _encode_summary(summary: str) -> bytes:
         encoded = redact(summary).encode("utf-8", "replace")[:MAX_SUMMARY_BYTES]
         if len(encoded) == MAX_SUMMARY_BYTES:
             encoded = encoded.rsplit(b"\n", 1)[0] + b"\n[summary truncated]\n"
+        return encoded
+
+    def complete(self, summary: str) -> None:
+        encoded = self._encode_summary(summary)
         with _open_new_private(self.summary_path, self.run_dir) as summary_file:
             summary_file.buffer.write(encoded)
         marker = self.run_dir / "completed"
         with _open_new_private(marker, self.run_dir) as completed_file:
             completed_file.write("complete\n")
         self.prune()
+
+    def replace_summary(self, summary: str) -> None:
+        _validate_regular(self.summary_path, self.run_dir)
+        temporary = self.run_dir / f".summary-{os.getpid()}"
+        with _open_new_private(temporary, self.run_dir) as summary_file:
+            summary_file.buffer.write(self._encode_summary(summary))
+        os.replace(temporary, self.summary_path)
+        _validate_regular(self.summary_path, self.run_dir)
 
     def prune(self) -> None:
         completed: list[Path] = []
@@ -696,6 +841,19 @@ class GateInterrupted(GateError):
         self.signum = signum
 
 
+class GateSignalState:
+    def __init__(self) -> None:
+        self.first_signum: int | None = None
+        self.interruptible = True
+
+    def handle(self, signum: int) -> None:
+        if self.first_signum is not None:
+            return
+        self.first_signum = signum
+        if self.interruptible:
+            raise GateInterrupted(signum)
+
+
 PENDING_CREDENTIAL_KEY = re.compile(
     rf"(?i)(?P<key_quote>['\"]?)\b{CREDENTIAL_KEY}\b(?P=key_quote)\s*[:=]\s*$"
 )
@@ -712,6 +870,13 @@ class OpenCredentialQuote:
         self.limit_reported = False
 
 
+class OpenYamlCredentialBlock:
+    def __init__(self, header_indent: int) -> None:
+        self.header_indent = header_indent
+        self.scanned_chars = 0
+        self.limit_reported = False
+
+
 class StreamingRedactor:
     def __init__(self, max_lines: int = MAX_FAILURE_LINES) -> None:
         self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
@@ -719,6 +884,7 @@ class StreamingRedactor:
         self.pending_credential = ""
         self.inside_private_key = False
         self.open_credential_quote: OpenCredentialQuote | None = None
+        self.open_yaml_block: OpenYamlCredentialBlock | None = None
         self.oversized_preview: str | None = None
         self.discarding_sensitive_line = False
         self.lines: deque[str] = deque(maxlen=max_lines)
@@ -733,6 +899,9 @@ class StreamingRedactor:
         if self.open_credential_quote is not None:
             self._append_line("[REDACTED_CREDENTIAL_BLOCK_UNTERMINATED]")
             self.open_credential_quote = None
+        if self.open_yaml_block is not None:
+            self._append_line("[REDACTED_YAML_BLOCK_UNTERMINATED]")
+            self.open_yaml_block = None
         if self.pending_credential:
             self._append_redacted(self.pending_credential)
             self.pending_credential = ""
@@ -780,6 +949,11 @@ class StreamingRedactor:
         split_at = len(self.buffer) - STREAM_PATTERN_OVERLAP
         fragment = self.buffer[:split_at]
         self.buffer = self.buffer[split_at:]
+        if self.open_yaml_block is not None:
+            self._consume_yaml_payload(fragment)
+            self.oversized_preview = "[REDACTED_YAML_BLOCK_CONTENT]"
+            self.discarding_sensitive_line = True
+            return
         if self.open_credential_quote is not None:
             self._consume_open_credential(fragment)
             return
@@ -820,6 +994,11 @@ class StreamingRedactor:
         self.discarding_sensitive_line = False
 
     def _process_line(self, line: str) -> None:
+        if self.open_yaml_block is not None:
+            if not line.strip() or _line_indent(line) > self.open_yaml_block.header_indent:
+                self._consume_yaml_payload(line)
+                return
+            self.open_yaml_block = None
         if self.open_credential_quote is not None:
             self._consume_open_credential(line)
             return
@@ -839,6 +1018,16 @@ class StreamingRedactor:
             self._append_redacted(self.pending_credential)
             self.pending_credential = ""
         if self._begin_open_quoted_credential(line):
+            return
+        yaml_header = YAML_BLOCK_CREDENTIAL_HEADER.match(line)
+        if yaml_header is not None:
+            self._append_line(
+                f"{yaml_header.group('indent')}"
+                f"{yaml_header.group('prefix')}[REDACTED]"
+            )
+            self.open_yaml_block = OpenYamlCredentialBlock(
+                len(yaml_header.group("indent"))
+            )
             return
         if PENDING_CREDENTIAL_KEY.search(line.rstrip("\r\n")):
             self.pending_credential = line
@@ -884,6 +1073,16 @@ class StreamingRedactor:
         suffix = text[closing + 1 :]
         if suffix:
             self._process_line(suffix)
+
+    def _consume_yaml_payload(self, text: str) -> None:
+        state = self.open_yaml_block
+        assert state is not None
+        state.scanned_chars = min(
+            MAX_OPEN_CREDENTIAL_CHARS + 1, state.scanned_chars + len(text)
+        )
+        if state.scanned_chars > MAX_OPEN_CREDENTIAL_CHARS and not state.limit_reported:
+            self._append_line("[REDACTED_YAML_BLOCK_LIMIT_EXCEEDED]")
+            state.limit_reported = True
 
     def _append_redacted(self, text: str) -> None:
         for line in redact(text).splitlines():
@@ -1099,9 +1298,9 @@ def gate(arguments: list[str]) -> int:
     parser.add_argument("--ref", default="manual", help="descriptive ref recorded in evidence")
     options = parser.parse_args(arguments)
 
-    repo = Path(__file__).resolve().parents[2]
+    source_repo = Path(__file__).resolve().parents[2]
     try:
-        evidence = Evidence(repo)
+        evidence = Evidence(source_repo)
     except (GateError, OSError) as error:
         print(f"quality gate cannot create safe evidence: {error}", file=sys.stderr)
         return 1
@@ -1109,27 +1308,27 @@ def gate(arguments: list[str]) -> int:
     head_display = options.head
     profile = "normal"
     reason = "fail-closed before classification"
-    runner = Runner(evidence, repo)
+    runner = Runner(evidence, source_repo)
+    checkout: Path | None = None
     failure: str | None = None
     interrupted_signum: int | None = None
     watched_signals = (signal.SIGINT, signal.SIGTERM)
+    signal_state = GateSignalState()
     previous_signal_mask = signal.pthread_sigmask(signal.SIG_UNBLOCK, set(watched_signals))
     previous_handlers = {signum: signal.getsignal(signum) for signum in watched_signals}
 
     def interrupt(signum: int, _frame: object) -> None:
-        for watched in watched_signals:
-            signal.signal(watched, signal.SIG_IGN)
-        raise GateInterrupted(signum)
+        signal_state.handle(signum)
 
     for signum in watched_signals:
         signal.signal(signum, interrupt)
     try:
-        base = resolve_commit(repo, options.base or "", "base")
-        head = resolve_commit(repo, options.head, "head")
+        base = resolve_commit(source_repo, options.base or "", "base")
+        head = resolve_commit(source_repo, options.head, "head")
         base_display = base
         head_display = head
-        ensure_pinned_checkout(repo, head)
-        selected, classified_reason, entries = classify(repo, base, head)
+        ensure_pinned_checkout(source_repo, head)
+        selected, classified_reason, entries = classify(source_repo, base, head)
         if options.mode == "normal":
             profile = "normal"
             reason = f"caller forced normal; classifier observed {classified_reason}"
@@ -1137,6 +1336,8 @@ def gate(arguments: list[str]) -> int:
             profile = selected
             reason = classified_reason
 
+        checkout = materialize_pinned_checkout(source_repo, evidence.run_dir, head)
+        runner = Runner(evidence, checkout)
         environment = os.environ.copy()
         environment.update(
             {
@@ -1147,25 +1348,66 @@ def gate(arguments: list[str]) -> int:
                 "QUALITY_GATE_RUN_DIR": str(evidence.run_dir),
             }
         )
-        core = str(Path(__file__).resolve())
-        common_extensions = extension_commands(repo, head, ("common",))
-        normal_extensions = extension_commands(repo, head, ("normal",)) if profile == "normal" else []
+        core = str(checkout / "tools/quality/quality_gate.py")
+        common_extensions = extension_commands(checkout, head, ("common",))
+        normal_extensions = (
+            extension_commands(checkout, head, ("normal",))
+            if profile == "normal"
+            else []
+        )
         steps: list[tuple[str, list[str], dict[str, str] | None]] = [
-            ("gate-self-tests", [str(repo / "tools/quality/test/run-tests.sh")], environment),
+            (
+                "gate-self-tests",
+                [str(checkout / "tools/quality/test/run-tests.sh")],
+                environment,
+            ),
             ("diff-whitespace", ["git", "diff", "--check", base, head], environment),
             (
                 "markdown-local-links",
-                [sys.executable, core, "_check", "markdown-links", "--repo", str(repo), "--base", base, "--head", head],
+                [
+                    sys.executable,
+                    core,
+                    "_check",
+                    "markdown-links",
+                    "--repo",
+                    str(checkout),
+                    "--base",
+                    base,
+                    "--head",
+                    head,
+                ],
                 environment,
             ),
             (
                 "project-skill-structure",
-                [sys.executable, core, "_check", "skill-structure", "--repo", str(repo), "--base", base, "--head", head],
+                [
+                    sys.executable,
+                    core,
+                    "_check",
+                    "skill-structure",
+                    "--repo",
+                    str(checkout),
+                    "--base",
+                    base,
+                    "--head",
+                    head,
+                ],
                 environment,
             ),
             (
                 "sensitive-content",
-                [sys.executable, core, "_check", "sensitive", "--repo", str(repo), "--base", base, "--head", head],
+                [
+                    sys.executable,
+                    core,
+                    "_check",
+                    "sensitive",
+                    "--repo",
+                    str(checkout),
+                    "--base",
+                    base,
+                    "--head",
+                    head,
+                ],
                 environment,
             ),
         ]
@@ -1174,13 +1416,13 @@ def gate(arguments: list[str]) -> int:
             for name, command in common_extensions
         )
         for name, command, env in steps:
-            if not run_pinned_step(runner, repo, head, name, command, env):
+            if not run_pinned_step(runner, checkout, head, name, command, env):
                 failure = f"step failed: {name}"
                 break
         if failure is None and profile == "normal":
             if not run_pinned_step(
                 runner,
-                repo,
+                checkout,
                 head,
                 "maven-clean-verify",
                 ["./mvnw", "-B", "-ntp", "clean", "verify"],
@@ -1189,7 +1431,9 @@ def gate(arguments: list[str]) -> int:
                 failure = "step failed: maven-clean-verify"
             else:
                 for name, command in normal_extensions:
-                    if not run_pinned_step(runner, repo, head, name, command, environment):
+                    if not run_pinned_step(
+                        runner, checkout, head, name, command, environment
+                    ):
                         failure = f"step failed: {name}"
                         break
         del entries
@@ -1198,41 +1442,68 @@ def gate(arguments: list[str]) -> int:
         failure = str(interrupted)
     except (GateError, OSError) as error:
         failure = str(error)
-    finally:
-        for signum in watched_signals:
-            signal.signal(signum, signal.SIG_IGN)
-
-    if failure is None:
+    signal_state.interruptible = False
+    if failure is None and checkout is not None:
         try:
-            ensure_pinned_checkout(repo, head)
+            ensure_pinned_checkout(checkout, head)
         except (GateError, OSError) as error:
             failure = str(error)
+    if checkout is not None and _lstat(checkout) is not None:
+        try:
+            _remove_pinned_checkout(checkout, evidence.run_dir)
+        except (GateError, OSError) as error:
+            if failure is None:
+                failure = str(error)
 
-    status_text = "PASS" if failure is None else ("INTERRUPTED" if interrupted_signum else "FAIL")
-    lines = [
-        f"status: {status_text}",
-        f"mode: {options.mode}",
-        f"profile: {profile}",
-        f"reason: {reason}",
-        f"base: {base_display}",
-        f"head: {head_display}",
-        f"ref: {options.ref}",
-        f"evidence: {evidence.run_dir}",
-        "steps:",
-    ]
-    for name, code, excerpt in runner.results:
-        lines.append(f"- {name}: {'PASS' if code == 0 else f'FAIL ({code})'}")
-        if code:
-            lines.append("  bounded-redacted-tail:")
-            lines.extend(f"  | {line}" for line in excerpt)
-    if failure:
-        lines.append(f"failure: {failure}")
-    summary = "\n".join(lines) + "\n"
+    def absorb_signal() -> None:
+        nonlocal failure, interrupted_signum
+        if signal_state.first_signum is not None:
+            interrupted_signum = signal_state.first_signum
+            failure = str(GateInterrupted(interrupted_signum))
+
+    def render_summary() -> str:
+        status_text = (
+            "INTERRUPTED"
+            if interrupted_signum is not None
+            else ("PASS" if failure is None else "FAIL")
+        )
+        lines = [
+            f"status: {status_text}",
+            f"mode: {options.mode}",
+            f"profile: {profile}",
+            f"reason: {reason}",
+            f"base: {base_display}",
+            f"head: {head_display}",
+            f"ref: {options.ref}",
+            f"evidence: {evidence.run_dir}",
+            "steps:",
+        ]
+        for name, code, excerpt in runner.results:
+            lines.append(f"- {name}: {'PASS' if code == 0 else f'FAIL ({code})'}")
+            if code:
+                lines.append("  bounded-redacted-tail:")
+                lines.extend(f"  | {line}" for line in excerpt)
+        if failure:
+            lines.append(f"failure: {failure}")
+        return "\n".join(lines) + "\n"
+
+    absorb_signal()
+    summary = render_summary()
+    finalization_mask: set[signal.Signals] | None = None
     try:
         evidence.complete(summary)
+        finalization_mask = signal.pthread_sigmask(
+            signal.SIG_BLOCK, set(watched_signals)
+        )
+        before_refresh = interrupted_signum
+        absorb_signal()
+        if interrupted_signum != before_refresh:
+            evidence.replace_summary(render_summary())
         with _open_existing_private(evidence.summary_path, evidence.run_dir, "rb") as summary_file:
             print(summary_file.read().decode("utf-8", "replace"), end="")
     finally:
+        if finalization_mask is None:
+            signal.pthread_sigmask(signal.SIG_BLOCK, set(watched_signals))
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
         signal.pthread_sigmask(signal.SIG_SETMASK, previous_signal_mask)

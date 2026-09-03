@@ -20,14 +20,20 @@ the resolved `--head`. Staged, unstaged, or non-ignored untracked paths stop
 the gate before any check executes. Assume-unchanged and skip-worktree index
 flags are also forbidden. Immediately before execution, each repository-owned
 executable is checked for committed `100755` mode and content identity at the
-recorded head. The same checkout invariant is checked immediately before and
-after every executable phase and once more before recording PASS; an
-extension, build, or concurrent process that changes inputs fails the run.
+recorded head. The gate then materializes a private, detached checkout of that
+exact commit inside the evidence run and executes every check, extension, and
+Maven phase there. Concurrent or transient changes in the invoking checkout
+therefore cannot change official inputs. The private checkout invariant is
+checked before and after every executable phase and once more before recording
+PASS; a phase that changes its snapshot inputs fails the run. The snapshot is
+removed before evidence finalization.
 
 Both profiles run the gate self-tests, `git diff --check`, changed-Markdown
 local-link checks, project Skill structure checks, and a high-confidence scan
 of added content for credentials. Normal additionally runs exactly
 `./mvnw -B -ntp clean verify`; it neither formats sources nor skips tests.
+Local-link checks include the destination of detected Markdown renames and
+copies, even though those change kinds conservatively select Normal.
 
 Later repository checks plug into executable files under these stable seams:
 
@@ -62,11 +68,16 @@ parses complete changed-head files and reports an assignment only when its span
 overlaps an added line, so a changed multiline value cannot hide behind an
 unchanged key. Exact environment placeholders remain allowed. Identifier and
 code-expression exemptions apply only to Java source; config-like files remain
-strict, while terminal redaction stays conservative for every file type.
+strict, while terminal redaction stays conservative for every file type. YAML
+credential block scalars (`|` and `>`, including chomping and indentation
+indicators) are scanned and redacted through their indentation-defined dedent;
+oversized open blocks remain suppressed under a bounded state limit.
 SIGINT/SIGTERM is masked through child launch and process group capture. Cleanup
 then tracks the group through descendant exit, escalates resistant members to
 SIGKILL, and completes interrupted evidence only after the direct child has
-been reaped.
+been reaped. The first interrupt remains recorded through snapshot cleanup,
+evidence finalization, and retention pruning; later signals are suppressed
+while that interrupted record is completed.
 
 Run the deterministic policy and fixture suite directly with:
 
