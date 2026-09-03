@@ -15,4 +15,4 @@
 
 由 `ea72d7d` 实现。Inventory Application、Persistence/Outbox 与消息 Inbound
 slices 已分离，处理器位于服务 Inbound Adapter；当前 configuration、handler
-和真实 Kafka/PostgreSQL 测试验证幂等、原子预留、回滚与结果发布。
+和真实 Kafka/PostgreSQL 测试通过，验证幂等、原子预留、回滚与结果发布。

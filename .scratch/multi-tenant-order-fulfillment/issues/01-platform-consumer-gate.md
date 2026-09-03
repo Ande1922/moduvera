@@ -16,4 +16,6 @@
 
 ## Answer
 
+实现提交：`71d3f37`。
+
 独立 Notes consumer 现在自动识别 OrbStack Testcontainers 环境，并在自定义 MyBatis-Plus InnerInterceptor 存在时仍由 Data Starter 把 TenantLine 安装在首位。真实 PostgreSQL、HTTP、认证授权、RFC 9457、correlation、跨租户 404、transaction bean 和 Data Starter fail-fast 均已验证。聚焦 Starter 测试与独立 consumer `verify` 在 JDK 26 下通过。

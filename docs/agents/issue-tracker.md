@@ -25,8 +25,14 @@ Run `python3 tools/tracker/check.py` after tracker edits. The checker accepts th
 legacy bold metadata form, but fails closed on missing or cyclic local blockers,
 invalid type/status combinations, stale blocked/unblocked states, non-terminal
 children beneath a resolved spec, and resolved issues without completed
-acceptance items and verification evidence in their Answer. The common quality
-gate extension runs the same checker for both docs-only and Normal profiles.
+acceptance items, a concrete commit, and affirmative verification evidence in
+their Answer. Negative statements such as unavailable, unrun, or failed tests
+are not completion evidence. `Blocked by` entries must fully match `None`, a
+two-digit local issue number, or `External — description`; `None` and local
+issue numbers may also carry a description after the dash. A `wontfix` issue or
+spec is terminal without requiring its blockers to be resolved. The common
+quality gate extension runs the same checker for both docs-only and Normal
+profiles.
 
 ## System reviews
 

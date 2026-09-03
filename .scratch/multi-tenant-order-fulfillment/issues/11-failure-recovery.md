@@ -17,5 +17,5 @@
 ## Answer
 
 由 `71d3f37` 完成。JDBC Outbox/Inbox、lease/token fencing、retry/terminal
-状态和真实 Kafka 故障恢复路径已提交；仓库测试验证事务回滚、重复投递、
+状态和真实 Kafka 故障恢复路径已提交；仓库测试通过，验证事务回滚、重复投递、
 重启接管和有界失败分类，未引入测试专用生产端点。

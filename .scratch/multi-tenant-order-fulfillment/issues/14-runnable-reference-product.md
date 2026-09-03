@@ -19,5 +19,5 @@
 ## Answer
 
 由 `71d3f37` 交付可运行参考产品、公共 HTTP 黑盒验收和支持范围文档，随后
-`ea72d7d` 补齐共享双拓扑验证。验证 harness 使用真实 PostgreSQL/Kafka、
+`ea72d7d` 补齐并通过共享双拓扑验证。验证 harness 使用真实 PostgreSQL/Kafka、
 隔离 Run ID 和有界 Eventually 断言，并提供不泄露凭据的失败诊断。

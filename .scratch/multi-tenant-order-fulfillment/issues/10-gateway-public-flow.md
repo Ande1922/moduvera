@@ -18,4 +18,4 @@
 
 由 `71d3f37` 实现，并由 `56ed028` 收紧 Gateway 装配边界。Gateway 的公共
 登录与 Order 流、内部 token exchange、路由隔离及 RFC 9457 错误契约均有
-integration test 与公共黑盒验证证据。
+integration test 与公共黑盒验证均通过。

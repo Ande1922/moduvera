@@ -16,6 +16,8 @@
 
 ## Answer
 
+实现提交：`71d3f37`。
+
 `order-app` 现在是显式装配的真实消费者。`CatalogHttpClient` 在事务前完成远程价格快照查询，并传递服务令牌、Tenant-Id、correlation 与有界超时；Order 的 PostgreSQL adapter 负责租户隔离、价格快照、audit 与 optimistic version。创建用例只在 Catalog 成功后打开本地事务，并在该事务内同时写 Order 和 Reserve Command Outbox。
 
 验收命令：

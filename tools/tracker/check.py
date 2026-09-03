@@ -46,8 +46,22 @@ METADATA = re.compile(
 )
 ISSUE_NUMBER = re.compile(r"^(\d{2})-")
 ANSWER = re.compile(r"^## Answer\s*$|^\*\*Answer:\*\*", re.MULTILINE | re.IGNORECASE)
-VERIFICATION_EVIDENCE = re.compile(
-    r"verification|verify|test|evidence|commit|验证|测试|审查|通过|提交",
+COMMIT_EVIDENCE = re.compile(r"(?<![0-9A-Fa-f])[0-9A-Fa-f]{7,40}(?![0-9A-Fa-f])")
+VERIFICATION_CONTEXT = re.compile(
+    r"verification|verify|tests?|reviews?|evidence|mvnw|测试|验证|审查|证据",
+    re.IGNORECASE,
+)
+AFFIRMATIVE_RESULT = re.compile(
+    r"\bpass(?:ed)?\b|\bsuccess(?:ful(?:ly)?)?\b|\bcover(?:ed|s)?\b|"
+    r"通过|成功|已验证|覆盖|均已提交",
+    re.IGNORECASE,
+)
+NEGATIVE_RESULT = re.compile(
+    r"\bno\s+(?:tests?|verification|evidence)\b|"
+    r"\bnot\s+(?:run|executed|verified|available|pass(?:ed)?)\b|"
+    r"\bdid\s+not\s+(?:run|pass|succeed)\b|"
+    r"\bunavailable\b|\bpending\b|\bfail(?:ed|ure)?\b|"
+    r"未运行|没有运行|不可用|失败|尚未|待验证|未验证|未通过|没有通过|不通过",
     re.IGNORECASE,
 )
 UNCHECKED = re.compile(r"^\s*[-*]\s*\[\s\]\s+", re.MULTILINE)
@@ -88,22 +102,38 @@ def metadata_values(text: str) -> dict[str, list[tuple[str, int]]]:
 def parse_blockers(
     value: str, location: str, errors: list[str]
 ) -> tuple[tuple[str, ...], int]:
-    if re.match(r"^none(?:\s|$|[—-])", value, re.IGNORECASE):
+    description = r"(?:\s+[—-]\s+\S.*)?"
+    none_entry = re.compile(rf"None{description}\Z", re.IGNORECASE)
+    number_entry = re.compile(rf"(\d{{2}}){description}\Z")
+    external_entry = re.compile(r"External\s+[—-]\s+\S.*\Z", re.IGNORECASE)
+    items = re.split(r"[,;；]", value)
+    if len(items) == 1 and none_entry.fullmatch(items[0].strip()):
         return (), 0
     blockers: list[str] = []
     external = 0
-    for item in re.split(r"[,;；]", value):
-        match = re.match(r"\s*(\d{1,2})(?=\s|$|[—-])", item)
-        if re.match(r"\s*External\s*[—-]\s*\S", item, re.IGNORECASE):
+    for item in items:
+        entry = item.strip()
+        match = number_entry.fullmatch(entry)
+        if external_entry.fullmatch(entry):
             external += 1
             continue
         if not match:
-            errors.append(f"{location}: invalid blocker entry: {item.strip() or '<empty>'}")
+            errors.append(f"{location}: invalid blocker entry: {entry or '<empty>'}")
             continue
-        blockers.append(f"{int(match.group(1)):02d}")
+        blockers.append(match.group(1))
     if len(blockers) != len(set(blockers)):
         errors.append(f"{location}: duplicate blocker reference")
     return tuple(blockers), external
+
+
+def has_affirmative_verification(answer: str) -> bool:
+    fragments = re.split(r"(?<=[.!?。！？;；])|\n", answer)
+    return any(
+        VERIFICATION_CONTEXT.search(fragment)
+        and AFFIRMATIVE_RESULT.search(fragment)
+        and not NEGATIVE_RESULT.search(fragment)
+        for fragment in fragments
+    )
 
 
 def load_records(root: Path) -> tuple[list[Record], list[str]]:
@@ -196,21 +226,28 @@ def validate(root: Path) -> tuple[list[Record], list[str]]:
             if record.external_blockers and record.status not in TERMINAL_ISSUE_STATUSES:
                 unresolved.extend(["External"] * record.external_blockers)
             graph[record.relative] = tuple(targets)
-            if unresolved and record.status != "blocked":
-                errors.append(
-                    f"{record.relative}: unresolved blocker(s) {', '.join(unresolved)} require status blocked"
-                )
-            if record.status == "blocked" and not unresolved:
-                errors.append(f"{record.relative}: status blocked has no unresolved blocker")
+            if record.status != "wontfix":
+                if unresolved and record.status != "blocked":
+                    errors.append(
+                        f"{record.relative}: unresolved blocker(s) {', '.join(unresolved)} require status blocked"
+                    )
+                if record.status == "blocked" and not unresolved:
+                    errors.append(f"{record.relative}: status blocked has no unresolved blocker")
 
             if record.status == "resolved":
                 answer = ANSWER.search(record.text)
                 if answer is None:
                     errors.append(f"{record.relative}: resolved issue is missing Answer")
-                elif not VERIFICATION_EVIDENCE.search(record.text[answer.end() :]):
-                    errors.append(
-                        f"{record.relative}: resolved issue Answer is missing verification evidence"
-                    )
+                else:
+                    answer_text = record.text[answer.end() :]
+                    if not COMMIT_EVIDENCE.search(answer_text):
+                        errors.append(
+                            f"{record.relative}: resolved issue Answer is missing a concrete commit"
+                        )
+                    if not has_affirmative_verification(answer_text):
+                        errors.append(
+                            f"{record.relative}: resolved issue Answer is missing affirmative verification evidence"
+                        )
                 unchecked = UNCHECKED.search(record.text)
                 if unchecked is not None:
                     line = record.text.count("\n", 0, unchecked.start()) + 1
@@ -247,8 +284,8 @@ def validate(root: Path) -> tuple[list[Record], list[str]]:
         )
         if record.status == "resolved" and not all_terminal:
             errors.append(f"{record.relative}: resolved spec has non-terminal or missing child issues")
-        elif all_terminal and record.status != "resolved":
-            errors.append(f"{record.relative}: all child issues are terminal but spec is not resolved")
+        elif all_terminal and record.status not in TERMINAL_ISSUE_STATUSES:
+            errors.append(f"{record.relative}: all child issues are terminal but spec is not terminal")
     return records, errors
 
 

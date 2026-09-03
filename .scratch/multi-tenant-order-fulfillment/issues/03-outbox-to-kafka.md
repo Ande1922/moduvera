@@ -16,4 +16,6 @@
 
 ## Answer
 
+实现提交：`71d3f37`。
+
 新增 Kafka Starter 的 fail-fast 自动装配、显式逻辑 destination 路由、PostgreSQL durable Outbox、claim/lease relay 和同步 broker ACK 配置。Event 以 structured CloudEvents JSON 发布，Async Command 使用独立 envelope，两个 schema 随 Message Core 发布；Kafka 传输使用原生 byte[] codec，稳定 partition key 可在真实 broker 中观察。独立 Notes consumer 证明业务写入与 Outbox 同提交/同回滚、业务 payload 不携带技术 tenant 字段，并以 versionless BOM 在 JDK 26、Boot 4.1.1、真实 PostgreSQL/Kafka 下通过 `clean verify`。

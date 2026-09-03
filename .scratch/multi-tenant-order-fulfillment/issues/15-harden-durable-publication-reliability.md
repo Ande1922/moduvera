@@ -160,4 +160,4 @@ published cleanup、低基数指标以及 PostgreSQL/MySQL 专属索引。
 
 验证证据位于 `OutboxWorkerTest`、`OutboxRelayIT`、`JdbcMessagingStoreIT`、
 `JdbcMessagingMySqlIT`、真实 Kafka App tests 和参考产品故障恢复 harness；
-本次校准再次运行消息 Starter 聚焦 `verify` 与仓库 Normal quality gate。
+本次校准再次运行消息 Starter 聚焦 `verify` 与仓库 Normal quality gate，均通过。

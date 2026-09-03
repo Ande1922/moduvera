@@ -16,4 +16,4 @@
 
 由 `ea72d7d` 实现，并由 `56ed028` 收紧装配边界。Gateway 使用服务名
 Route/Filter 完成前缀、token exchange 与 correlation 处理；Gateway
-integration tests 验证公共路径、透明响应和内部端点不可达。
+integration tests 通过，验证公共路径、透明响应和内部端点不可达。

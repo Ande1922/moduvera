@@ -18,4 +18,4 @@
 
 由 `71d3f37` 完成。Catalog、Order、Inventory 和 JDBC Messaging 的 MySQL
 runtime-adapter TCK 覆盖租户隔离、迁移、事务、claim/lease、fencing、
-cleanup 与 redrive；PostgreSQL 仍是唯一黄金路径和端到端验证环境。
+cleanup 与 redrive 且测试通过；PostgreSQL 仍是唯一黄金路径和端到端验证环境。

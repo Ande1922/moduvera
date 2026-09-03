@@ -16,4 +16,4 @@
 
 由 `ea72d7d` 实现。`app-monolith` 显式组合 Local Catalog、Order/Inventory
 Application、Persistence 与服务拥有的 Inbound Adapter，并由真实
-PostgreSQL/Kafka integration tests 验证确认、拒绝、重复交付和恢复。
+PostgreSQL/Kafka integration tests 通过，验证确认、拒绝、重复交付和恢复。

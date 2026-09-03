@@ -16,4 +16,6 @@
 
 ## Answer
 
+实现提交：`71d3f37`。
+
 Outbox/Inbox contract、内存可靠性算法和测试已迁入 `platform-message-core`，Java package seam 保持不变。两个浅 Maven artifact、root reactor/BOM 条目及 Architecture Testkit 依赖已移除，current product surface 已同步。Message Core、BOM smoke、Architecture Testkit 及其依赖测试在 JDK 26 下通过。

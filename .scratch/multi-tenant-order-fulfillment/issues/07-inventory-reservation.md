@@ -16,6 +16,8 @@
 
 ## Answer
 
+实现提交：`71d3f37`。
+
 `inventory-app` 使用显式 consumer bean 接收 `inventory.reserve`，由可靠消费层建立可信上下文并在一个 `TransactionBoundary` 内先写 Inbox marker，再执行稳定 product ID 排序的 `FOR UPDATE` 库存检查、条件/version 扣减、结果持久化与 Result Outbox。重复消息在 Inbox 处短路；Store 自身也能返回既有结果。库存不足路径在持锁检查后不执行任何扣减，因此不会出现部分预留。
 
 验收命令：

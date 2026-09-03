@@ -16,4 +16,6 @@
 
 ## Answer
 
+实现提交：`71d3f37`。
+
 Kafka Starter 提供显式三行式 imperative Consumer factory：先验证 wire contract、destination 与 schema，再建立可信 Execution Context，并由 atomic Inbox marker 与业务副作用共享唯一顶层事务。缺陷分类采用 bounded retry，non-retryable/耗尽分支交给 Kafka Binder DLQ；native codec 的 DLQ key/value serializer 由 Starter 安全配置。单元测试验证成功与异常后的 context 清理，PostgreSQL IT 验证并发 dedupe，独立 Notes consumer 在真实 Kafka 上验证重复投递、三次重试、DLQ 与消费组行为。

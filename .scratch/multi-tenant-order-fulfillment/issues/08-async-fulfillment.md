@@ -18,4 +18,4 @@
 
 由平台交付提交 `71d3f37` 完成。Order 与 Inventory 的 provider-owned 消息
 契约、Outbox/Inbox 事务边界及状态机均已落地；真实 Kafka/PostgreSQL App
-测试验证确认、拒绝、重复交付、快照和可信上下文传播。
+测试通过，验证确认、拒绝、重复交付、快照和可信上下文传播。
