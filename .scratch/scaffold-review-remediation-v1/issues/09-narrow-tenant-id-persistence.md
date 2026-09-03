@@ -28,8 +28,9 @@ Blocked by: 08
 
 ## Answer
 
-- 实现分支：`codex/remediation-v1-09-tenant-persistence`，最终提交 `542fdc5a30966066d38a9f5f6fa37a6edfc5cc49`。
+- 实现分支：`codex/remediation-v1-09-tenant-persistence`，最终提交 `bae12a725fe6f54d65a2151f766ad82566c71921`。
 - 最终 Standards Review 与 Spec Review 均为 no findings；历史 V1 相对固定 base 无差异，新增 V2 在改列前拒绝 65 字符历史数据并保留数据与原列宽。
 - Ticket 分支最终验证：Messaging migration 2/2、MySQL repositories 4/4、Catalog App 8/8、Identity migration 1/1、schema gate 4/4，全部通过。
 - Monolith migration evidence 已同步精确验证 Catalog 与 Messaging 的 V1+V2，真实依赖整类 `ModuveraMonolithApplicationIT` 通过；该回补的最终 Standards/Spec Review 均为 no findings。
+- Simple Notes Demo 的 Messaging migration history 已同步精确验证 baseline V0、V1 与 V2，`NotesDemoIT` 及 `examples/simple-notes-demo` 模块级 `verify` 均通过；该回补的最终 Standards/Spec Review 均为 no findings。
 - 集成态 Ticket 09/10 共享 MySQL 表面再次验证 4/4，schema gate 4/4，Reactor BUILD SUCCESS；schema scanner 覆盖 CREATE 顶层列、PostgreSQL TYPE/SET DATA TYPE、ADD/MODIFY 与 MySQL CHANGE，同时避免把约束和非类型 ALTER 误报为列声明。
