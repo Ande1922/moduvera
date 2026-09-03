@@ -287,14 +287,16 @@ def validate(root: Path) -> tuple[list[Record], list[str]]:
         if record.kind != "spec":
             continue
         children = list(issues_by_effort.get(record.relative.parent, {}).values())
-        all_terminal = bool(children) and all(
+        all_terminal = all(
             child.status in TERMINAL_ISSUE_STATUSES for child in children
         )
-        if record.status in TERMINAL_ISSUE_STATUSES and not all_terminal:
+        if record.status == "resolved" and (not children or not all_terminal):
             errors.append(
-                f"{record.relative}: {record.status} spec has non-terminal or missing child issues"
+                f"{record.relative}: resolved spec has non-terminal or missing child issues"
             )
-        elif all_terminal and record.status not in TERMINAL_ISSUE_STATUSES:
+        elif record.status == "wontfix" and children and not all_terminal:
+            errors.append(f"{record.relative}: wontfix spec has non-terminal child issues")
+        elif children and all_terminal and record.status not in TERMINAL_ISSUE_STATUSES:
             errors.append(f"{record.relative}: all child issues are terminal but spec is not terminal")
     return records, errors
 

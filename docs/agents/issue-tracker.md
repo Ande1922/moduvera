@@ -32,9 +32,10 @@ or do not cover the change. `Blocked by` entries must fully match `None`, a
 two-digit local issue number, or `External — description`; `None` and local
 issue numbers may also carry a description after the dash. A `wontfix` issue is
 terminal without requiring its blockers to be resolved. A terminal spec may be
-`resolved` or `wontfix`, but every child issue must itself be terminal. The
-common quality gate extension runs the same checker for both docs-only and
-Normal profiles.
+`resolved` or `wontfix`: `resolved` requires at least one child and all children
+terminal; `wontfix` may have no children, but any children it has must all be
+terminal. The common quality gate extension runs the same checker for both
+docs-only and Normal profiles.
 
 ## System reviews
 

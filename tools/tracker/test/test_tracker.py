@@ -135,6 +135,10 @@ class TrackerCheckerTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("wontfix spec has non-terminal", result.stderr)
 
+    def test_wontfix_spec_without_children_passes(self) -> None:
+        result = self.run_checker(self.fixture("wontfix-no-children"))
+        self.assertEqual(0, result.returncode, result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
