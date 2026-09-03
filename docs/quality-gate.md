@@ -57,13 +57,15 @@ mode `0600`. Symlinked evidence components are rejected before use.
 Permissions are applied through no-follow file descriptors after confinement
 checks, rather than through path-following chmod operations.
 `.quality-gate/latest` is a private regular file containing the run ID of the
-newest attempt, including a failed base-resolution attempt. Only the newest 20
-completed runs are kept. Required retention pruning succeeds before the current
-summary and `completed` marker are published, so a pruning failure cannot leave
-an authoritative PASS run. A private, no-follow, owner-validated cross-process
-lock serializes the retention reservation, summary and completion publication,
-and final `latest` update, so concurrent completions share the same 20-run
-limit.
+lexically newest attempt, including an incomplete or failed base-resolution
+attempt; an older attempt completing later cannot move it backward. Only the
+newest 20 completed runs are kept. Required retention pruning succeeds before
+the current summary and `completed` marker are published, so a pruning failure
+cannot leave an authoritative PASS run. A private, no-follow, owner-validated
+cross-process lock serializes existing-run validation, run creation, retention
+reservation, summary and completion publication, and conditional `latest` update. Concurrent
+creation therefore cannot race pruning into recreating an incomplete orphan,
+and concurrent completions share the same 20-run limit.
 The terminal prints only the bounded redacted summary; inspect `full.log`
 locally when more detail is required. The complete log is streamed through a
 stateful redactor before only the final redacted lines are retained. Credential
@@ -97,9 +99,11 @@ execution-to-finalization transition blocks watched signals before switching
 to non-raising cleanup, so a signal in that boundary is latched rather than
 escaping without completed evidence. Watched signals pending in the final
 blocked window are consumed, then the gate handlers remain installed while
-those signals are unblocked. The authoritative interrupted summary is refreshed
-before the caller's handlers and mask are restored; later signals follow the
-caller's original disposition.
+those signals are unblocked. After the authoritative interrupted summary is
+refreshed, both signals are blocked again before either caller handler is
+restored. A signal pending during that per-handler restore window is consumed
+and recorded before the caller's mask is atomically restored; later signals
+follow the caller's original disposition.
 
 Run the deterministic policy and fixture suite directly with:
 

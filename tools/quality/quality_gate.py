@@ -74,6 +74,7 @@ STREAMING_STANDALONE_OPEN = re.compile(
     r"\bgh[pousr]_[A-Za-z0-9]*|"
     r"\bxox[baprs]-[A-Za-z0-9-]*)$"
 )
+RUN_ID = re.compile(r"^\d{8}T\d{6}\.\d{6}Z-\d+$")
 
 
 def _redact_credential(match: re.Match[str]) -> str:
@@ -846,7 +847,23 @@ def _unlink_existing_private(path: Path, parent: Path) -> None:
 
 
 def _validate_run_tree(run: Path, runs: Path) -> None:
-    _ensure_directory(run, runs)
+    if run.parent != runs:
+        raise GateError(f"unsafe evidence run parent: {run}")
+    state = _lstat(run)
+    if state is None:
+        raise GateError(f"evidence run disappeared during validation: {run}")
+    if stat.S_ISLNK(state.st_mode) or not stat.S_ISDIR(state.st_mode):
+        raise GateError(f"evidence run must be a real directory: {run}")
+    if run.resolve(strict=True).parent != runs.resolve(strict=True):
+        raise GateError(f"evidence run escapes its validated parent: {run}")
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(run, flags)
+    try:
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise GateError(f"evidence run descriptor is not a directory: {run}")
+        os.fchmod(descriptor, 0o700)
+    finally:
+        os.close(descriptor)
     for current_root, directory_names, file_names in os.walk(run, followlinks=False):
         current = Path(current_root)
         for name in [*directory_names, *file_names]:
@@ -867,35 +884,43 @@ class Evidence:
         old_umask = os.umask(0o077)
         try:
             _ensure_directory(self.root, self.repo)
-            _ensure_directory(self.runs, self.root)
-            latest = self.root / "latest"
-            if _lstat(latest) is not None:
-                _validate_regular(latest, self.root)
-            for existing in self.runs.iterdir():
-                state = existing.lstat()
-                if stat.S_ISLNK(state.st_mode) or not stat.S_ISDIR(state.st_mode):
-                    raise GateError(f"invalid evidence run component: {existing}")
-                _validate_run_tree(existing, self.runs)
-            stamp = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%S.%fZ")
-            self.run_id = f"{stamp}-{os.getpid()}"
-            self.run_dir = self.runs / self.run_id
-            _ensure_directory(self.run_dir, self.runs)
-            self.log_path = self.run_dir / "full.log"
-            self.summary_path = self.run_dir / "summary.txt"
-            with _open_new_private(self.log_path, self.run_dir):
-                pass
             with _exclusive_private_lock(self.completion_lock, self.root):
+                _ensure_directory(self.runs, self.root)
+                latest = self.root / "latest"
+                if _lstat(latest) is not None:
+                    _validate_regular(latest, self.root)
+                for existing in self.runs.iterdir():
+                    state = existing.lstat()
+                    if stat.S_ISLNK(state.st_mode) or not stat.S_ISDIR(state.st_mode):
+                        raise GateError(f"invalid evidence run component: {existing}")
+                    _validate_run_tree(existing, self.runs)
+                stamp = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%S.%fZ")
+                self.run_id = f"{stamp}-{os.getpid()}"
+                self.run_dir = self.runs / self.run_id
+                _ensure_directory(self.run_dir, self.runs)
+                self.log_path = self.run_dir / "full.log"
+                self.summary_path = self.run_dir / "summary.txt"
+                with _open_new_private(self.log_path, self.run_dir):
+                    pass
                 self._update_latest()
         finally:
             os.umask(old_umask)
 
     def _update_latest(self) -> None:
+        latest = self.root / "latest"
+        if _lstat(latest) is not None:
+            _validate_regular(latest, self.root)
+            with _open_existing_private(latest, self.root, "rb") as pointer:
+                current = pointer.read(MAX_SUMMARY_BYTES).decode("ascii", "replace").strip()
+            if not RUN_ID.fullmatch(current):
+                raise GateError("invalid evidence latest run ID")
+            if current >= self.run_id:
+                return
         temporary = self.root / f".latest-{os.getpid()}"
         if _lstat(temporary) is not None:
             raise GateError(f"unexpected evidence pointer temporary exists: {temporary}")
         with _open_new_private(temporary, self.root) as pointer:
             pointer.write(f"{self.run_id}\n")
-        latest = self.root / "latest"
         if _lstat(latest) is not None:
             _validate_regular(latest, self.root)
         os.replace(temporary, self.root / "latest")
@@ -910,7 +935,7 @@ class Evidence:
 
     def complete(self, summary: str) -> None:
         with _exclusive_private_lock(self.completion_lock, self.root):
-            self.prune(reserve=1)
+            self._prune_unlocked(reserve=1)
             encoded = self._encode_summary(summary)
             with _open_new_private(self.summary_path, self.run_dir) as summary_file:
                 summary_file.buffer.write(encoded)
@@ -928,6 +953,10 @@ class Evidence:
         _validate_regular(self.summary_path, self.run_dir)
 
     def prune(self, reserve: int = 0) -> None:
+        with _exclusive_private_lock(self.completion_lock, self.root):
+            self._prune_unlocked(reserve)
+
+    def _prune_unlocked(self, reserve: int = 0) -> None:
         if reserve < 0 or reserve > MAX_COMPLETED_RUNS:
             raise GateError(f"invalid evidence retention reservation: {reserve}")
         completed: list[Path] = []
@@ -1902,26 +1931,28 @@ def gate(arguments: list[str]) -> int:
         # caller's handlers and mask are restored.
         handoff_mask = set(finalization_mask) - set(watched_signals)
         signal.pthread_sigmask(signal.SIG_SETMASK, handoff_mask)
-        before_handler_restore = signal_state.first_signum
+        refresh_interrupted_summary()
+
+        # Restore the caller's dispositions only while both watched signals are
+        # blocked. A signal in the per-handler restore window remains pending
+        # and is consumed into the authoritative gate result before handoff.
+        signal.pthread_sigmask(signal.SIG_BLOCK, set(watched_signals))
+        consume_pending_watched_signals(signal_state, watched_signals)
         refresh_interrupted_summary()
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
+        consume_pending_watched_signals(signal_state, watched_signals)
+        refresh_interrupted_summary()
         handlers_restored = True
-        if signal_state.first_signum != before_handler_restore:
-            refresh_interrupted_summary()
     finally:
         if not handlers_restored:
             signal.pthread_sigmask(signal.SIG_BLOCK, set(watched_signals))
             consume_pending_watched_signals(signal_state, watched_signals)
             refresh_interrupted_summary()
-            blocked_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
-            signal.pthread_sigmask(
-                signal.SIG_SETMASK,
-                set(blocked_mask) - set(watched_signals),
-            )
-            refresh_interrupted_summary()
             for signum, handler in previous_handlers.items():
                 signal.signal(signum, handler)
+            consume_pending_watched_signals(signal_state, watched_signals)
+            refresh_interrupted_summary()
         signal.pthread_sigmask(signal.SIG_SETMASK, previous_signal_mask)
     with _open_existing_private(evidence.summary_path, evidence.run_dir, "rb") as summary_file:
         print(summary_file.read().decode("utf-8", "replace"), end="")

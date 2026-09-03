@@ -672,6 +672,141 @@ class QualityGateEvidenceTest(unittest.TestCase):
         self.assertTrue((latest / "completed").is_file())
         self.assertIn("status: PASS", (latest / "summary.txt").read_text())
 
+    def test_older_attempt_completing_last_cannot_rewind_latest(self) -> None:
+        ready = self.fixture.root / "older-ready"
+        release = self.fixture.root / "release-older"
+        worker = (
+            "import importlib.util,sys,time; from pathlib import Path; "
+            "spec=importlib.util.spec_from_file_location('older_gate',sys.argv[1]); "
+            "module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module); "
+            "evidence=module.Evidence(Path(sys.argv[2])); "
+            "Path(sys.argv[3]).write_text(evidence.run_id); release=Path(sys.argv[4]); "
+            "\nwhile not release.exists(): time.sleep(0.005)"
+            "\nevidence.complete('status: PASS\\n')"
+        )
+        older_process = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                worker,
+                str(CORE_PATH),
+                str(self.fixture.root),
+                str(ready),
+                str(release),
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and not ready.is_file():
+            time.sleep(0.01)
+        self.assertTrue(ready.is_file(), "older attempt did not initialize")
+        older_id = ready.read_text()
+        newer = quality_gate.Evidence(self.fixture.root)
+        newer.complete("status: PASS\n")
+        self.assertLess(older_id, newer.run_id)
+        release.write_text("finish older\n", encoding="utf-8")
+        stdout, stderr = older_process.communicate(timeout=10)
+        self.assertEqual(0, older_process.returncode, stdout + stderr)
+        self.assertEqual(newer.run_id, (newer.root / "latest").read_text().strip())
+
+    def test_run_validation_and_pruning_do_not_recreate_a_pruned_orphan(self) -> None:
+        runs = self.fixture.root / ".quality-gate/runs"
+        runs.mkdir(parents=True)
+        for index in range(quality_gate.MAX_COMPLETED_RUNS):
+            run = runs / f"20000101T000000.{index:06d}Z-1"
+            run.mkdir()
+            (run / "completed").write_text("complete\n", encoding="utf-8")
+        target = runs / "20000101T000000.000000Z-1"
+        b_ready = self.fixture.root / "pruner-ready"
+        b_go = self.fixture.root / "pruner-go"
+        b_entering = self.fixture.root / "pruner-entering"
+        worker_b = (
+            "import importlib.util,sys,time; from pathlib import Path; "
+            "spec=importlib.util.spec_from_file_location('pruner_gate',sys.argv[1]); "
+            "module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module); "
+            "evidence=module.Evidence(Path(sys.argv[2])); "
+            "Path(sys.argv[3]).write_text(evidence.run_id); go=Path(sys.argv[4]); "
+            "\nwhile not go.exists(): time.sleep(0.005)"
+            "\nPath(sys.argv[5]).write_text('entering')"
+            "\nevidence.complete('status: PASS\\n')"
+        )
+        pruner = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                worker_b,
+                str(CORE_PATH),
+                str(self.fixture.root),
+                str(b_ready),
+                str(b_go),
+                str(b_entering),
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and not b_ready.is_file():
+            time.sleep(0.01)
+        self.assertTrue(b_ready.is_file(), "pruner attempt did not initialize")
+
+        validation_paused = self.fixture.root / "validation-paused"
+        validation_release = self.fixture.root / "validation-release"
+        validator_done = self.fixture.root / "validator-done"
+        worker_a = (
+            "import importlib.util,sys,time; from pathlib import Path; "
+            "spec=importlib.util.spec_from_file_location('validator_gate',sys.argv[1]); "
+            "module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module); "
+            "original=module._validate_run_tree; target=sys.argv[3]; "
+            "paused=Path(sys.argv[4]); release=Path(sys.argv[5]); "
+            "\ndef wrapped(run,runs):"
+            "\n if run.name == target:"
+            "\n  paused.write_text('paused')"
+            "\n  while not release.exists(): time.sleep(0.005)"
+            "\n return original(run,runs)"
+            "\nmodule._validate_run_tree=wrapped"
+            "\nevidence=module.Evidence(Path(sys.argv[2]))"
+            "\nPath(sys.argv[6]).write_text(evidence.run_id)"
+        )
+        validator = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                worker_a,
+                str(CORE_PATH),
+                str(self.fixture.root),
+                target.name,
+                str(validation_paused),
+                str(validation_release),
+                str(validator_done),
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and not validation_paused.is_file():
+            time.sleep(0.01)
+        self.assertTrue(validation_paused.is_file(), "run validation did not pause")
+        b_go.write_text("prune\n", encoding="utf-8")
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and not b_entering.is_file():
+            time.sleep(0.01)
+        self.assertTrue(b_entering.is_file(), "pruner did not enter completion")
+        time.sleep(0.2)
+        validation_release.write_text("continue\n", encoding="utf-8")
+        validator_stdout, validator_stderr = validator.communicate(timeout=10)
+        pruner_stdout, pruner_stderr = pruner.communicate(timeout=10)
+        self.assertEqual(0, validator.returncode, validator_stdout + validator_stderr)
+        self.assertEqual(0, pruner.returncode, pruner_stdout + pruner_stderr)
+        self.assertFalse(target.exists(), "pruned run must not reappear as an orphan")
+        validator_run = runs / validator_done.read_text()
+        pruner_run = runs / b_ready.read_text()
+        self.assertTrue((validator_run / "full.log").is_file())
+        self.assertTrue((pruner_run / "completed").is_file())
+
     def test_prune_failure_cannot_publish_pass_or_completed_marker(self) -> None:
         root = self.fixture.root / ".quality-gate/runs"
         root.mkdir(parents=True)
@@ -1228,25 +1363,26 @@ class QualityGateEvidenceTest(unittest.TestCase):
         self.assertIn("status: INTERRUPTED", summary)
         self.assertNotIn("status: PASS", summary)
 
-    def test_signal_after_final_refresh_before_handler_restore_is_interrupted(self) -> None:
+    def test_signal_during_per_handler_restore_is_interrupted(self) -> None:
         self.install_gate()
         core = self.fixture.root / "tools/quality/quality_gate.py"
         source = core.read_text(encoding="utf-8")
         needle = (
-            "        before_handler_restore = signal_state.first_signum\n"
-            "        refresh_interrupted_summary()\n"
             "        for signum, handler in previous_handlers.items():\n"
+            "            signal.signal(signum, handler)\n"
+            "        consume_pending_watched_signals(signal_state, watched_signals)\n"
         )
         instrumented = (
-            "        before_handler_restore = signal_state.first_signum\n"
-            "        refresh_interrupted_summary()\n"
-            '        (evidence.run_dir / "post-refresh-gap").write_text("ready\\n")\n'
-            "        time.sleep(0.5)\n"
-            "        for signum, handler in previous_handlers.items():\n"
+            "        for restore_index, (signum, handler) in enumerate(previous_handlers.items()):\n"
+            "            signal.signal(signum, handler)\n"
+            "            if restore_index == 0:\n"
+            '                (evidence.run_dir / "handler-restore-gap").write_text("ready\\n")\n'
+            "                time.sleep(0.5)\n"
+            "        consume_pending_watched_signals(signal_state, watched_signals)\n"
         )
         self.assertIn(needle, source)
         core.write_text(source.replace(needle, instrumented, 1), encoding="utf-8")
-        self.base = self.fixture.commit("instrument final post-refresh gap")
+        self.base = self.fixture.commit("instrument per-handler restore gap")
         self.fixture.write("guide.md", "# Guide\n")
         head = self.fixture.commit("docs")
         process = subprocess.Popen(
@@ -1269,11 +1405,11 @@ class QualityGateEvidenceTest(unittest.TestCase):
             latest = self.fixture.root / ".quality-gate/latest"
             if latest.is_file():
                 candidate = self.fixture.root / ".quality-gate/runs" / latest.read_text().strip()
-                if (candidate / "post-refresh-gap").is_file():
+                if (candidate / "handler-restore-gap").is_file():
                     run_dir = candidate
                     break
             time.sleep(0.01)
-        self.assertIsNotNone(run_dir, "did not enter post-refresh handoff gap")
+        self.assertIsNotNone(run_dir, "did not enter per-handler restore gap")
         assert run_dir is not None
         os.kill(process.pid, signal.SIGTERM)
         stdout, stderr = process.communicate(timeout=10)
