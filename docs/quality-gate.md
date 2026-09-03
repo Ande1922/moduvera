@@ -51,6 +51,37 @@ Extensions receive `QUALITY_GATE_BASE`, `QUALITY_GATE_HEAD`,
 must be deterministic and return non-zero on failure. The orchestrator runs
 them in bytewise filename order and preserves their complete output.
 
+After the exact Normal Maven command passes, the gate atomically publishes a
+private `maven-provenance.json` and exposes its path as
+`QUALITY_GATE_MAVEN_PROVENANCE`. It binds the resolved base/head, command,
+profile, ref, result, and nanosecond build window. A Normal extension may write
+a short UTF-8 result to the unique `QUALITY_GATE_SUMMARY_PATH`; the orchestrator
+accepts only a private regular file, enforces byte and line bounds, rejects
+control characters, applies credential redaction again, and embeds it in the
+main terminal summary. Complete extension detail belongs in a separate private
+run artifact, not in this bounded channel.
+
+`tools/quality/checks.d/normal/40-changed-code` consumes that provenance and
+reports changed-code metrics after the clean build. It maps added head-side
+lines from the fixed `base..head` diff to each Maven module's current JaCoCo
+XML, then maps executable lines to compiled method descriptors using current
+`javap` line tables. Full private `changed-code.json` records source, report,
+and class hashes and modification times, line counters, method descriptors,
+complexity, exclusions, and the exact revisions. Deleted source, non-production
+Java, non-executable production lines, and documentation/build changes are
+excluded with explicit reasons. A changed executable line that cannot map to a
+current JaCoCo method is not an exclusion: it fails closed, as do missing,
+stale, malformed, or revision-mismatched evidence.
+
+Changed-line coverage is the fraction of changed executable lines with at
+least one covered instruction. For each changed method, the report uses JaCoCo
+line coverage and complexity to calculate
+`complexity² × (1 − line coverage)³ + complexity`. Coverage and CRAP values are
+report-only during calibration; no numeric threshold is enforced. Evidence
+existence, provenance, completeness, and scorability remain blocking. The
+repeatable calibration cases and expected values are recorded in
+[changed-code calibration](quality-gate-changed-code-calibration.md).
+
 Evidence is written beneath the Git-ignored `.quality-gate/runs/<run-id>/`.
 Directories are mode `0700`; the full log and bounded, redacted summary are
 mode `0600`. Symlinked evidence components are rejected before use.

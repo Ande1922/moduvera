@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import importlib.util
+import json
 import os
 from pathlib import Path
 import shlex
@@ -546,7 +547,20 @@ class QualityGateEvidenceTest(unittest.TestCase):
         extension = self.fixture.root / "tools/quality/checks.d/normal/40-changed-code"
         extension.parent.mkdir(parents=True, exist_ok=True)
         extension.write_text(
-            "#!/usr/bin/env bash\ntest -f \"$QUALITY_GATE_RUN_DIR/maven-args\"\n",
+            "#!/usr/bin/env bash\n"
+            "set -euo pipefail\n"
+            "test -f \"$QUALITY_GATE_RUN_DIR/maven-args\"\n"
+            "python3 -c 'import json, os; "
+            "data=json.load(open(os.environ[\"QUALITY_GATE_MAVEN_PROVENANCE\"])); "
+            "assert data[\"base\"] == os.environ[\"QUALITY_GATE_BASE\"]; "
+            "assert data[\"head\"] == os.environ[\"QUALITY_GATE_HEAD\"]; "
+            "assert data[\"command\"] == [\"./mvnw\", \"-B\", \"-ntp\", \"clean\", \"verify\"]'\n"
+            "printf '%s\\n' 'scoreable scope: 3 changed executable lines' "
+            "'changed-line coverage: 66.67% (2/3)' "
+            "'highest changed-method CRAP: 4.000 (example.Policy.decide()V)' "
+            "'exclusions: 1 (documentation or build change=1)' "
+            "'numeric policy: report-only' > \"$QUALITY_GATE_SUMMARY_PATH\"\n"
+            "chmod 600 \"$QUALITY_GATE_SUMMARY_PATH\"\n",
             encoding="utf-8",
         )
         extension.chmod(0o755)
@@ -571,6 +585,29 @@ class QualityGateEvidenceTest(unittest.TestCase):
             "yes\n", (self.latest_run() / "tracker-tests-ran").read_text()
         )
         self.assertIn("extension:normal/40-changed-code: PASS", result.stdout)
+        self.assertIn("scoreable scope: 3 changed executable lines", result.stdout)
+        self.assertIn("changed-line coverage: 66.67% (2/3)", result.stdout)
+        self.assertIn("highest changed-method CRAP: 4.000", result.stdout)
+        provenance = self.latest_run() / "maven-provenance.json"
+        self.assertEqual(0o600, stat.S_IMODE(provenance.stat().st_mode))
+        self.assertEqual(head, json.loads(provenance.read_text())["head"])
+
+    def test_successful_extension_summary_is_bounded_and_redacted(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary)
+            run_dir.chmod(0o700)
+            summary_path = run_dir / "extension-summary.txt"
+            exposed = "Bearer " + "sensitive-token-value-1234567890"
+            summary_path.write_text(f"result: PASS\ncredential: {exposed}\n")
+            summary_path.chmod(0o600)
+            lines = quality_gate.read_extension_summary(summary_path, run_dir)
+            self.assertNotIn(exposed, "\n".join(lines))
+            self.assertIn("[REDACTED]", "\n".join(lines))
+            summary_path.write_text(
+                "x" * (quality_gate.MAX_EXTENSION_SUMMARY_BYTES + 1)
+            )
+            with self.assertRaisesRegex(quality_gate.GateError, "bounded size"):
+                quality_gate.read_extension_summary(summary_path, run_dir)
 
     def test_public_entry_rejects_docs_only_mode(self) -> None:
         self.install_gate()
