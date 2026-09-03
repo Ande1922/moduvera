@@ -607,6 +607,25 @@ class QualityGateEvidenceTest(unittest.TestCase):
         self.assertEqual(quality_gate.MAX_COMPLETED_RUNS, len(retained))
         self.assertTrue(current.run_dir.exists())
 
+    def test_prune_failure_cannot_publish_pass_or_completed_marker(self) -> None:
+        root = self.fixture.root / ".quality-gate/runs"
+        root.mkdir(parents=True)
+        for index in range(quality_gate.MAX_COMPLETED_RUNS):
+            run = root / f"20000101T000000.{index:06d}Z-1"
+            run.mkdir()
+            (run / "completed").write_text("complete\n", encoding="utf-8")
+        current = quality_gate.Evidence(self.fixture.root)
+        with mock.patch.object(
+            quality_gate.shutil,
+            "rmtree",
+            side_effect=PermissionError("fixture run is undeletable"),
+        ):
+            with self.assertRaises(PermissionError):
+                current.complete("status: PASS\n")
+        self.assertFalse(current.summary_path.exists())
+        self.assertFalse((current.run_dir / "completed").exists())
+        self.assertEqual(current.run_id, (current.root / "latest").read_text().strip())
+
     def test_invalid_base_replaces_latest_with_failed_run(self) -> None:
         self.install_gate()
         first = quality_gate.Evidence(self.fixture.root)
@@ -786,6 +805,70 @@ class QualityGateEvidenceTest(unittest.TestCase):
             with self.assertRaises(ProcessLookupError):
                 os.kill(child_pid, 0)
 
+    def test_signal_during_post_wait_drain_cleans_same_group_background(self) -> None:
+        self.install_gate()
+        core = self.fixture.root / "tools/quality/quality_gate.py"
+        source = core.read_text(encoding="utf-8")
+        needle = (
+            "                    log.flush()\n"
+            "                    try:\n"
+            "                        _terminate_process_containment(\n"
+        )
+        instrumented = (
+            "                    log.flush()\n"
+            '                    (self.evidence.run_dir / "post-wait-drain").write_text("ready\\n")\n'
+            "                    time.sleep(0.5)\n"
+            "                    try:\n"
+            "                        _terminate_process_containment(\n"
+        )
+        self.assertIn(needle, source)
+        core.write_text(source.replace(needle, instrumented, 1), encoding="utf-8")
+        extension = self.fixture.root / "tools/quality/checks.d/common/10-background"
+        extension.write_text(
+            "#!/usr/bin/env bash\n"
+            "sleep 60 &\n"
+            "echo $! > \"$QUALITY_GATE_RUN_DIR/background.pid\"\n",
+            encoding="utf-8",
+        )
+        extension.chmod(0o755)
+        self.base = self.fixture.commit("instrument post-wait process drain")
+        self.fixture.write("guide.md", "# Guide\n")
+        head = self.fixture.commit("docs")
+        process = subprocess.Popen(
+            [
+                str(self.fixture.root / "tools/quality/quality-gate.sh"),
+                "auto",
+                "--base",
+                self.base,
+                "--head",
+                head,
+            ],
+            cwd=self.fixture.root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        run_dir: Path | None = None
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            latest = self.fixture.root / ".quality-gate/latest"
+            if latest.is_file():
+                candidate = self.fixture.root / ".quality-gate/runs" / latest.read_text().strip()
+                if (candidate / "post-wait-drain").is_file():
+                    run_dir = candidate
+                    break
+            time.sleep(0.01)
+        self.assertIsNotNone(run_dir, "did not enter post-wait drain")
+        assert run_dir is not None
+        background_pid = int((run_dir / "background.pid").read_text())
+        os.kill(process.pid, signal.SIGTERM)
+        stdout, stderr = process.communicate(timeout=10)
+        self.assertEqual(128 + signal.SIGTERM, process.returncode, stdout + stderr)
+        self.assertIn("status: INTERRUPTED", stdout)
+        self.assertTrue((run_dir / "completed").is_file())
+        with self.assertRaises(ProcessLookupError):
+            os.kill(background_pid, 0)
+
     def test_known_detached_setsid_descendant_is_cleaned_before_step_result(self) -> None:
         self.install_gate()
         python = shlex.quote(sys.executable)
@@ -899,6 +982,16 @@ class QualityGateEvidenceTest(unittest.TestCase):
 
     def test_signal_during_evidence_pruning_is_recorded_as_interrupted(self) -> None:
         self.install_gate()
+        core = self.fixture.root / "tools/quality/quality_gate.py"
+        source = core.read_text(encoding="utf-8")
+        needle = "            shutil.rmtree(victim)\n"
+        instrumented = (
+            '            (self.run_dir / "pruning").write_text("ready\\n")\n'
+            "            time.sleep(0.5)\n"
+            + needle
+        )
+        self.assertIn(needle, source)
+        core.write_text(source.replace(needle, instrumented, 1), encoding="utf-8")
         self.base = self.fixture.commit("install gate")
         self.fixture.write("guide.md", "# Guide\n")
         head = self.fixture.commit("docs")
@@ -930,10 +1023,7 @@ class QualityGateEvidenceTest(unittest.TestCase):
             latest = self.fixture.root / ".quality-gate/latest"
             if latest.is_file():
                 candidate = runs / latest.read_text().strip()
-                completed_count = sum(
-                    1 for path in runs.iterdir() if (path / "completed").is_file()
-                )
-                if (candidate / "completed").is_file() and completed_count > 20:
+                if (candidate / "pruning").is_file():
                     run_dir = candidate
                     break
             time.sleep(0.001)
@@ -986,6 +1076,61 @@ class QualityGateEvidenceTest(unittest.TestCase):
                     break
             time.sleep(0.01)
         self.assertIsNotNone(run_dir, "did not enter final unblocked handoff window")
+        assert run_dir is not None
+        os.kill(process.pid, signal.SIGTERM)
+        stdout, stderr = process.communicate(timeout=10)
+        self.assertEqual(128 + signal.SIGTERM, process.returncode, stdout + stderr)
+        self.assertIn("status: INTERRUPTED", stdout)
+        summary = (run_dir / "summary.txt").read_text()
+        self.assertIn("status: INTERRUPTED", summary)
+        self.assertNotIn("status: PASS", summary)
+
+    def test_signal_after_final_refresh_before_handler_restore_is_interrupted(self) -> None:
+        self.install_gate()
+        core = self.fixture.root / "tools/quality/quality_gate.py"
+        source = core.read_text(encoding="utf-8")
+        needle = (
+            "        before_handler_restore = signal_state.first_signum\n"
+            "        refresh_interrupted_summary()\n"
+            "        for signum, handler in previous_handlers.items():\n"
+        )
+        instrumented = (
+            "        before_handler_restore = signal_state.first_signum\n"
+            "        refresh_interrupted_summary()\n"
+            '        (evidence.run_dir / "post-refresh-gap").write_text("ready\\n")\n'
+            "        time.sleep(0.5)\n"
+            "        for signum, handler in previous_handlers.items():\n"
+        )
+        self.assertIn(needle, source)
+        core.write_text(source.replace(needle, instrumented, 1), encoding="utf-8")
+        self.base = self.fixture.commit("instrument final post-refresh gap")
+        self.fixture.write("guide.md", "# Guide\n")
+        head = self.fixture.commit("docs")
+        process = subprocess.Popen(
+            [
+                str(self.fixture.root / "tools/quality/quality-gate.sh"),
+                "auto",
+                "--base",
+                self.base,
+                "--head",
+                head,
+            ],
+            cwd=self.fixture.root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        run_dir: Path | None = None
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            latest = self.fixture.root / ".quality-gate/latest"
+            if latest.is_file():
+                candidate = self.fixture.root / ".quality-gate/runs" / latest.read_text().strip()
+                if (candidate / "post-refresh-gap").is_file():
+                    run_dir = candidate
+                    break
+            time.sleep(0.01)
+        self.assertIsNotNone(run_dir, "did not enter post-refresh handoff gap")
         assert run_dir is not None
         os.kill(process.pid, signal.SIGTERM)
         stdout, stderr = process.communicate(timeout=10)
@@ -1087,6 +1232,31 @@ class BoundedTailTest(unittest.TestCase):
         self.assertIn("[REDACTED_PRIVATE_KEY_BLOCK]", retained)
         self.assertIn("[REDACTED]", retained)
         self.assertLessEqual(len(tail), quality_gate.MAX_FAILURE_LINES)
+
+    def test_oversized_standalone_tokens_never_leak_chunk_continuations(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "standalone-tokens.log"
+            bearer_prefix = "Bear" + "er "
+            github_prefix = "gh" + "p_"
+            slack_prefix = "xo" + "xb-"
+            bearer_payload = "B" * 20_000
+            github_payload = "G" * 20_000
+            slack_payload = "S" * 20_000
+            path.write_text(
+                f"{bearer_prefix}{bearer_payload}\n"
+                f"{github_prefix}{github_payload}\n"
+                f"{slack_prefix}{slack_payload}\n"
+                "safe-tail\n",
+                encoding="utf-8",
+            )
+            tail = quality_gate.redacted_tail(path)
+        retained = "\n".join(tail)
+        for fragment in ("B" * 100, "G" * 100, "S" * 100):
+            self.assertNotIn(fragment, retained)
+        self.assertGreaterEqual(
+            sum(line.startswith("[REDACTED") for line in tail), 3
+        )
+        self.assertIn("safe-tail", retained)
 
     def test_multiline_single_and_double_quoted_credentials_remain_redacted(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

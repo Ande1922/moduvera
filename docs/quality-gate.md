@@ -58,12 +58,15 @@ Permissions are applied through no-follow file descriptors after confinement
 checks, rather than through path-following chmod operations.
 `.quality-gate/latest` is a private regular file containing the run ID of the
 newest attempt, including a failed base-resolution attempt. Only the newest 20
-completed runs are kept.
+completed runs are kept. Required retention pruning succeeds before the current
+summary and `completed` marker are published, so a pruning failure cannot leave
+an authoritative PASS run.
 The terminal prints only the bounded redacted summary; inspect `full.log`
 locally when more detail is required. The complete log is streamed through a
 stateful redactor before only the final redacted lines are retained. Credential
 redaction keeps bounded single- and double-quote state across physical lines,
-recognizes escaped quotes, and removes private-key blocks in full. The scanner
+recognizes escaped quotes, suppresses oversized standalone-token continuations
+across input chunks, and removes private-key blocks in full. The scanner
 parses complete changed-head files and reports an assignment only when its span
 overlaps an added line, so a changed multiline value cannot hide behind an
 unchanged key. Exact environment placeholders remain allowed. Identifier and
@@ -78,10 +81,12 @@ private checkout; process lifecycle handling is not an adversarial code sandbox.
 SIGINT/SIGTERM is masked through child launch and process group capture. Cleanup
 tracks the ordinary process group through descendant exit, escalates resistant
 members to SIGKILL, and completes interrupted evidence only after the direct
-child has been reaped. Birth-identity and inherited lifecycle-descriptor
-tracking adds best-effort cleanup for known detached descendants, but does not
-claim containment against hostile code that deliberately double-forks, creates
-a new session, and closes inherited descriptors. The first interrupt remains
+child has been reaped. Post-wait group detection and draining remain inside the
+same interruption-safe lifecycle. Birth-identity and inherited
+lifecycle-descriptor tracking adds best-effort cleanup for known detached
+descendants, but does not claim containment against hostile code that
+deliberately double-forks, creates a new session, and closes inherited
+descriptors. The first interrupt remains
 recorded through snapshot cleanup, evidence finalization, and retention pruning.
 Watched signals pending in the final blocked window are consumed, then the gate
 handlers remain installed while those signals are unblocked. The authoritative

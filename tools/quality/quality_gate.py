@@ -67,6 +67,11 @@ STANDALONE_SECRET_PATTERNS = (
     re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"),
     re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{16,}"),
 )
+STREAMING_STANDALONE_OPEN = re.compile(
+    r"(?i)(?:\bBearer\s+[A-Za-z0-9._~+/=-]*|"
+    r"\bgh[pousr]_[A-Za-z0-9]*|"
+    r"\bxox[baprs]-[A-Za-z0-9-]*)$"
+)
 
 
 def _redact_credential(match: re.Match[str]) -> str:
@@ -819,13 +824,13 @@ class Evidence:
         return encoded
 
     def complete(self, summary: str) -> None:
+        self.prune(reserve=1)
         encoded = self._encode_summary(summary)
         with _open_new_private(self.summary_path, self.run_dir) as summary_file:
             summary_file.buffer.write(encoded)
         marker = self.run_dir / "completed"
         with _open_new_private(marker, self.run_dir) as completed_file:
             completed_file.write("complete\n")
-        self.prune()
 
     def replace_summary(self, summary: str) -> None:
         _validate_regular(self.summary_path, self.run_dir)
@@ -835,7 +840,9 @@ class Evidence:
         os.replace(temporary, self.summary_path)
         _validate_regular(self.summary_path, self.run_dir)
 
-    def prune(self) -> None:
+    def prune(self, reserve: int = 0) -> None:
+        if reserve < 0 or reserve > MAX_COMPLETED_RUNS:
+            raise GateError(f"invalid evidence retention reservation: {reserve}")
         completed: list[Path] = []
         for path in sorted(self.runs.iterdir()):
             _validate_run_tree(path, self.runs)
@@ -844,7 +851,8 @@ class Evidence:
                 _validate_regular(marker, path)
                 completed.append(path)
         removable = [path for path in completed if path != self.run_dir]
-        while len(completed) > MAX_COMPLETED_RUNS and removable:
+        retained_limit = MAX_COMPLETED_RUNS - reserve
+        while len(completed) > retained_limit and removable:
             victim = removable.pop(0)
             _validate_run_tree(victim, self.runs)
             shutil.rmtree(victim)
@@ -1003,6 +1011,14 @@ class StreamingRedactor:
             return
         if self.oversized_preview is None:
             self.oversized_preview = ""
+        open_standalone = STREAMING_STANDALONE_OPEN.search(fragment)
+        if open_standalone is not None:
+            safe_prefix = redact(fragment[: open_standalone.start()])
+            self.oversized_preview = (
+                self.oversized_preview + safe_prefix + "[REDACTED_STANDALONE_TOKEN]"
+            )[:MAX_REDACTED_LINE_CHARS]
+            self.discarding_sensitive_line = True
+            return
         remaining = MAX_REDACTED_LINE_CHARS - len(self.oversized_preview)
         if remaining > 0:
             self.oversized_preview += redact(fragment)[:remaining]
@@ -1412,6 +1428,26 @@ class Runner:
                 finally:
                     signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
                 return_code = process.wait()
+                assert process_group is not None
+                assert descendants is not None
+                escaped = descendants.live()
+                if _process_group_exists(process_group) or escaped:
+                    escaped_pids = ", ".join(str(item.pid) for item in escaped) or "none"
+                    log.write(
+                        f"step left contained processes running; pgid={process_group}; "
+                        f"descendants={escaped_pids}; terminating them\n"
+                    )
+                    log.flush()
+                    try:
+                        _terminate_process_containment(
+                            process, process_group, descendants
+                        )
+                    finally:
+                        descendants.stop()
+                    if return_code == 0:
+                        return_code = 1
+                else:
+                    descendants.stop()
             except GateInterrupted as interrupted:
                 if (
                     process is not None
@@ -1439,24 +1475,6 @@ class Runner:
                     finally:
                         descendants.stop()
                 raise
-            assert process_group is not None
-            assert descendants is not None
-            escaped = descendants.live()
-            if _process_group_exists(process_group) or escaped:
-                escaped_pids = ", ".join(str(item.pid) for item in escaped) or "none"
-                log.write(
-                    f"step left contained processes running; pgid={process_group}; "
-                    f"descendants={escaped_pids}; terminating them\n"
-                )
-                log.flush()
-                try:
-                    _terminate_process_containment(process, process_group, descendants)
-                finally:
-                    descendants.stop()
-                if return_code == 0:
-                    return_code = 1
-            else:
-                descendants.stop()
         excerpt = redacted_tail(self.evidence.log_path) if return_code else []
         self.results.append((name, return_code, excerpt))
         return return_code == 0
@@ -1774,8 +1792,8 @@ def gate(arguments: list[str]) -> int:
         # caller's handlers and mask are restored.
         handoff_mask = set(finalization_mask) - set(watched_signals)
         signal.pthread_sigmask(signal.SIG_SETMASK, handoff_mask)
-        refresh_interrupted_summary()
         before_handler_restore = signal_state.first_signum
+        refresh_interrupted_summary()
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
         handlers_restored = True
