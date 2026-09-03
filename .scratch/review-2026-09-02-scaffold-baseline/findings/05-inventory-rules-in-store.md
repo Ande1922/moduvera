@@ -6,6 +6,7 @@ Claim: Inventory 的“库存预占决策”由 MybatisInventoryStore 实现；�
 Evidence: inventory-service 的 Domain 只有 InventoryStore 与不含业务行为的 ReservationDecision；MybatisInventoryStore 在数据库锁内同时判断缺失/不足商品、选择 Reserved 或 Rejected 并构造集成结果。SQL Mapper 另外正确承担行锁、版本条件更新和结果唯一插入。
 Verification: 读取 InventoryStore、ReservationDecision、InventoryApplicationService、MybatisInventoryStore 与 InventoryMapper，区分 all-or-nothing/不足判断等业务决策和加锁、条件更新、唯一约束、commandId 幂等等持久化机制。
 Planned: .scratch/scaffold-review-remediation-v1/spec.md
+Fixed: 0109e0df3747b6ae5ed463198178563618670894
 
 # Inventory 规则集中在持久化 Store
 

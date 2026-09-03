@@ -6,6 +6,7 @@ Claim: 仓库没有面向脚手架消费者、受支持的新增业务服务端�
 Evidence: 未见 Maven archetype、docs/agents/new-business-service.md 或面向消费者的服务生成脚本；benchmark 下虽有 seed-template，但它不是脚手架产品入口。现有约束分散在 AGENTS、ADR、模块结构与测试中。
 Verification: 全仓搜索 recipe、template、generator、archetype 与 scaffold；明确排除 benchmark seed-template，再从一个现有服务反推 API、service、adapter、app assembly、migration、architecture test 和 acceptance evidence 的必要步骤，确认是否存在受支持的单一入口。
 Planned: .scratch/business-service-onboarding/spec.md
+Fixed: ce572f952714a1c7d63e3143e4a8765b11be920e
 
 ## Verdict
 
