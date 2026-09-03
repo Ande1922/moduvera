@@ -15,6 +15,7 @@ case "$TOPOLOGY" in
 esac
 
 "$HARNESS_DIR/tests/test-port-plan.sh"
+"$HARNESS_DIR/tests/test-parallel-scenario.sh"
 
 if [[ "${REFERENCE_SKIP_BUILD:-0}" != "1" ]]; then
   "$PROJECT_ROOT/mvnw" -q clean install

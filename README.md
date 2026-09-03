@@ -25,12 +25,15 @@ That one command builds and verifies the reactor once, then runs the same public
 
 The harness uses explicit `RUN_SLOT` values so independent runs can coexist on one host. Slot 0 is the compatible default: Apps use ports 58080-58085, PostgreSQL 55432 and Kafka 59092. Every subsequent slot adds a fixed stride of 100 to each selected topology port; for example, `RUN_SLOT=1` uses Gateway 58180, PostgreSQL 55532 and Kafka 59192. Existing `REFERENCE_*_PORT` overrides remain available for focused diagnostics. The documented verification command first runs its focused harness regressions. Before starting Compose or a JVM, each topology writes a JSON port manifest, prints a human-readable plan, atomically locks the slot and every required host port, and fails if any required port is unavailable. The default manifest lives in the run's isolated temporary directory; set `REFERENCE_PORT_MANIFEST=/path/to/ports.json` when a caller needs to retain it. Management endpoints currently share each App's HTTP port, and the manifest reports that fact rather than allocating fictitious management listeners. Set `REFERENCE_DEBUG=1` to add deterministic loopback-only JDWP listeners (50080-50085 in slot 0, with the same stride).
 
-Each topology still receives a unique Compose project, Kafka topics, temporary directory and disposable data volumes, and tears them down after the run. Run only one topology with `verification/reference-product/harness/verify.sh microservices` or `verification/reference-product/harness/verify.sh business-core-monolith`. After a successful build, `REFERENCE_SKIP_BUILD=1` skips the Maven phase. Two representative parallel invocations are:
+Each topology still receives a unique Compose project, Kafka topics, temporary directory and disposable data volumes, and tears them down after the run. Run only one topology with `verification/reference-product/harness/verify.sh microservices` or `verification/reference-product/harness/verify.sh business-core-monolith`. After a successful build, `REFERENCE_SKIP_BUILD=1` skips the Maven phase.
+
+The full parallel scenario is explicit because it runs both public contracts concurrently. It defaults to isolated slots 40 and 41, waits for both topology runners, propagates either failure, and validates distinct ports, Compose projects, data namespaces, Kafka topics and temporary directories from their manifests:
 
 ```bash
-RUN_SLOT=0 REFERENCE_SKIP_BUILD=1 verification/reference-product/harness/verify.sh microservices
-RUN_SLOT=1 REFERENCE_SKIP_BUILD=1 verification/reference-product/harness/verify.sh business-core-monolith
+verification/reference-product/harness/verify-parallel.sh
 ```
+
+Pass two distinct slot numbers to override those defaults. Set `REFERENCE_KEEP_PARALLEL_EVIDENCE=1`, or provide a new directory through `REFERENCE_PARALLEL_EVIDENCE_DIR`, to retain the two manifests and topology logs for inspection; otherwise successful temporary evidence is removed after validation. Ordinary `verify.sh [topology]` runs remain sequential and do not implicitly pay for this scenario.
 
 To inspect the selected topology after acceptance, use:
 

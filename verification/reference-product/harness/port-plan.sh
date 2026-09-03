@@ -142,6 +142,10 @@ reference_debug_port() {
   esac
 }
 
+reference_json_quote() {
+  python3 -c 'import json, sys; print(json.dumps(sys.argv[1]), end="")' "$1"
+}
+
 reference_write_port_manifest() {
   local topology="$1" manifest_path="$2" app app_port debug_port first=1
   local manifest_parent
@@ -150,6 +154,10 @@ reference_write_port_manifest() {
     reference_fail "Port manifest parent directory does not exist: $manifest_parent"
     return
   }
+  if [[ -n "${REFERENCE_MANIFEST_RUN_ID:-}" ]] && ! command -v python3 >/dev/null 2>&1; then
+    echo "Required executable is unavailable: python3" >&2
+    return 127
+  fi
 
   {
     printf '{"schemaVersion":1,"runSlot":%d,"portStride":%d,"topology":"%s","ports":{' \
@@ -166,7 +174,18 @@ reference_write_port_manifest() {
       fi
       printf '}'
     done
-    printf '}},"debugEnabled":%s}\n' "$([[ "$REFERENCE_DEBUG" == "1" ]] && echo true || echo false)"
+    printf '}},"debugEnabled":%s' "$([[ "$REFERENCE_DEBUG" == "1" ]] && echo true || echo false)"
+    if [[ -n "${REFERENCE_MANIFEST_RUN_ID:-}" ]]; then
+      printf ',"resources":{"runId":%s,"composeProject":%s,"dataNamespace":%s,"tempDirectory":%s,"topics":{' \
+        "$(reference_json_quote "$REFERENCE_MANIFEST_RUN_ID")" \
+        "$(reference_json_quote "$REFERENCE_MANIFEST_COMPOSE_PROJECT")" \
+        "$(reference_json_quote "$REFERENCE_MANIFEST_COMPOSE_PROJECT")" \
+        "$(reference_json_quote "$REFERENCE_MANIFEST_RUN_DIRECTORY")"
+      printf '"inventoryReserve":%s,"inventoryResult":%s}}' \
+        "$(reference_json_quote "$REFERENCE_MANIFEST_INVENTORY_RESERVE_TOPIC")" \
+        "$(reference_json_quote "$REFERENCE_MANIFEST_INVENTORY_RESULT_TOPIC")"
+    fi
+    printf '}\n'
   } > "$manifest_path"
 
   echo "Reference port plan: topology=$topology runSlot=$RUN_SLOT stride=$REFERENCE_PORT_STRIDE"
