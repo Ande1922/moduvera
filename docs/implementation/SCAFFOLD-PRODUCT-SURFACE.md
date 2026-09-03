@@ -35,6 +35,9 @@ The Catalog and Identity HTTP Service Client Groups remain private to Order. No 
 ## Planned
 
 - governed observability;
+- ExecutionContext propagation across WebFlux/Reactor, Servlet/virtual-thread and explicit asynchronous execution models;
+- repository-owned Dockerfile and application container image baseline, without implying a production deployment topology;
+- repository-owned business-service onboarding recipe and AI entry point, without freezing the evolving service shape into a code generator;
 - PostgreSQL-native AI/vector capability qualification when a real Agent/RAG use case exists;
 
 ## Deferred

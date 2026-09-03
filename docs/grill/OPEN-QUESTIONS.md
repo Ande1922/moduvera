@@ -27,7 +27,7 @@ These are not a new Grill frontier. The V0.1 Demo should make them concrete, ret
 
 - Exact separate-process and modular-monolith App Assembly layouts, including the classpath guarantee that exactly one required Service API implementation is present in each topology.
 - Tenant-transparent business Repository behavior and fail-closed infrastructure enforcement on PostgreSQL/MySQL; the API shape is decided, while the MyBatis-Plus implementation and TCK evidence remain to be built.
-- Domain/data common-field mapping and the `AggregateVersion` representation; the concrete proposal is isolated in [DATA-MODEL-CONFIRMATION.md](../implementation/DATA-MODEL-CONFIRMATION.md) pending one overall decision.
+- Whether the current primitive aggregate version should become an explicit `AggregateVersion` value object after a real consumer demonstrates enough benefit. Persistence records already declare tenant, audit and version fields explicitly, and no shared `BaseEntity`, universal Mapper or Repository is planned.
 - MyBatis-Plus behavior across PostgreSQL and MySQL under one Repository TCK, with PostgreSQL as the Golden Path.
 - Service-owned PostgreSQL/MySQL migration scripts and MyBatis-Plus persistence mappings.
 - Spring Boot Client Group behavior with the shared Apache HC5 connection manager.

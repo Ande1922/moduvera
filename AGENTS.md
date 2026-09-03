@@ -29,9 +29,13 @@ Use four-space Java indentation, `UpperCamelCase` types, `lowerCamelCase` member
 
 Issues and specs use local Markdown under `.scratch/<feature-slug>/`. See `docs/agents/issue-tracker.md`.
 
-### Triage labels
+### Tracker status
 
-Triage uses the canonical `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, and `wontfix` states. See `docs/agents/triage-labels.md`.
+Tracker `Status:` values depend on `Type:`. See `docs/agents/triage-labels.md`.
+
+### System review
+
+System-level scaffold audits, excluding PR and diff reviews, are published under `.scratch/review-<date>-<slug>/`. See `docs/agents/review-workflow.md`.
 
 ### Domain docs
 

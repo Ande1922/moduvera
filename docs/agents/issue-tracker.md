@@ -1,13 +1,13 @@
 # Issue tracker: Local Markdown
 
-Issues and specs for this repository live as Markdown files in `.scratch/`.
+Issues, specs, and system-review records for this repository live as Markdown files in `.scratch/`.
 
 ## Conventions
 
 - One feature per directory: `.scratch/<feature-slug>/`.
 - The specification is `.scratch/<feature-slug>/spec.md`.
 - Implementation issues are one file per ticket at `.scratch/<feature-slug>/issues/<NN>-<slug>.md`, numbered from `01`.
-- Triage state is a `Status:` line near the top of each issue file; use the role strings in `triage-labels.md`.
+- Put plain-text `Type: <type>` and `Status: <value>` lines near the top of new tracker files. Select the status from `triage-labels.md` according to the type. Legacy issue files using `**Status:**` do not need migration.
 - Comments and conversation history append under a `## Comments` heading.
 
 ## Publishing and reading
@@ -18,5 +18,9 @@ When a skill says to publish to the issue tracker, create a file under `.scratch
 
 - A map is `.scratch/<effort>/map.md`.
 - Child tickets are `.scratch/<effort>/issues/NN-<slug>.md` and record `Type:` plus `Status:` near the top.
-- Blocking uses `Blocked by: NN, NN`; a ticket is unblocked when every listed ticket is resolved.
+- Blocking uses `Blocked by: NN, NN`; a ticket is unblocked when every listed ticket is `resolved` or `wontfix`.
 - Claim a ticket by setting `Status: claimed`; resolve it by appending `## Answer`, setting `Status: resolved`, and linking the decision from the map.
+
+## System reviews
+
+System audits live under `.scratch/review-<YYYY-MM-DD>-<slug>/`. Follow `review-workflow.md` to publish, verify, plan, and close them. Findings use finding states rather than issue execution states.
