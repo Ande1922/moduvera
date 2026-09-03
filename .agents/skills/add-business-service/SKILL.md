@@ -15,19 +15,19 @@ routing and authorization.
 ## Process
 
 1. Read `AGENTS.md`, `CONTEXT.md`, the request or tracker artifact, and the
-   recipe. Complete its shape card: capability, owner, use cases, named
-   consumers, direct/message/internal entry, durable state, App Assemblies,
-   and verification promises. This step is complete when material contract,
-   data, and topology decisions are either explicit or listed as unresolved.
-2. Trace every proposed module or file to one named consumer or support
-   promise. Keep only traced artifacts and label each one `required by`. This
-   step is complete when the plan contains no empty module, speculative
-   Adapter, or copied reference-service surface.
-3. Select one existing delivery route from the current artifact state:
-   `decision-unclear` for material unknowns, `agreed-decision` for a new spec,
-   `approved-spec` for ticket splitting, `one-ticket` for one bounded change,
-   or `ticket-dag` for dependency-linked implementation. Follow that linked
-   Skill and its stopping condition rather than reproducing its process here.
+   recipe. Complete a shape card conforming to the recipe's authoritative
+   Shape Contract for every consumer/use-case promise, durable-state need,
+   App, and acceptance owner.
+   This step is complete when its validation conditions pass and material
+   contract, authorization, data, and topology decisions are explicit.
+2. Trace every proposed artifact to named consumers, use cases, and support
+   promises. Keep only traced artifacts. This step is complete when the plan
+   contains no empty module, speculative Adapter, or copied reference-service
+   surface and each vertical slice carries its acceptance and test seams.
+3. Inspect the current route table under **Route by task shape** in the linked
+   delivery workflow. Select the row matching the current artifact state, then
+   follow that row's Skill and stopping condition. The workflow table is the
+   only stage-key mapping; this Skill does not cache it.
 4. Keep intake output at specification and ticket shape. Production modules
    and files are created only after an authorized `implement` or
    `implement-frontier` route owns an approved ticket.
@@ -35,7 +35,8 @@ routing and authorization.
 ## Completion
 
 Stop when the selected delivery stage reaches its own completion condition.
-Return the shape card, unresolved decisions, selected route, traced artifacts,
-specification or ticket paths produced by that stage, and its exact validation
-evidence. Do not infer implementation, tracker, commit, integration, push, or
-deployment authority from this intake Skill.
+Return the Shape Contract-conforming inputs, unresolved decisions, selected
+workflow row, traced artifacts, vertical specification/ticket shape or paths
+produced by that stage, and exact validation evidence. Do not infer
+implementation, tracker, commit, integration, push, or deployment authority
+from this intake Skill.

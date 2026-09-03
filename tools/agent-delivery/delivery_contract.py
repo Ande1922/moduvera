@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import json
 from pathlib import Path
 import re
+from typing import Any
 
 
 REQUIRED_SKILLS = (
@@ -46,6 +48,12 @@ PERSONAL_REFERENCE = re.compile(
     r"~/\.(?:codex|agents)(?:/|\b)|\$HOME/\.(?:codex|agents)(?:/|\b))",
     re.IGNORECASE,
 )
+SHAPE_CONTRACT = re.compile(
+    r"<!-- business-service-contract:start -->\s*```json\s*(\{.*?\})\s*```\s*"
+    r"<!-- business-service-contract:end -->",
+    re.DOTALL,
+)
+SAFE_KEY = re.compile(r"[a-z][a-z0-9-]*")
 
 
 class DeliveryContractError(RuntimeError):
@@ -89,25 +97,93 @@ class ImplementationRoute:
 
 
 @dataclass(frozen=True)
+class BusinessServiceContract:
+    required_description_fields: tuple[str, ...]
+    required_dependency_fields: tuple[str, ...]
+    required_promise_fields: tuple[str, ...]
+    required_app_fields: tuple[str, ...]
+    required_acceptance_fields: tuple[str, ...]
+    artifact_templates: dict[str, str]
+    scenarios: dict[str, dict[str, Any]]
+    state_required_fields: tuple[str, ...]
+    state_artifact_roles: tuple[str, ...]
+    app_topologies: tuple[str, ...]
+    acceptance_topologies: dict[str, str]
+
+
+@dataclass(frozen=True)
+class Participant:
+    role: str
+    name: str
+
+
+@dataclass(frozen=True)
+class UseCaseDependency:
+    blocked: str
+    blocker: str
+
+
+@dataclass(frozen=True)
+class SupportPromise:
+    key: str
+    kind: str
+    use_case: str
+    participants: tuple[Participant, ...]
+    permission: str
+    app: str
+    verification: str
+    provider_adapter: str | None = None
+
+
+@dataclass(frozen=True)
+class DurableStateNeed:
+    name: str
+    use_case: str
+    transaction_boundary: str
+    tenant_isolation: str
+    repository_seam: str
+    migration: str
+    verification: str
+
+
+@dataclass(frozen=True)
+class AppSupport:
+    name: str
+    topology: str
+    support_promises: tuple[str, ...]
+    verification: str
+
+
+@dataclass(frozen=True)
+class AcceptanceConsumer:
+    name: str
+    topology: str
+    app: str
+    support_promises: tuple[str, ...]
+    verification: str
+
+
+@dataclass(frozen=True)
 class BusinessServiceDescription:
     name: str
     capability: str
     owner: str
-    local_direct_consumers: tuple[str, ...] = ()
-    remote_direct_consumers: tuple[str, ...] = ()
-    http_entry: bool = False
-    asynchronous_commands: tuple[str, ...] = ()
-    published_events: tuple[str, ...] = ()
-    internal_use_cases: tuple[str, ...] = ()
-    persistence: bool = False
-    standalone_app: bool = False
-    multi_service_apps: tuple[str, ...] = ()
+    use_cases: tuple[str, ...]
+    dependencies: tuple[UseCaseDependency, ...]
+    support_promises: tuple[SupportPromise, ...]
+    apps: tuple[AppSupport, ...]
+    acceptance_consumers: tuple[AcceptanceConsumer, ...]
+    decisions: tuple[str, ...]
+    exclusions: tuple[str, ...]
+    durable_state: tuple[DurableStateNeed, ...] = ()
 
 
 @dataclass(frozen=True)
 class PlannedArtifact:
     target: str
-    required_by: str
+    consumers: tuple[str, ...]
+    use_cases: tuple[str, ...]
+    support_promises: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -115,12 +191,20 @@ class BusinessServiceTicket:
     key: str
     outcome: str
     blocked_by: tuple[str, ...]
+    support_claims: tuple[str, ...]
+    acceptance_criteria: tuple[str, ...]
+    test_seams: tuple[str, ...]
+    decisions: tuple[str, ...]
+    exclusions: tuple[str, ...]
     artifacts: tuple[str, ...]
 
 
 @dataclass(frozen=True)
 class BusinessServicePlan:
     spec_sections: tuple[str, ...]
+    support_claims: tuple[str, ...]
+    decisions: tuple[str, ...]
+    exclusions: tuple[str, ...]
     tickets: tuple[BusinessServiceTicket, ...]
     artifacts: tuple[PlannedArtifact, ...]
     implementation_shape: ImplementationShape
@@ -139,174 +223,434 @@ def implementation_route(shape: ImplementationShape) -> ImplementationRoute:
     return ImplementationRoute("implement", "implementation-evidence")
 
 
-def business_service_plan(description: BusinessServiceDescription) -> BusinessServicePlan:
-    for field_name in ("name", "capability", "owner"):
-        if not getattr(description, field_name).strip():
-            raise ValueError(f"business service {field_name} is required")
-    if re.fullmatch(r"[a-z][a-z0-9-]*", description.name) is None:
-        raise ValueError("business service name must be a lowercase hyphenated identifier")
-    if not any((
-        description.local_direct_consumers,
-        description.remote_direct_consumers,
-        description.http_entry,
-        description.asynchronous_commands,
-        description.internal_use_cases,
-    )):
-        raise ValueError(
-            "business service requires at least one consuming entry or internal use case"
-        )
+def _string_tuple(values: tuple[str, ...], label: str, *, required: bool = False) -> tuple[str, ...]:
+    if required and not values:
+        raise ValueError(f"{label} requires at least one value")
+    normalized: list[str] = []
+    for value in values:
+        if not isinstance(value, str) or not value.strip() or value != value.strip():
+            raise ValueError(f"{label} contains a blank or padded value")
+        if (
+            len(value) > 240
+            or ".." in value
+            or any(ord(character) < 32 or ord(character) == 127 for character in value)
+        ):
+            raise ValueError(f"{label} contains an unsafe value: {value!r}")
+        normalized.append(value)
+    if len(normalized) != len(set(normalized)):
+        raise ValueError(f"{label} contains duplicate values")
+    return tuple(normalized)
 
-    name = description.name
-    artifacts: list[PlannedArtifact] = []
-    ticket_artifacts: list[tuple[str, str]] = []
 
-    def require(ticket: str, target: str, reason: str) -> None:
-        artifacts.append(PlannedArtifact(target, reason))
-        ticket_artifacts.append((ticket, target))
+def _label(value: str, label: str) -> str:
+    return _string_tuple((value,), label, required=True)[0]
 
-    has_messages = bool(description.asynchronous_commands or description.published_events)
-    direct_consumers = (
-        description.local_direct_consumers + description.remote_direct_consumers
-    )
-    has_provider_contracts = bool(direct_consumers or has_messages)
-    if has_provider_contracts:
-        contract_reasons: list[str] = []
-        if direct_consumers:
-            contract_reasons.append(
-                "supported direct consumers: " + ", ".join(direct_consumers)
-            )
-        if has_messages:
-            contract_reasons.append("provider-owned asynchronous message contracts")
-        require(
-            "contracts",
-            f"services/{name}/{name}-api",
-            "; ".join(contract_reasons),
-        )
-    if direct_consumers:
-        require(
-            "contracts",
-            f"{name} synchronous Service API",
-            "supported direct local or remote call for "
-            + ", ".join(direct_consumers),
-        )
-    if description.remote_direct_consumers:
-        require(
-            "adapters",
-            f"{name} remote client outbound adapter",
-            "declared remote direct consumers: "
-            + ", ".join(description.remote_direct_consumers),
-        )
 
-    require(
-        "use-cases",
-        f"services/{name}/{name}-service",
-        f"{description.owner} owns the {description.capability} Application use case "
-        "and any required Domain behavior",
-    )
+def _key(value: str, label: str) -> str:
+    if not isinstance(value, str) or SAFE_KEY.fullmatch(value) is None:
+        raise ValueError(f"{label} must be a lowercase hyphenated identifier")
+    return value
 
-    if description.http_entry:
-        require(
-            "adapters",
-            f"{name} HTTP inbound adapter",
-            "declared HTTP entry invokes the provider-owned Application use case",
-        )
-    if description.asynchronous_commands:
-        require(
-            "adapters",
-            f"{name} message inbound adapter",
-            "declared asynchronous commands: "
-            + ", ".join(description.asynchronous_commands),
-        )
-    if description.published_events:
-        require(
-            "adapters",
-            f"{name} message outbound adapter",
-            "declared published integration events: "
-            + ", ".join(description.published_events),
-        )
-    if description.persistence:
-        require(
-            "persistence",
-            f"{name} persistence outbound adapter",
-            "declared durable business state",
-        )
-        require(
-            "persistence",
-            f"{name} service-owned migration",
-            "persistence requires service-owned schema history and migration definition",
-        )
-    if description.standalone_app:
-        require(
-            "assembly",
-            f"{name}-app assembly",
-            "declared standalone runnable application",
-        )
-    for app in description.multi_service_apps:
-        require(
-            "assembly",
-            f"{app} assembly",
-            f"declared multi-service application consumer of {name}",
-        )
-    if has_messages:
-        require(
-            "verification",
-            "repository message-contract verification",
-            "message identity, asynchronous-only, and inbound contract evidence",
-        )
-    require(
-        "verification",
-        "repository architecture rules",
-        "new API and service boundaries require repository architecture coverage",
-    )
-    if any((
-        description.http_entry,
-        direct_consumers,
-        has_messages,
-        description.standalone_app,
-        description.multi_service_apps,
-    )):
-        require(
-            "verification",
-            "reference-product acceptance entry",
-            "declared public, cross-service, message, or App Assembly support",
-        )
 
-    ordered_keys = (
-        "contracts",
-        "use-cases",
-        "persistence",
-        "adapters",
-        "assembly",
-        "verification",
-    )
-    outcomes = {
-        "contracts": "Publish only the provider contracts required by named consumers",
-        "use-cases": "Implement the owned Application and Domain behavior",
-        "persistence": "Persist business state through service-owned migrations",
-        "adapters": "Connect declared inbound and outbound protocols to the use cases",
-        "assembly": "Select the service in each declared App Assembly",
-        "verification": "Qualify the declared support through architecture and acceptance evidence",
+def load_business_service_contract(recipe: Path) -> BusinessServiceContract:
+    text = recipe.read_text(encoding="utf-8")
+    matches = SHAPE_CONTRACT.findall(text)
+    if len(matches) != 1:
+        raise DeliveryContractError(f"{recipe}: exactly one Shape Contract is required")
+    try:
+        raw = json.loads(matches[0])
+    except json.JSONDecodeError as error:
+        raise DeliveryContractError(f"{recipe}: invalid Shape Contract JSON") from error
+    if not isinstance(raw, dict) or raw.get("schema") != 1:
+        raise DeliveryContractError(f"{recipe}: unsupported Shape Contract schema")
+    try:
+        durable = raw["durable_state"]
+        contract = BusinessServiceContract(
+            tuple(raw["required_description_fields"]),
+            tuple(raw["required_dependency_fields"]),
+            tuple(raw["required_promise_fields"]),
+            tuple(raw["required_app_fields"]),
+            tuple(raw["required_acceptance_fields"]),
+            dict(raw["artifact_templates"]),
+            dict(raw["scenarios"]),
+            tuple(durable["required_fields"]),
+            tuple(durable["artifact_roles"]),
+            tuple(raw["app_topologies"]),
+            dict(raw["acceptance_topologies"]),
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise DeliveryContractError(f"{recipe}: incomplete Shape Contract") from error
+    required_description = {
+        "name", "capability", "owner", "use_cases", "dependencies", "support_promises",
+        "apps", "acceptance_consumers", "decisions", "exclusions",
     }
+    required_promise = {
+        "key", "kind", "use_case", "participants", "permission", "app",
+        "verification",
+    }
+    required_app = {"name", "topology", "support_promises", "verification"}
+    required_acceptance = {
+        "name", "topology", "app", "support_promises", "verification",
+    }
+    scenarios = {
+        "local-direct", "remote-direct", "http", "message-command",
+        "message-event", "internal",
+    }
+    if set(contract.required_description_fields) != required_description:
+        raise DeliveryContractError(f"{recipe}: incomplete description field contract")
+    if len(contract.required_description_fields) != len(required_description):
+        raise DeliveryContractError(f"{recipe}: duplicate description field contract")
+    if set(contract.required_dependency_fields) != {"blocked", "blocker"}:
+        raise DeliveryContractError(f"{recipe}: incomplete dependency field contract")
+    if len(contract.required_dependency_fields) != 2:
+        raise DeliveryContractError(f"{recipe}: duplicate dependency field contract")
+    if set(contract.required_promise_fields) != required_promise:
+        raise DeliveryContractError(f"{recipe}: incomplete support-promise field contract")
+    if len(contract.required_promise_fields) != len(required_promise):
+        raise DeliveryContractError(f"{recipe}: duplicate support-promise field contract")
+    if set(contract.required_app_fields) != required_app:
+        raise DeliveryContractError(f"{recipe}: incomplete App field contract")
+    if len(contract.required_app_fields) != len(required_app):
+        raise DeliveryContractError(f"{recipe}: duplicate App field contract")
+    if set(contract.required_acceptance_fields) != required_acceptance:
+        raise DeliveryContractError(f"{recipe}: incomplete acceptance field contract")
+    if len(contract.required_acceptance_fields) != len(required_acceptance):
+        raise DeliveryContractError(f"{recipe}: duplicate acceptance field contract")
+    if set(contract.scenarios) != scenarios:
+        raise DeliveryContractError(f"{recipe}: incomplete scenario contract")
+    if set(contract.app_topologies) != {"standalone", "multi-service"}:
+        raise DeliveryContractError(f"{recipe}: incomplete App topology contract")
+    if len(contract.app_topologies) != 2:
+        raise DeliveryContractError(f"{recipe}: duplicate App topology contract")
+    if set(contract.acceptance_topologies) != {
+        "reference-product", "declared-app", "consumer-contract",
+    }:
+        raise DeliveryContractError(f"{recipe}: incomplete acceptance topology contract")
+    required_state = {
+        "name", "use_case", "transaction_boundary", "tenant_isolation",
+        "repository_seam", "migration", "verification",
+    }
+    if set(contract.state_required_fields) != required_state:
+        raise DeliveryContractError(f"{recipe}: incomplete durable-state field contract")
+    if len(contract.state_required_fields) != len(required_state):
+        raise DeliveryContractError(f"{recipe}: duplicate durable-state field contract")
+    if not contract.artifact_templates or any(
+        not isinstance(key, str)
+        or SAFE_KEY.fullmatch(key) is None
+        or not isinstance(value, str)
+        or not value.strip()
+        for key, value in contract.artifact_templates.items()
+    ):
+        raise DeliveryContractError(f"{recipe}: invalid artifact templates")
+    for name, scenario in contract.scenarios.items():
+        if not isinstance(scenario, dict):
+            raise DeliveryContractError(f"{recipe}: invalid scenario {name}")
+        for field in ("intent", "participant_roles", "provider_adapter", "artifact_roles"):
+            if field not in scenario:
+                raise DeliveryContractError(f"{recipe}: scenario {name} omits {field}")
+        if not isinstance(scenario["intent"], str) or not scenario["intent"].strip():
+            raise DeliveryContractError(f"{recipe}: scenario {name} has no intent")
+        if scenario["provider_adapter"] not in {"required", "forbidden"}:
+            raise DeliveryContractError(f"{recipe}: invalid adapter policy for {name}")
+        participant_roles = tuple(scenario["participant_roles"])
+        if (
+            not participant_roles
+            or len(participant_roles) != len(set(participant_roles))
+            or any(
+                not isinstance(role, str) or SAFE_KEY.fullmatch(role) is None
+                for role in participant_roles
+            )
+        ):
+            raise DeliveryContractError(f"{recipe}: invalid participant roles for {name}")
+        roles = tuple(scenario["artifact_roles"])
+        if len(roles) != len(set(roles)) or not roles:
+            raise DeliveryContractError(f"{recipe}: invalid artifact roles for {name}")
+        if any(role not in contract.artifact_templates for role in roles):
+            raise DeliveryContractError(f"{recipe}: unknown artifact role for {name}")
+    if (
+        not contract.state_artifact_roles
+        or len(contract.state_artifact_roles) != len(set(contract.state_artifact_roles))
+        or any(role not in contract.artifact_templates for role in contract.state_artifact_roles)
+    ):
+        raise DeliveryContractError(f"{recipe}: invalid durable-state artifact roles")
+    return contract
+
+
+def _participants(promise: SupportPromise, required_roles: tuple[str, ...]) -> tuple[str, ...]:
+    if not promise.participants:
+        raise ValueError(f"support promise {promise.key} requires participants")
+    pairs: list[tuple[str, str]] = []
+    for participant in promise.participants:
+        role = _key(participant.role, f"support promise {promise.key} participant role")
+        name = _label(participant.name, f"support promise {promise.key} participant")
+        pairs.append((role, name))
+    if len(pairs) != len(set(pairs)):
+        raise ValueError(f"support promise {promise.key} contains duplicate participants")
+    actual_roles = {role for role, _name in pairs}
+    if actual_roles != set(required_roles):
+        raise ValueError(
+            f"support promise {promise.key} participant roles must be {sorted(required_roles)}"
+        )
+    return tuple(name for _role, name in pairs)
+
+
+def business_service_plan(
+    description: BusinessServiceDescription,
+    contract: BusinessServiceContract,
+) -> BusinessServicePlan:
+    name = _key(description.name, "business service name")
+    _label(description.capability, "business service capability")
+    _label(description.owner, "business service owner")
+    use_cases = _string_tuple(description.use_cases, "use cases", required=True)
+    dependency_pairs: list[tuple[str, str]] = []
+    for dependency in description.dependencies:
+        blocked = _label(dependency.blocked, "blocked use case")
+        blocker = _label(dependency.blocker, "blocking use case")
+        if blocked not in use_cases or blocker not in use_cases:
+            raise ValueError("use-case dependency references an unknown use case")
+        if blocked == blocker:
+            raise ValueError("use-case dependency cannot block itself")
+        dependency_pairs.append((blocked, blocker))
+    if len(dependency_pairs) != len(set(dependency_pairs)):
+        raise ValueError("use-case dependencies contain duplicates")
+    predecessors = {
+        use_case: {blocker for blocked, blocker in dependency_pairs if blocked == use_case}
+        for use_case in use_cases
+    }
+    resolved: set[str] = set()
+    while len(resolved) < len(use_cases):
+        ready = {
+            use_case for use_case in use_cases
+            if use_case not in resolved and predecessors[use_case].issubset(resolved)
+        }
+        if not ready:
+            raise ValueError("use-case dependencies contain a cycle")
+        resolved.update(ready)
+    decisions = _string_tuple(description.decisions, "decisions", required=True)
+    exclusions = _string_tuple(description.exclusions, "exclusions", required=True)
+    if not description.support_promises:
+        raise ValueError("business service requires support promises")
+
+    promise_keys = tuple(promise.key for promise in description.support_promises)
+    _string_tuple(promise_keys, "support promise keys", required=True)
+    for key in promise_keys:
+        _key(key, "support promise key")
+    app_names = tuple(app.name for app in description.apps)
+    _string_tuple(app_names, "App names", required=True)
+    for app in description.apps:
+        _key(app.name, "App name")
+        if app.topology not in contract.app_topologies:
+            raise ValueError(f"App {app.name} has unsupported topology")
+        promises = _string_tuple(
+            app.support_promises, f"App {app.name} support promises", required=True
+        )
+        if not set(promises).issubset(promise_keys):
+            raise ValueError(f"App {app.name} references an unknown support promise")
+        _label(app.verification, f"App {app.name} verification")
+
+    acceptance_names = tuple(item.name for item in description.acceptance_consumers)
+    _string_tuple(acceptance_names, "acceptance consumers", required=True)
+    accepted_promises: list[str] = []
+    for acceptance in description.acceptance_consumers:
+        _label(acceptance.name, "acceptance consumer")
+        if acceptance.topology not in contract.acceptance_topologies:
+            raise ValueError(f"acceptance consumer {acceptance.name} has unsupported topology")
+        if acceptance.app not in app_names:
+            raise ValueError(f"acceptance consumer {acceptance.name} references an unknown App")
+        promises = _string_tuple(
+            acceptance.support_promises,
+            f"acceptance consumer {acceptance.name} promises",
+            required=True,
+        )
+        if not set(promises).issubset(promise_keys):
+            raise ValueError(f"acceptance consumer {acceptance.name} references an unknown promise")
+        accepted_promises.extend(promises)
+        _label(acceptance.verification, f"acceptance consumer {acceptance.name} verification")
+    if sorted(accepted_promises) != sorted(promise_keys):
+        raise ValueError("every support promise requires exactly one acceptance consumer")
+
+    artifacts_by_target: dict[str, dict[str, set[str]]] = {}
+    ticket_targets: dict[str, set[str]] = {use_case: set() for use_case in use_cases}
+    support_claims: list[str] = []
+    promise_by_key: dict[str, SupportPromise] = {}
+
+    def trace(target: str, consumers: tuple[str, ...], use_case: str, promise: str) -> None:
+        _label(target, "planned artifact target")
+        entry = artifacts_by_target.setdefault(
+            target, {"consumers": set(), "use_cases": set(), "promises": set()}
+        )
+        entry["consumers"].update(consumers)
+        entry["use_cases"].add(use_case)
+        entry["promises"].add(promise)
+        ticket_targets[use_case].add(target)
+
+    for promise in description.support_promises:
+        key = _key(promise.key, "support promise key")
+        if promise.kind not in contract.scenarios:
+            raise ValueError(f"support promise {key} has unsupported kind")
+        if promise.use_case not in use_cases:
+            raise ValueError(f"support promise {key} references an unknown use case")
+        _label(promise.permission, f"support promise {key} permission")
+        _label(promise.verification, f"support promise {key} verification")
+        if promise.app not in app_names:
+            raise ValueError(f"support promise {key} references an unknown App")
+        scenario = contract.scenarios[promise.kind]
+        consumers = _participants(promise, tuple(scenario["participant_roles"]))
+        adapter_policy = scenario["provider_adapter"]
+        if adapter_policy == "required":
+            if promise.provider_adapter is None:
+                raise ValueError(f"support promise {key} requires a provider adapter")
+            _label(promise.provider_adapter, f"support promise {key} provider adapter")
+        elif promise.provider_adapter is not None:
+            raise ValueError(f"support promise {key} forbids a provider adapter")
+        promise_by_key[key] = promise
+        support_claims.append(
+            f"{key}: {promise.kind} supports {', '.join(consumers)} for "
+            f"{promise.use_case} in {promise.app}"
+        )
+        values = {
+            "service": name,
+            "promise": key,
+            "app": promise.app,
+            "provider_adapter": promise.provider_adapter or "",
+        }
+        for role in scenario["artifact_roles"]:
+            target = contract.artifact_templates[role].format(**values)
+            trace(target, consumers, promise.use_case, key)
+
+    state_names = tuple(state.name for state in description.durable_state)
+    _string_tuple(state_names, "durable state names")
+    for state in description.durable_state:
+        _key(state.name, "durable state name")
+        if state.use_case not in use_cases:
+            raise ValueError(f"durable state {state.name} references an unknown use case")
+        for field in contract.state_required_fields:
+            _label(getattr(state, field), f"durable state {state.name} {field}")
+        related = tuple(
+            promise for promise in description.support_promises
+            if promise.use_case == state.use_case
+        )
+        consumers = tuple(sorted({
+            participant.name for promise in related for participant in promise.participants
+        }))
+        for role in contract.state_artifact_roles:
+            target = contract.artifact_templates[role].format(
+                service=name, state=state.name
+            )
+            for promise in related:
+                trace(target, consumers, state.use_case, promise.key)
+
+    for app in description.apps:
+        assigned = {promise.key for promise in description.support_promises if promise.app == app.name}
+        if assigned != set(app.support_promises):
+            raise ValueError(f"App {app.name} support promises do not match promise assignments")
+
+    for acceptance in description.acceptance_consumers:
+        template = contract.acceptance_topologies[acceptance.topology]
+        target = template.format(consumer=acceptance.name, app=acceptance.app)
+        for promise_key in acceptance.support_promises:
+            promise = promise_by_key[promise_key]
+            consumers = tuple(participant.name for participant in promise.participants)
+            trace(target, consumers, promise.use_case, promise_key)
+
+    artifacts = tuple(
+        PlannedArtifact(
+            target,
+            tuple(sorted(trace_data["consumers"])),
+            tuple(sorted(trace_data["use_cases"])),
+            tuple(sorted(trace_data["promises"])),
+        )
+        for target, trace_data in sorted(artifacts_by_target.items())
+    )
+    if any(
+        not artifact.consumers or not artifact.use_cases or not artifact.support_promises
+        for artifact in artifacts
+    ):
+        raise ValueError("every planned artifact requires consumer/use-case traceability")
+
     tickets: list[BusinessServiceTicket] = []
-    for key in ordered_keys:
-        targets = tuple(target for owner, target in ticket_artifacts if owner == key)
-        if not targets:
-            continue
-        blockers = (tickets[-1].key,) if tickets else ()
-        tickets.append(BusinessServiceTicket(key, outcomes[key], blockers, targets))
+    ticket_key_by_use_case = {
+        use_case: f"use-case-{index:02d}"
+        for index, use_case in enumerate(use_cases, start=1)
+    }
+    for use_case in use_cases:
+        related_promises = tuple(
+            promise for promise in description.support_promises
+            if promise.use_case == use_case
+        )
+        related_states = tuple(
+            state for state in description.durable_state if state.use_case == use_case
+        )
+        related_apps = tuple(
+            app for app in description.apps
+            if set(app.support_promises).intersection(promise.key for promise in related_promises)
+        )
+        related_acceptance = tuple(
+            acceptance for acceptance in description.acceptance_consumers
+            if set(acceptance.support_promises).intersection(
+                promise.key for promise in related_promises
+            )
+        )
+        ticket_key = ticket_key_by_use_case[use_case]
+        claims = tuple(
+            claim for claim in support_claims
+            if any(claim.startswith(promise.key + ":") for promise in related_promises)
+        )
+        criteria = tuple(
+            [
+                f"{promise.key} enforces {promise.permission} and fulfills "
+                f"{promise.verification} in {promise.app}"
+                for promise in related_promises
+            ]
+            + [
+                f"{state.name} is atomic at {state.transaction_boundary}, isolates "
+                f"{state.tenant_isolation}, and migrates through {state.migration}"
+                for state in related_states
+            ]
+            + [
+                f"{acceptance.name} accepts {', '.join(acceptance.support_promises)} "
+                f"through {acceptance.topology}"
+                for acceptance in related_acceptance
+            ]
+        )
+        tests = tuple(dict.fromkeys(
+            [promise.verification for promise in related_promises]
+            + [state.verification for state in related_states]
+            + [app.verification for app in related_apps]
+            + [acceptance.verification for acceptance in related_acceptance]
+        ))
+        if not claims or not criteria or not tests:
+            raise ValueError(f"use case {use_case} lacks complete vertical evidence")
+        tickets.append(BusinessServiceTicket(
+            key=ticket_key,
+            outcome=f"Deliver {use_case} for its named consumers and supported topology",
+            blocked_by=tuple(sorted(
+                ticket_key_by_use_case[blocker]
+                for blocker in predecessors[use_case]
+            )),
+            support_claims=claims,
+            acceptance_criteria=criteria,
+            test_seams=tests,
+            decisions=decisions,
+            exclusions=exclusions,
+            artifacts=tuple(sorted(ticket_targets[use_case])),
+        ))
 
     dependency_edges = sum(len(ticket.blocked_by) for ticket in tickets)
     return BusinessServicePlan(
         spec_sections=(
-            "capability and ownership",
-            "use cases and contracts",
-            "application and domain",
-            "adapters and persistence",
-            "app assembly",
-            "verification and exclusions",
+            "capability, ownership, and use cases",
+            "consumer and support promises",
+            "permissions and contracts",
+            "application, domain, and durable state",
+            "adapters, app assemblies, and acceptance",
+            "decisions, exclusions, and test seams",
         ),
+        support_claims=tuple(support_claims),
+        decisions=decisions,
+        exclusions=exclusions,
         tickets=tuple(tickets),
-        artifacts=tuple(artifacts),
+        artifacts=artifacts,
         implementation_shape=ImplementationShape(
             ticket_count=len(tickets),
             dependency_edges=dependency_edges,
@@ -342,6 +686,143 @@ def final_acceptance_status(evidence: AcceptanceInput) -> str:
         and evidence.checkout_clean
     )
     return "PASS" if complete else "FAIL"
+
+
+def representative_business_service_description() -> BusinessServiceDescription:
+    return BusinessServiceDescription(
+        name="returns",
+        capability="Decide returns and publish their outcome",
+        owner="Returns Team",
+        use_cases=("Decide Return", "Publish Return Outcome"),
+        dependencies=(UseCaseDependency("Publish Return Outcome", "Decide Return"),),
+        support_promises=(
+            SupportPromise(
+                "fulfillment-local",
+                "local-direct",
+                "Decide Return",
+                (Participant("caller", "Fulfillment"),),
+                "returns decide",
+                "returns-app",
+                "local API contract test",
+            ),
+            SupportPromise(
+                "support-remote",
+                "remote-direct",
+                "Decide Return",
+                (Participant("caller", "Customer Support"),),
+                "returns decide",
+                "returns-app",
+                "remote contract test",
+                "returns HTTP provider adapter",
+            ),
+            SupportPromise(
+                "shopper-http",
+                "http",
+                "Decide Return",
+                (Participant("caller", "Shopper"),),
+                "returns submit",
+                "returns-app",
+                "HTTP adapter contract test",
+                "returns HTTP inbound adapter",
+            ),
+            SupportPromise(
+                "warehouse-command",
+                "message-command",
+                "Decide Return",
+                (
+                    Participant("producer", "Warehouse"),
+                    Participant("consumer", "Returns"),
+                ),
+                "returns inspect",
+                "fulfillment-app",
+                "command identity and inbound contract test",
+                "returns message inbound adapter",
+            ),
+            SupportPromise(
+                "policy-internal",
+                "internal",
+                "Decide Return",
+                (Participant("caller", "Returns Policy"),),
+                "returns evaluate",
+                "returns-app",
+                "Application seam test",
+            ),
+            SupportPromise(
+                "accepted-event",
+                "message-event",
+                "Publish Return Outcome",
+                (
+                    Participant("producer", "Returns"),
+                    Participant("consumer", "Finance"),
+                ),
+                "returns outcome read",
+                "fulfillment-app",
+                "event identity and publication contract test",
+                "returns message outbound adapter",
+            ),
+        ),
+        apps=(
+            AppSupport(
+                "returns-app",
+                "standalone",
+                (
+                    "fulfillment-local",
+                    "support-remote",
+                    "shopper-http",
+                    "policy-internal",
+                ),
+                "returns App startup test",
+            ),
+            AppSupport(
+                "fulfillment-app",
+                "multi-service",
+                ("warehouse-command", "accepted-event"),
+                "fulfillment App composition test",
+            ),
+        ),
+        acceptance_consumers=(
+            AcceptanceConsumer(
+                "Shopper",
+                "reference-product",
+                "returns-app",
+                ("shopper-http",),
+                "reference product returns scenario",
+            ),
+            AcceptanceConsumer(
+                "Returns Operators",
+                "declared-app",
+                "returns-app",
+                ("fulfillment-local", "support-remote", "policy-internal"),
+                "returns App acceptance scenario",
+            ),
+            AcceptanceConsumer(
+                "Fulfillment Partners",
+                "consumer-contract",
+                "fulfillment-app",
+                ("warehouse-command", "accepted-event"),
+                "partner message contract scenario",
+            ),
+        ),
+        durable_state=(
+            DurableStateNeed(
+                "return-ledger",
+                "Decide Return",
+                "one return decision transaction",
+                "tenant scoped return records",
+                "Return Repository",
+                "returns schema history",
+                "real PostgreSQL adapter test",
+            ),
+        ),
+        decisions=(
+            "Returns owns contracts and durable state",
+            "Commands and events are versioned provider records",
+        ),
+        exclusions=(
+            "No code generator or copied service template",
+            "No unsupported App assembly",
+        ),
+    )
 
 
 def representative_forward_failures(root: Path) -> list[str]:
@@ -383,39 +864,109 @@ def representative_forward_failures(root: Path) -> list[str]:
     ) != "FAIL":
         failures.append("forward run did not stop for an incomplete review axis")
 
-    service_plan = business_service_plan(BusinessServiceDescription(
-        name="returns",
-        capability="Decide and track merchandise returns",
-        owner="Returns",
-        local_direct_consumers=("Fulfillment",),
-        remote_direct_consumers=("Customer Support",),
-        http_entry=True,
-        asynchronous_commands=("InspectReturn",),
-        published_events=("ReturnAccepted",),
-        persistence=True,
-        standalone_app=True,
-        multi_service_apps=("fulfillment-app",),
-    ))
+    try:
+        contract = load_business_service_contract(
+            root / "docs/agents/new-business-service.md"
+        )
+        service_plan = business_service_plan(
+            representative_business_service_description(), contract
+        )
+    except (DeliveryContractError, ValueError, KeyError) as error:
+        failures.append(f"representative business-service shape failed: {error}")
+        return failures
     service_targets = {artifact.target for artifact in service_plan.artifacts}
     expected_service_targets = {
         "services/returns/returns-api",
         "services/returns/returns-service",
         "returns HTTP inbound adapter",
+        "returns HTTP provider adapter",
         "returns message inbound adapter",
         "returns message outbound adapter",
-        "returns remote client outbound adapter",
-        "returns persistence outbound adapter",
-        "returns service-owned migration",
+        "returns persistence outbound adapter for return-ledger",
+        "returns service-owned migration for return-ledger",
+        "real-database verification for return-ledger",
         "returns-app assembly",
         "fulfillment-app assembly",
-        "repository message-contract verification",
-        "repository architecture rules",
-        "reference-product acceptance entry",
+        "reference-product acceptance entry for Shopper",
+        "returns-app acceptance entry for Returns Operators",
+        "consumer contract acceptance for Fulfillment Partners",
     }
     if not expected_service_targets.issubset(service_targets):
         failures.append("representative business-service plan is incomplete")
-    if any(not artifact.required_by.strip() for artifact in service_plan.artifacts):
+    if "returns synchronous Service API" not in service_targets:
+        failures.append("direct support does not publish a synchronous Service API")
+    async_only = business_service_plan(
+        replace(
+            representative_business_service_description(),
+            use_cases=("Decide Return",),
+            dependencies=(),
+            support_promises=(
+                representative_business_service_description().support_promises[3],
+            ),
+            apps=(AppSupport(
+                "fulfillment-app",
+                "multi-service",
+                ("warehouse-command",),
+                "fulfillment App composition test",
+            ),),
+            acceptance_consumers=(AcceptanceConsumer(
+                "Fulfillment Partners",
+                "consumer-contract",
+                "fulfillment-app",
+                ("warehouse-command",),
+                "partner message contract scenario",
+            ),),
+            durable_state=(),
+        ),
+        contract,
+    )
+    if "reconciliation synchronous Service API" in {
+        artifact.target for artifact in async_only.artifacts
+    } or any("synchronous Service API" in target for target in {
+        artifact.target for artifact in async_only.artifacts
+    }):
+        failures.append("asynchronous-only support created a synchronous Service API")
+    internal_promise = representative_business_service_description().support_promises[4]
+    internal_only = business_service_plan(
+        replace(
+            representative_business_service_description(),
+            use_cases=("Decide Return",),
+            dependencies=(),
+            support_promises=(internal_promise,),
+            apps=(AppSupport(
+                "returns-app", "standalone", ("policy-internal",),
+                "returns App startup test",
+            ),),
+            acceptance_consumers=(AcceptanceConsumer(
+                "Returns Operators", "declared-app", "returns-app",
+                ("policy-internal",), "returns App acceptance scenario",
+            ),),
+            durable_state=(),
+        ),
+        contract,
+    )
+    internal_targets = {artifact.target for artifact in internal_only.artifacts}
+    if any(target.endswith("-api") for target in internal_targets):
+        failures.append("internal-only support created an unconsumed API module")
+    if any("adapter" in target.lower() for target in internal_targets):
+        failures.append("internal-only support created an unconsumed Adapter")
+    if any(
+        not artifact.consumers
+        or not artifact.use_cases
+        or not artifact.support_promises
+        for artifact in service_plan.artifacts
+    ):
         failures.append("business-service plan contains an unexplained artifact")
+    for ticket in service_plan.tickets:
+        if not all((
+            ticket.support_claims,
+            ticket.acceptance_criteria,
+            ticket.test_seams,
+            ticket.decisions,
+            ticket.exclusions,
+            ticket.artifacts,
+        )):
+            failures.append(f"business-service vertical ticket is incomplete: {ticket.key}")
     return failures
 
 
@@ -497,6 +1048,23 @@ def validate_repository(root: Path) -> list[str]:
     workflow_text = workflow.read_text(encoding="utf-8")
     if "add-business-service" not in workflow_text:
         failures.append("delivery workflow does not link the add-business-service entry")
+
+    service_skill = skills_root / "add-business-service/SKILL.md"
+    service_skill_text = (
+        service_skill.read_text(encoding="utf-8") if service_skill.is_file() else ""
+    )
+    if "../../../docs/agents/new-business-service.md" not in service_skill_text:
+        failures.append("add-business-service Skill does not read the Shape Contract recipe")
+    if "Route by task shape" not in service_skill_text:
+        failures.append("add-business-service Skill does not route through the workflow table")
+    copied_shape_keys = [
+        key for key in EXPECTED_ROUTES if f"`{key}`" in service_skill_text
+    ]
+    if copied_shape_keys:
+        failures.append(
+            "add-business-service Skill copies workflow shape keys: "
+            f"{copied_shape_keys}"
+        )
 
     actual_skills = (
         {path.name for path in skills_root.iterdir() if path.is_dir()}
