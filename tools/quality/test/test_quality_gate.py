@@ -841,7 +841,9 @@ class QualityGateEvidenceTest(unittest.TestCase):
             "module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module); "
             "original=module._open_new_private; marker=Path(sys.argv[3]); "
             "\ndef crash_before_active(path,parent):"
-            "\n if path.name == 'active':"
+            "\n if path.name.startswith('.active-'):"
+            "\n  output=original(path,parent)"
+            "\n  output.write('{'); output.flush(); os.fsync(output.fileno())"
             "\n  marker.write_text(path.parent.name)"
             "\n  os._exit(0)"
             "\n return original(path,parent)"
@@ -866,12 +868,96 @@ class QualityGateEvidenceTest(unittest.TestCase):
         partial = self.fixture.root / ".quality-gate/runs" / result_path.read_text()
         self.assertTrue((partial / "attempt-sequence").is_file())
         self.assertFalse((partial / "active").exists())
+        self.assertEqual(1, len(list(partial.glob(".active-*"))))
         live = quality_gate.Evidence(self.fixture.root)
         self.assertFalse(partial.exists())
         observer = quality_gate.Evidence(self.fixture.root)
         self.assertTrue(live.active_path.is_file())
         observer.release_active()
         live.release_active()
+
+    def test_missing_owner_identity_after_run_creation_is_recoverable(self) -> None:
+        runs = self.fixture.root / ".quality-gate/runs"
+        before = set(runs.iterdir()) if runs.exists() else set()
+        with mock.patch.object(quality_gate, "_process_identity", return_value=None):
+            with self.assertRaisesRegex(
+                quality_gate.GateError, "cannot determine evidence owner birth identity"
+            ):
+                quality_gate.Evidence(self.fixture.root)
+
+        partials = set(runs.iterdir()) - before
+        self.assertEqual(1, len(partials))
+        partial = partials.pop()
+        self.assertTrue((partial / "attempt-sequence").is_file())
+        self.assertFalse((partial / "active").exists())
+        self.assertFalse(list(partial.glob(".*-" + str(os.getpid()))))
+
+        recovered = quality_gate.Evidence(self.fixture.root)
+        self.assertFalse(partial.exists())
+        self.assertTrue(recovered.active_path.is_file())
+        recovered.release_active()
+
+    def test_counter_atomic_crash_debris_and_malformed_target_recover_from_runs(self) -> None:
+        baseline = quality_gate.Evidence(self.fixture.root)
+        baseline.complete("status: PASS\n")
+        baseline.release_active()
+        marker = self.fixture.root / "counter-crash"
+        worker = (
+            "import importlib.util,os,sys; from pathlib import Path; "
+            "spec=importlib.util.spec_from_file_location('counter_gate',sys.argv[1]); "
+            "module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module); "
+            "original=module._open_new_private; marker=Path(sys.argv[3]); "
+            "\ndef crash_during_counter(path,parent):"
+            "\n output=original(path,parent)"
+            "\n if path.name.startswith('.attempt-sequence-counter-'):"
+            "\n  output.write('{'); output.flush(); os.fsync(output.fileno())"
+            "\n  marker.write_text(path.name); os._exit(0)"
+            "\n return output"
+            "\nmodule._open_new_private=crash_during_counter"
+            "\nmodule.Evidence(Path(sys.argv[2]))"
+        )
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                worker,
+                str(CORE_PATH),
+                str(self.fixture.root),
+                str(marker),
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=10,
+        )
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        quality_root = self.fixture.root / ".quality-gate"
+        self.assertTrue((quality_root / marker.read_text()).is_file())
+        counter = quality_root / "attempt-sequence-counter"
+        counter.write_text("{", encoding="utf-8")
+        counter.chmod(0o600)
+
+        recovered = quality_gate.Evidence(self.fixture.root)
+        self.assertGreater(recovered.attempt_sequence, baseline.attempt_sequence)
+        self.assertTrue(counter.read_text().strip().isdecimal())
+        self.assertFalse(list(quality_root.glob(".attempt-sequence-counter-*")))
+        recovered.release_active()
+
+    def test_malformed_active_is_removed_only_for_incomplete_run(self) -> None:
+        incomplete = quality_gate.Evidence(self.fixture.root)
+        incomplete.active_path.write_text("{", encoding="utf-8")
+        incomplete.active_path.chmod(0o600)
+        recovered = quality_gate.Evidence(self.fixture.root)
+        self.assertFalse(incomplete.run_dir.exists())
+        recovered.release_active()
+
+        completed = quality_gate.Evidence(self.fixture.root)
+        completed.complete("status: PASS\n")
+        completed.active_path.write_text("{", encoding="utf-8")
+        completed.active_path.chmod(0o600)
+        with self.assertRaisesRegex(quality_gate.GateError, "invalid active evidence"):
+            quality_gate.Evidence(self.fixture.root)
+        self.assertTrue(completed.run_dir.exists())
 
     def test_run_validation_and_pruning_do_not_recreate_a_pruned_orphan(self) -> None:
         runs = self.fixture.root / ".quality-gate/runs"

@@ -698,8 +698,14 @@ def _validate_regular(path: Path, parent: Path) -> os.stat_result:
     if path.parent != parent:
         raise GateError(f"unsafe evidence file parent: {path}")
     state = path.lstat()
-    if stat.S_ISLNK(state.st_mode) or not stat.S_ISREG(state.st_mode):
-        raise GateError(f"evidence path must be a real regular file: {path}")
+    if (
+        stat.S_ISLNK(state.st_mode)
+        or not stat.S_ISREG(state.st_mode)
+        or state.st_nlink != 1
+    ):
+        raise GateError(f"evidence path must be a private regular file: {path}")
+    if hasattr(os, "geteuid") and state.st_uid != os.geteuid():
+        raise GateError(f"evidence path is not owned by the current user: {path}")
     if path.resolve(strict=True).parent != parent.resolve(strict=True):
         raise GateError(f"evidence file escapes its validated parent: {path}")
     parent_flags = (
@@ -717,8 +723,11 @@ def _validate_regular(path: Path, parent: Path) -> os.stat_result:
     finally:
         os.close(parent_descriptor)
     try:
-        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+        descriptor_state = os.fstat(descriptor)
+        if not stat.S_ISREG(descriptor_state.st_mode) or descriptor_state.st_nlink != 1:
             raise GateError(f"evidence descriptor is not a regular file: {path}")
+        if hasattr(os, "geteuid") and descriptor_state.st_uid != os.geteuid():
+            raise GateError(f"evidence descriptor is not owned by the current user: {path}")
         os.fchmod(descriptor, 0o600)
     finally:
         os.close(descriptor)
@@ -857,15 +866,31 @@ def _read_private_integer(path: Path, parent: Path) -> int:
 
 
 def _replace_private_text(path: Path, parent: Path, content: str) -> None:
+    for stale in parent.glob(f".{path.name}-*"):
+        _unlink_existing_private(stale, parent)
     temporary = parent / f".{path.name}-{os.getpid()}"
-    if _lstat(temporary) is not None:
-        raise GateError(f"unexpected evidence temporary exists: {temporary}")
-    with _open_new_private(temporary, parent) as output:
-        output.write(content)
-    if _lstat(path) is not None:
+    try:
+        with _open_new_private(temporary, parent) as output:
+            output.write(content)
+            output.flush()
+            os.fsync(output.fileno())
+        if _lstat(path) is not None:
+            _validate_regular(path, parent)
+        os.replace(temporary, path)
         _validate_regular(path, parent)
-    os.replace(temporary, path)
-    _validate_regular(path, parent)
+        parent_flags = (
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        parent_descriptor = os.open(parent, parent_flags)
+        try:
+            os.fsync(parent_descriptor)
+        finally:
+            os.close(parent_descriptor)
+    finally:
+        if _lstat(temporary) is not None:
+            _unlink_existing_private(temporary, parent)
 
 
 def _validate_run_tree(run: Path, runs: Path) -> None:
@@ -917,6 +942,7 @@ class Evidence:
                     if stat.S_ISLNK(state.st_mode) or not stat.S_ISDIR(state.st_mode):
                         raise GateError(f"invalid evidence run component: {existing}")
                     _validate_run_tree(existing, self.runs)
+                self._clean_incomplete_metadata_unlocked()
                 self.attempt_sequence = self._allocate_attempt_sequence()
                 self._reclaim_stale_active_unlocked()
                 stamp = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%S.%fZ")
@@ -928,25 +954,27 @@ class Evidence:
                 self.log_path = self.run_dir / "full.log"
                 self.summary_path = self.run_dir / "summary.txt"
                 self.active_path = self.run_dir / "active"
-                with _open_new_private(
-                    self.run_dir / "attempt-sequence", self.run_dir
-                ) as sequence_file:
-                    sequence_file.write(f"{self.attempt_sequence}\n")
-                with _open_new_private(self.active_path, self.run_dir) as active_file:
-                    owner = _process_identity(os.getpid())
-                    if owner is None:
-                        raise GateError("cannot determine evidence owner birth identity")
-                    active_file.write(
-                        json.dumps(
-                            {
-                                "attempt": self.attempt_sequence,
-                                "pid": owner.pid,
-                                "started": owner.started,
-                            },
-                            separators=(",", ":"),
-                        )
-                        + "\n"
+                _replace_private_text(
+                    self.run_dir / "attempt-sequence",
+                    self.run_dir,
+                    f"{self.attempt_sequence}\n",
+                )
+                owner = _process_identity(os.getpid())
+                if owner is None:
+                    raise GateError("cannot determine evidence owner birth identity")
+                _replace_private_text(
+                    self.active_path,
+                    self.run_dir,
+                    json.dumps(
+                        {
+                            "attempt": self.attempt_sequence,
+                            "pid": owner.pid,
+                            "started": owner.started,
+                        },
+                        separators=(",", ":"),
                     )
+                    + "\n",
+                )
                 with _open_new_private(self.log_path, self.run_dir):
                     pass
                 self._update_latest()
@@ -954,11 +982,6 @@ class Evidence:
             os.umask(old_umask)
 
     def _allocate_attempt_sequence(self) -> int:
-        counter = (
-            _read_private_integer(self.sequence_counter, self.root)
-            if _lstat(self.sequence_counter) is not None
-            else 0
-        )
         seen: set[int] = set()
         missing: list[Path] = []
         for run in sorted(self.runs.iterdir(), key=lambda path: path.name):
@@ -970,16 +993,61 @@ class Evidence:
             if sequence <= 0 or sequence in seen:
                 raise GateError(f"invalid or duplicate evidence attempt sequence: {run}")
             seen.add(sequence)
-            counter = max(counter, sequence)
+        scanned_max = max(seen, default=0)
+        try:
+            counter = (
+                _read_private_integer(self.sequence_counter, self.root)
+                if _lstat(self.sequence_counter) is not None
+                else 0
+            )
+        except GateError:
+            # A crashed atomic publication can leave only a malformed old
+            # counter. The validated per-run sequence ledger is authoritative
+            # and permits deterministic recovery without reusing an attempt.
+            counter = scanned_max
+        counter = max(counter, scanned_max)
         for run in missing:
             counter += 1
-            with _open_new_private(run / "attempt-sequence", run) as sequence_file:
-                sequence_file.write(f"{counter}\n")
+            _replace_private_text(run / "attempt-sequence", run, f"{counter}\n")
         allocated = counter + 1
         _replace_private_text(
             self.sequence_counter, self.root, f"{allocated}\n"
         )
         return allocated
+
+    def _clean_incomplete_metadata_unlocked(self) -> None:
+        """Remove only safely identified, incomplete construction debris."""
+        for run in list(self.runs.iterdir()):
+            if _lstat(run / "completed") is not None:
+                continue
+            active = run / "active"
+            if _lstat(active) is None:
+                _validate_run_tree(run, self.runs)
+                shutil.rmtree(run)
+                continue
+            try:
+                _validate_regular(active, run)
+                with _open_existing_private(active, run, "rb") as active_file:
+                    text = active_file.read(1024).decode("utf-8", "replace").strip()
+                if text.isdecimal():
+                    if int(text) <= 0:
+                        raise ValueError("invalid legacy PID")
+                    continue
+                payload = json.loads(text)
+                pid = int(payload["pid"])
+                attempt = int(payload["attempt"])
+                started_value = payload["started"]
+                started_valid = (
+                    isinstance(started_value, list)
+                    and len(started_value) == 2
+                    and all(isinstance(value, int) for value in started_value)
+                ) or (isinstance(started_value, str) and bool(started_value))
+                sequence = _read_private_integer(run / "attempt-sequence", run)
+                if pid <= 0 or attempt != sequence or not started_valid:
+                    raise ValueError("active owner does not match attempt")
+            except (GateError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+                _validate_run_tree(run, self.runs)
+                shutil.rmtree(run)
 
     def _update_latest(self) -> None:
         latest = self.root / "latest"

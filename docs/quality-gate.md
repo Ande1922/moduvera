@@ -61,13 +61,21 @@ newest attempt, including an incomplete or failed base-resolution attempt. A
 private monotonic attempt sequence, allocated under the evidence lock, defines
 latest and retention ordering even if the system clock moves backward. Existing
 evidence without sequence metadata is migrated once in deterministic run-ID
-order. An older attempt completing later cannot move `latest` backward. Only
-the newest 20 completed runs are kept. Required retention pruning succeeds
-before the current summary and `completed` marker are published, so a pruning
-failure cannot leave an authoritative PASS run. A private, no-follow, owner-validated
-cross-process lock serializes existing-run validation, run creation, retention
-reservation, summary and completion publication, monotonic sequence allocation,
-and conditional `latest` update. Concurrent creation therefore cannot race
+order. The sequence counter and per-run active/sequence metadata are published
+by private same-directory temporary files, flushed, atomically replaced, and
+validated as owner-only regular files. Stale publication temporaries are
+removed under the evidence lock. A malformed global counter is reconstructed
+from the validated per-run sequence ledger without reusing an attempt. Malformed
+metadata in an incomplete construction is safe to remove with that run; a
+malformed completed run is quarantined fail-closed rather than silently
+rewritten or pruned. An older attempt completing later cannot move `latest`
+backward. Only the newest 20 completed runs are kept. Required retention
+pruning succeeds before the current summary and `completed` marker are
+published, so a pruning failure cannot leave an authoritative PASS run. A
+private, no-follow, owner-validated cross-process lock serializes existing-run
+validation, run creation, retention reservation, summary and completion
+publication, monotonic sequence allocation, and conditional `latest` update.
+Concurrent creation therefore cannot race
 pruning into recreating an incomplete orphan, and concurrent completions share
 the same 20-run limit. Each invocation retains a private active marker containing
 its attempt sequence plus the owner PID and operating-system process birth
