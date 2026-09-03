@@ -43,6 +43,26 @@ REFERENCE_KEEP_RUNNING=1 REFERENCE_SKIP_BUILD=1 verification/reference-product/h
 
 The local fixture users are `alice/alice-password` (`tenant-a`), `bob/bob-password` (`tenant-b`) and `viewer/viewer-password` (read-only in `tenant-a`). These credentials and the Compose assets are for local development/acceptance only and are not a production deployment reference.
 
+## Build the Runnable App images
+
+The six executable assemblies share one parameterized, digest-pinned Java 26
+Dockerfile. It consumes Maven-built executable JARs and preserves Spring's
+runtime environment/property configuration:
+
+```bash
+verification/application-image/verify.sh
+```
+
+This scenario builds and inspects every required image, checks Spring Boot's
+four extracted layers, and runs `catalog-app` as non-root against disposable
+PostgreSQL with an overridden port. It also verifies Actuator/HTTP behavior and
+that JDWP is closed by default but reachable when enabled through an explicit
+runtime JVM option. See the
+[image verification contract](./verification/application-image/README.md) for
+focused commands and image-name overrides. The shared Dockerfile and Reference
+Compose are construction and local-verification assets, not production
+deployment templates.
+
 ## Smaller consumer example
 
 [`examples/simple-notes-demo`](./examples/simple-notes-demo/README.md) is the minimal external-consumer-style example. It has its own Spring Boot parent, imports the Moduvera BOM, declares the relevant Starters directly, and proves Web, JWT, PostgreSQL/MyBatis-Plus, migration, durable messaging, Kafka retry and DLQ behavior through real infrastructure.

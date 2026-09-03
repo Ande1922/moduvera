@@ -1,0 +1,21 @@
+# syntax=docker/dockerfile:1.7
+
+ARG JAVA_RUNTIME_IMAGE=docker.io/library/eclipse-temurin:26-jre@sha256:2b3c7b20375e9ac3ab6a7bc39357d3dbe2caf48378fe9e5c306a22da3499f170
+
+FROM ${JAVA_RUNTIME_IMAGE} AS extract
+WORKDIR /workspace
+ARG APP_JAR
+COPY ${APP_JAR} application.jar
+RUN java -Djarmode=tools -jar application.jar extract --layers --launcher --destination extracted \
+    && find extracted -exec touch -d '@0' {} +
+
+FROM ${JAVA_RUNTIME_IMAGE}
+ARG APP_PORT
+WORKDIR /opt/moduvera
+COPY --link --from=extract --chown=10001:10001 /workspace/extracted/dependencies/ ./
+COPY --link --from=extract --chown=10001:10001 /workspace/extracted/spring-boot-loader/ ./
+COPY --link --from=extract --chown=10001:10001 /workspace/extracted/snapshot-dependencies/ ./
+COPY --link --from=extract --chown=10001:10001 /workspace/extracted/application/ ./
+USER 10001:10001
+EXPOSE ${APP_PORT}
+ENTRYPOINT ["java", "org.springframework.boot.loader.launch.JarLauncher"]

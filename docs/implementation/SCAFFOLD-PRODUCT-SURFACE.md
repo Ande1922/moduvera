@@ -1,6 +1,6 @@
 # Current Scaffold Product Surface
 
-This is the only current status source for the repository. Status is based on executable consumer evidence, not the presence of a POM, class, version property or BOM coordinate. Last verified: 2026-09-02.
+This is the only current status source for the repository. Status is based on executable consumer evidence, not the presence of a POM, class, version property or BOM coordinate. Last verified: 2026-09-03.
 
 ## Supported
 
@@ -15,6 +15,7 @@ This is the only current status source for the repository. Status is based on ex
 | `moduvera-message-core` | transport-neutral Event/Async Command descriptors, durable Outbox state machine and atomic Inbox contract | unit contracts plus PostgreSQL/MySQL store integration |
 | `moduvera-messaging-kafka-spring-boot-starter` | Cloud Stream imperative model, structured CloudEvents for Events, distinct async-command envelope, logical route mapping, handler-bound reliable inbound endpoints, synchronous broker ACK, JDBC Outbox/Inbox, bounded retry and Kafka DLQ integration | real Kafka Notes/App tests, topology-specific duplicate-delivery ITs and dual-topology recovery black box |
 | `moduvera-test-support` | deterministic clocks, bounded eventually and run identifiers | test-scope consumers only |
+| Runnable App image construction | all six `apps/` assemblies use one parameterized Dockerfile over Maven-built JARs, with Boot tools layers, a digest-pinned Java 26 JRE, non-root execution and runtime-owned configuration | all-image build/inspection plus `catalog-app` health and HTTP smoke against real PostgreSQL |
 
 The supported database default is PostgreSQL. MySQL is supported as a compatibility target for Catalog, Order, Inventory and messaging persistence contracts; it does not own Gateway/Kafka end-to-end, AI/vector, performance or failure-recovery claims.
 
@@ -36,7 +37,6 @@ The Catalog and Identity HTTP Service Client Groups remain private to Order. No 
 
 - governed observability;
 - ExecutionContext propagation across WebFlux/Reactor, Servlet/virtual-thread and explicit asynchronous execution models;
-- repository-owned Dockerfile and application container image baseline, without implying a production deployment topology;
 - repository-owned business-service onboarding recipe and AI entry point, without freezing the evolving service shape into a code generator;
 - PostgreSQL-native AI/vector capability qualification when a real Agent/RAG use case exists;
 
