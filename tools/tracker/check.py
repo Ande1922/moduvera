@@ -64,6 +64,13 @@ NEGATIVE_RESULT = re.compile(
     r"未运行|没有运行|不可用|失败|尚未|待验证|未验证|未通过|没有通过|不通过",
     re.IGNORECASE,
 )
+NEGATED_COVERAGE = re.compile(
+    r"\bnot\s+cover(?:ed|s|ing)?\b|"
+    r"\b(?:do|does|did)n['’]t\s+cover\b|"
+    r"\bcover(?:ed|s|ing)?\s+(?:no|none|nothing)\b|"
+    r"未覆盖|没有覆盖|不覆盖|无覆盖",
+    re.IGNORECASE,
+)
 UNCHECKED = re.compile(r"^\s*[-*]\s*\[\s\]\s+", re.MULTILINE)
 
 
@@ -132,6 +139,7 @@ def has_affirmative_verification(answer: str) -> bool:
         VERIFICATION_CONTEXT.search(fragment)
         and AFFIRMATIVE_RESULT.search(fragment)
         and not NEGATIVE_RESULT.search(fragment)
+        and not NEGATED_COVERAGE.search(fragment)
         for fragment in fragments
     )
 
@@ -282,8 +290,10 @@ def validate(root: Path) -> tuple[list[Record], list[str]]:
         all_terminal = bool(children) and all(
             child.status in TERMINAL_ISSUE_STATUSES for child in children
         )
-        if record.status == "resolved" and not all_terminal:
-            errors.append(f"{record.relative}: resolved spec has non-terminal or missing child issues")
+        if record.status in TERMINAL_ISSUE_STATUSES and not all_terminal:
+            errors.append(
+                f"{record.relative}: {record.status} spec has non-terminal or missing child issues"
+            )
         elif all_terminal and record.status not in TERMINAL_ISSUE_STATUSES:
             errors.append(f"{record.relative}: all child issues are terminal but spec is not terminal")
     return records, errors

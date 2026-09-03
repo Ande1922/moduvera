@@ -160,4 +160,7 @@ published cleanup、低基数指标以及 PostgreSQL/MySQL 专属索引。
 
 验证证据位于 `OutboxWorkerTest`、`OutboxRelayIT`、`JdbcMessagingStoreIT`、
 `JdbcMessagingMySqlIT`、真实 Kafka App tests 和参考产品故障恢复 harness；
-本次校准再次运行消息 Starter 聚焦 `verify` 与仓库 Normal quality gate，均通过。
+本次校准运行消息 Starter 七模块聚焦 `verify`，结果 PASS。官方 Normal
+quality gate 在固定基线的 `ModuveraMonolithApplicationIT` V2 migration
+assertion 失败；外部 Ticket 09 的 `542fdc5` 已修复该基线缺口，但不属于当前
+HEAD ancestry。

@@ -27,12 +27,14 @@ invalid type/status combinations, stale blocked/unblocked states, non-terminal
 children beneath a resolved spec, and resolved issues without completed
 acceptance items, a concrete commit, and affirmative verification evidence in
 their Answer. Negative statements such as unavailable, unrun, or failed tests
-are not completion evidence. `Blocked by` entries must fully match `None`, a
+are not completion evidence, including negated claims that tests cover nothing
+or do not cover the change. `Blocked by` entries must fully match `None`, a
 two-digit local issue number, or `External — description`; `None` and local
-issue numbers may also carry a description after the dash. A `wontfix` issue or
-spec is terminal without requiring its blockers to be resolved. The common
-quality gate extension runs the same checker for both docs-only and Normal
-profiles.
+issue numbers may also carry a description after the dash. A `wontfix` issue is
+terminal without requiring its blockers to be resolved. A terminal spec may be
+`resolved` or `wontfix`, but every child issue must itself be terminal. The
+common quality gate extension runs the same checker for both docs-only and
+Normal profiles.
 
 ## System reviews
 

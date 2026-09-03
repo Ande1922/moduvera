@@ -82,6 +82,10 @@ class TrackerCheckerTest(unittest.TestCase):
             "Verification failed.",
             "Tests were not run; evidence is unavailable.",
             "Tests did not pass.",
+            "Tests do not cover the changed behavior.",
+            "Verification covers nothing.",
+            "测试未覆盖本次变更。",
+            "验证没有覆盖任何行为。",
         )
         for negative_answer in negative_answers:
             with self.subTest(answer=negative_answer):
@@ -122,6 +126,14 @@ class TrackerCheckerTest(unittest.TestCase):
         )
         result = self.run_checker(root)
         self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_wontfix_spec_requires_terminal_children(self) -> None:
+        root = self.fixture("legal")
+        spec = root / ".scratch/example/spec.md"
+        spec.write_text(spec.read_text().replace("ready-for-agent", "wontfix"))
+        result = self.run_checker(root)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("wontfix spec has non-terminal", result.stderr)
 
 
 if __name__ == "__main__":
