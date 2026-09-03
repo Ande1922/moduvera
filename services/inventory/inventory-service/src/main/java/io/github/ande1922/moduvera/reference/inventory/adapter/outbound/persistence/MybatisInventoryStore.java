@@ -1,11 +1,11 @@
 package io.github.ande1922.moduvera.reference.inventory.adapter.outbound.persistence;
 
 import io.github.ande1922.moduvera.context.ExecutionContextHolder;
+import io.github.ande1922.moduvera.reference.inventory.api.ReserveInventoryCommand;
 import io.github.ande1922.moduvera.reference.inventory.domain.InventoryStore;
 import io.github.ande1922.moduvera.reference.inventory.domain.ReservationDecision;
 import io.github.ande1922.moduvera.reference.inventory.domain.ReservationExecution;
 import io.github.ande1922.moduvera.reference.inventory.domain.ReservationPolicy;
-import io.github.ande1922.moduvera.reference.inventory.domain.ReservationRequest;
 import io.github.ande1922.moduvera.reference.inventory.domain.StockAvailability;
 import java.time.Instant;
 import java.util.Arrays;
@@ -24,7 +24,7 @@ public final class MybatisInventoryStore implements InventoryStore {
 
     @Override
     public ReservationExecution reserve(
-            ReservationRequest request, Instant now, ReservationPolicy policy) {
+            ReserveInventoryCommand request, Instant now, ReservationPolicy policy) {
         var context = ExecutionContextHolder.require();
         String tenantId = context.tenantId().value();
         InventoryResultRow previous = mapper.findResult(tenantId, request.commandId());
@@ -46,7 +46,7 @@ public final class MybatisInventoryStore implements InventoryStore {
         }
 
         ReservationDecision decision = policy.decide(
-                request.lines(),
+                request,
                 locked.values().stream()
                         .map(stock -> new StockAvailability(
                                 stock.getProductId(), stock.getAvailable()))

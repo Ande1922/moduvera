@@ -20,8 +20,6 @@ import io.github.ande1922.moduvera.reference.inventory.domain.InventoryStore;
 import io.github.ande1922.moduvera.reference.inventory.domain.ReservationDecision;
 import io.github.ande1922.moduvera.reference.inventory.domain.ReservationExecution;
 import io.github.ande1922.moduvera.reference.inventory.domain.ReservationPolicy;
-import io.github.ande1922.moduvera.reference.inventory.domain.ReservationRequest;
-import io.github.ande1922.moduvera.reference.inventory.domain.ReservationRequestLine;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -75,11 +73,7 @@ class InventoryApplicationServiceTest {
 
         assertThat(returned).isEqualTo(result);
         assertThat(store.calls()).isEqualTo(1);
-        assertThat(store.request())
-                .isEqualTo(new ReservationRequest(
-                        COMMAND.commandId(),
-                        COMMAND.orderId(),
-                        List.of(new ReservationRequestLine(7, 2))));
+        assertThat(store.request()).isSameAs(COMMAND);
         assertThat(store.policy()).isSameAs(POLICY);
         assertThat(publisher.published()).containsExactly(result);
     }
@@ -141,7 +135,7 @@ class InventoryApplicationServiceTest {
 
         private final ReservationExecution execution;
         private int calls;
-        private ReservationRequest request;
+        private ReserveInventoryCommand request;
         private ReservationPolicy policy;
 
         private ScriptedStore(ReservationExecution execution) {
@@ -150,7 +144,7 @@ class InventoryApplicationServiceTest {
 
         @Override
         public ReservationExecution reserve(
-                ReservationRequest request, Instant now, ReservationPolicy policy) {
+                ReserveInventoryCommand request, Instant now, ReservationPolicy policy) {
             calls++;
             this.request = request;
             this.policy = policy;
@@ -161,7 +155,7 @@ class InventoryApplicationServiceTest {
             return calls;
         }
 
-        private ReservationRequest request() {
+        private ReserveInventoryCommand request() {
             return request;
         }
 

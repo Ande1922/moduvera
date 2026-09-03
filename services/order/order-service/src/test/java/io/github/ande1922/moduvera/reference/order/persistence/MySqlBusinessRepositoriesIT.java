@@ -21,8 +21,6 @@ import io.github.ande1922.moduvera.reference.inventory.domain.AllOrNothingReserv
 import io.github.ande1922.moduvera.reference.inventory.domain.ReservationDecision;
 import io.github.ande1922.moduvera.reference.inventory.domain.ReservationExecution;
 import io.github.ande1922.moduvera.reference.inventory.domain.ReservationPolicy;
-import io.github.ande1922.moduvera.reference.inventory.domain.ReservationRequest;
-import io.github.ande1922.moduvera.reference.inventory.domain.ReservationRequestLine;
 import io.github.ande1922.moduvera.reference.inventory.adapter.outbound.persistence.InventoryMapper;
 import io.github.ande1922.moduvera.reference.inventory.adapter.outbound.persistence.MybatisInventoryStore;
 import io.github.ande1922.moduvera.migration.DatabaseComponent;
@@ -185,16 +183,26 @@ class MySqlBusinessRepositoriesIT {
 
         ReservationExecution reconstructedRejection =
                 reserve("tenant-a", rejected, NOW.plusSeconds(1));
-        assertThat(reconstructedRejection.created()).isFalse();
-        assertThat(reconstructedRejection.decision()).isEqualTo(rejectedDecision.decision());
+        assertThat(reconstructedRejection)
+                .isEqualTo(new ReservationExecution(
+                        rejected.commandId(),
+                        rejected.orderId(),
+                        rejectedDecision.decision(),
+                        NOW,
+                        false));
 
         ReservationExecution reservedDecision = reserve("tenant-a", reserved, NOW);
         assertThat(reservedDecision.created()).isTrue();
         assertThat(reservedDecision.decision()).isEqualTo(ReservationDecision.reserved());
         ReservationExecution reconstructedReservation =
                 reserve("tenant-a", reserved, NOW.plusSeconds(1));
-        assertThat(reconstructedReservation.created()).isFalse();
-        assertThat(reconstructedReservation.decision()).isEqualTo(reservedDecision.decision());
+        assertThat(reconstructedReservation)
+                .isEqualTo(new ReservationExecution(
+                        reserved.commandId(),
+                        reserved.orderId(),
+                        reservedDecision.decision(),
+                        NOW,
+                        false));
         assertThat(available("tenant-a", 7)).isEqualTo(3);
         assertThat(available("tenant-b", 7)).isEqualTo(9);
 
@@ -240,10 +248,20 @@ class MySqlBusinessRepositoriesIT {
                 reserve("tenant-a", firstCommand, NOW.plusSeconds(1));
         ReservationExecution reconstructedSecond =
                 reserve("tenant-a", secondCommand, NOW.plusSeconds(1));
-        assertThat(reconstructedFirst.created()).isFalse();
-        assertThat(reconstructedFirst.decision()).isEqualTo(firstDecision.decision());
-        assertThat(reconstructedSecond.created()).isFalse();
-        assertThat(reconstructedSecond.decision()).isEqualTo(secondDecision.decision());
+        assertThat(reconstructedFirst)
+                .isEqualTo(new ReservationExecution(
+                        firstCommand.commandId(),
+                        firstCommand.orderId(),
+                        firstDecision.decision(),
+                        firstDecision.decidedAt(),
+                        false));
+        assertThat(reconstructedSecond)
+                .isEqualTo(new ReservationExecution(
+                        secondCommand.commandId(),
+                        secondCommand.orderId(),
+                        secondDecision.decision(),
+                        secondDecision.decidedAt(),
+                        false));
     }
 
     private static void migrate(DatabaseMigrator migrator, String component, String location) {
@@ -281,7 +299,7 @@ class MySqlBusinessRepositoriesIT {
             String tenant, ReserveInventoryCommand command, Instant now) {
         return ExecutionContextHolder.call(
                 context(tenant), () -> transactions.inTransaction(() -> inventory.reserve(
-                        request(command), now, RESERVATION_POLICY)));
+                        command, now, RESERVATION_POLICY)));
     }
 
     private ReservationExecution reserveTogether(
@@ -290,16 +308,6 @@ class MySqlBusinessRepositoriesIT {
         ready.countDown();
         start.await();
         return reserve("tenant-a", command, NOW);
-    }
-
-    private static ReservationRequest request(ReserveInventoryCommand command) {
-        return new ReservationRequest(
-                command.commandId(),
-                command.orderId(),
-                command.lines().stream()
-                        .map(line -> new ReservationRequestLine(
-                                line.productId(), line.quantity()))
-                        .toList());
     }
 
     private static ExecutionContext context(String tenant) {

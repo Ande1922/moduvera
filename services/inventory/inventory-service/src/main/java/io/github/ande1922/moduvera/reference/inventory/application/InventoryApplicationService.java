@@ -9,8 +9,6 @@ import io.github.ande1922.moduvera.reference.inventory.api.ReserveInventoryComma
 import io.github.ande1922.moduvera.reference.inventory.domain.InventoryStore;
 import io.github.ande1922.moduvera.reference.inventory.domain.ReservationExecution;
 import io.github.ande1922.moduvera.reference.inventory.domain.ReservationPolicy;
-import io.github.ande1922.moduvera.reference.inventory.domain.ReservationRequest;
-import io.github.ande1922.moduvera.reference.inventory.domain.ReservationRequestLine;
 import java.time.Clock;
 
 public final class InventoryApplicationService {
@@ -38,15 +36,8 @@ public final class InventoryApplicationService {
 
     public InventoryReservationResult reserve(ReserveInventoryCommand command) {
         authorizer.require(RESERVE);
-        var request = new ReservationRequest(
-                command.commandId(),
-                command.orderId(),
-                command.lines().stream()
-                        .map(line -> new ReservationRequestLine(
-                                line.productId(), line.quantity()))
-                        .toList());
         ReservationExecution execution =
-                inventory.reserve(request, clock.instant(), reservationPolicy);
+                inventory.reserve(command, clock.instant(), reservationPolicy);
         InventoryReservationResult result = toIntegrationResult(execution);
         if (execution.created()) {
             publisher.publish(result);

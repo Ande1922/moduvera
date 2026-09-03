@@ -147,17 +147,10 @@ class ReserveInventoryCommandInboundConfigurationTest {
     private static InventoryApplicationService service(Consumer<ReserveInventoryCommand> behavior) {
         return new InventoryApplicationService(
                 (request, now, policy) -> {
-                    var command = new ReserveInventoryCommand(
+                    behavior.accept(request);
+                    return new ReservationExecution(
                             request.commandId(),
                             request.orderId(),
-                            request.lines().stream()
-                                    .map(line -> new ReserveInventoryLine(
-                                            line.productId(), line.quantity()))
-                                    .toList());
-                    behavior.accept(command);
-                    return new ReservationExecution(
-                            command.commandId(),
-                            command.orderId(),
                             ReservationDecision.reserved(),
                             now,
                             true);
