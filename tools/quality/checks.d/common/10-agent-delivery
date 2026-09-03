@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/../../../.." && pwd)"
+if [[ ! -f "$REPO_ROOT/tools/agent-delivery/validate.py" ]]; then
+    echo "agent delivery tooling is not installed in this compatibility fixture"
+    exit 0
+fi
+python3 "$REPO_ROOT/tools/agent-delivery/validate.py" --repo "$REPO_ROOT"
+"$REPO_ROOT/tools/agent-delivery/test/run-tests.sh"
