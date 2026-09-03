@@ -607,6 +607,71 @@ class QualityGateEvidenceTest(unittest.TestCase):
         self.assertEqual(quality_gate.MAX_COMPLETED_RUNS, len(retained))
         self.assertTrue(current.run_dir.exists())
 
+    def test_concurrent_completions_share_one_retention_transaction(self) -> None:
+        root = self.fixture.root / ".quality-gate/runs"
+        root.mkdir(parents=True)
+        for index in range(quality_gate.MAX_COMPLETED_RUNS - 1):
+            run = root / f"20000101T000000.{index:06d}Z-1"
+            run.mkdir()
+            (run / "completed").write_text("complete\n", encoding="utf-8")
+
+        barrier = self.fixture.root / "completion-barrier"
+        ready_paths = [self.fixture.root / f"ready-{index}" for index in range(2)]
+        worker = (
+            "import importlib.util,sys,time; from pathlib import Path; "
+            "spec=importlib.util.spec_from_file_location('worker_gate',sys.argv[1]); "
+            "module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module); "
+            "evidence=module.Evidence(Path(sys.argv[2])); "
+            "Path(sys.argv[3]).write_text(evidence.run_id); barrier=Path(sys.argv[4]); "
+            "\nwhile not barrier.exists(): time.sleep(0.005)"
+            "\nevidence.complete('status: PASS\\n')"
+        )
+        processes = [
+            subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    worker,
+                    str(CORE_PATH),
+                    str(self.fixture.root),
+                    str(ready),
+                    str(barrier),
+                ],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            for ready in ready_paths
+        ]
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline and not all(path.is_file() for path in ready_paths):
+            exited = [process for process in processes if process.poll() is not None]
+            if exited:
+                diagnostics = []
+                for process in exited:
+                    stdout, stderr = process.communicate()
+                    diagnostics.append(f"exit {process.returncode}: {stdout}{stderr}")
+                self.fail("concurrent evidence worker exited early: " + " | ".join(diagnostics))
+            time.sleep(0.01)
+        if not all(path.is_file() for path in ready_paths):
+            barrier.write_text("release after timeout\n", encoding="utf-8")
+            diagnostics = []
+            for process in processes:
+                stdout, stderr = process.communicate(timeout=10)
+                diagnostics.append(f"exit {process.returncode}: {stdout}{stderr}")
+            self.fail("concurrent evidence workers were not ready: " + " | ".join(diagnostics))
+        barrier.write_text("release\n", encoding="utf-8")
+        for process in processes:
+            stdout, stderr = process.communicate(timeout=10)
+            self.assertEqual(0, process.returncode, stdout + stderr)
+
+        retained = [path for path in root.iterdir() if (path / "completed").is_file()]
+        self.assertLessEqual(len(retained), quality_gate.MAX_COMPLETED_RUNS)
+        latest_id = (self.fixture.root / ".quality-gate/latest").read_text().strip()
+        latest = root / latest_id
+        self.assertTrue((latest / "completed").is_file())
+        self.assertIn("status: PASS", (latest / "summary.txt").read_text())
+
     def test_prune_failure_cannot_publish_pass_or_completed_marker(self) -> None:
         root = self.fixture.root / ".quality-gate/runs"
         root.mkdir(parents=True)
@@ -967,11 +1032,7 @@ class QualityGateEvidenceTest(unittest.TestCase):
         )
         extension.chmod(0o755)
         self.base = self.fixture.commit("install launch-signal extension")
-        previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
-        try:
-            result = self.run_gate("normal", "--base", self.base, "--head", self.base)
-        finally:
-            signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+        result = self.run_gate("normal", "--base", self.base, "--head", self.base)
         self.assertEqual(128 + signal.SIGTERM, result.returncode, result.stdout + result.stderr)
         self.assertIn("status: INTERRUPTED", result.stdout)
         run_dir = self.latest_run()
@@ -979,6 +1040,88 @@ class QualityGateEvidenceTest(unittest.TestCase):
         child_pid = int((run_dir / "launch.pid").read_text().strip())
         with self.assertRaises(ProcessLookupError):
             os.kill(child_pid, 0)
+
+    def test_inherited_blocked_pending_signal_completes_interrupted_evidence(self) -> None:
+        self.install_gate()
+        self.base = self.fixture.commit("install gate")
+        launcher = (
+            "import os,signal,sys; "
+            "signal.pthread_sigmask(signal.SIG_BLOCK,{signal.SIGTERM}); "
+            "os.kill(os.getpid(),signal.SIGTERM); "
+            "os.execv(sys.argv[1],sys.argv[1:])"
+        )
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                launcher,
+                str(self.fixture.root / "tools/quality/quality-gate.sh"),
+                "auto",
+                "--base",
+                self.base,
+                "--head",
+                self.base,
+            ],
+            cwd=self.fixture.root,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=15,
+        )
+        self.assertEqual(128 + signal.SIGTERM, result.returncode, result.stdout + result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        run_dir = self.latest_run()
+        self.assertTrue((run_dir / "completed").is_file())
+        self.assertIn("status: INTERRUPTED", (run_dir / "summary.txt").read_text())
+
+    def test_signal_in_execution_to_finalization_transition_is_latched(self) -> None:
+        self.install_gate()
+        core = self.fixture.root / "tools/quality/quality_gate.py"
+        source = core.read_text(encoding="utf-8")
+        needle = (
+            "    signal_state.interruptible = False\n"
+            "    consume_pending_watched_signals(signal_state, watched_signals)\n"
+        )
+        instrumented = (
+            '    (evidence.run_dir / "transition-blocked").write_text("ready\\n")\n'
+            "    time.sleep(0.5)\n"
+            + needle
+        )
+        self.assertIn(needle, source)
+        core.write_text(source.replace(needle, instrumented, 1), encoding="utf-8")
+        self.base = self.fixture.commit("instrument execution transition")
+        process = subprocess.Popen(
+            [
+                str(self.fixture.root / "tools/quality/quality-gate.sh"),
+                "auto",
+                "--base",
+                self.base,
+                "--head",
+                self.base,
+            ],
+            cwd=self.fixture.root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        run_dir: Path | None = None
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            latest = self.fixture.root / ".quality-gate/latest"
+            if latest.is_file():
+                candidate = self.fixture.root / ".quality-gate/runs" / latest.read_text().strip()
+                if (candidate / "transition-blocked").is_file():
+                    run_dir = candidate
+                    break
+            time.sleep(0.01)
+        self.assertIsNotNone(run_dir, "did not enter blocked transition window")
+        assert run_dir is not None
+        os.kill(process.pid, signal.SIGTERM)
+        stdout, stderr = process.communicate(timeout=10)
+        self.assertEqual(128 + signal.SIGTERM, process.returncode, stdout + stderr)
+        self.assertNotIn("Traceback", stderr)
+        self.assertTrue((run_dir / "completed").is_file())
+        self.assertIn("status: INTERRUPTED", (run_dir / "summary.txt").read_text())
 
     def test_signal_during_evidence_pruning_is_recorded_as_interrupted(self) -> None:
         self.install_gate()
@@ -1143,7 +1286,7 @@ class QualityGateEvidenceTest(unittest.TestCase):
 
 class EvidencePathSafetyTest(unittest.TestCase):
     def test_symlinked_evidence_components_never_mutate_external_target(self) -> None:
-        for scenario in ("root", "runs", "latest", "run"):
+        for scenario in ("root", "runs", "latest", "lock", "run"):
             with self.subTest(scenario=scenario):
                 fixture = RepositoryFixture()
                 self.addCleanup(fixture.close)
@@ -1163,6 +1306,8 @@ class EvidencePathSafetyTest(unittest.TestCase):
                             runs.mkdir()
                             if scenario == "latest":
                                 os.symlink(sentinel, quality_root / "latest")
+                            elif scenario == "lock":
+                                os.symlink(sentinel, quality_root / "completion.lock")
                             else:
                                 os.symlink(outside, runs / "20000101T000000.000000Z-1")
                     before = {
@@ -1194,6 +1339,7 @@ class EvidencePathSafetyTest(unittest.TestCase):
         self.assertEqual(0o700, stat.S_IMODE(evidence.run_dir.stat().st_mode))
         self.assertEqual(0o600, stat.S_IMODE(evidence.log_path.stat().st_mode))
         self.assertEqual(0o600, stat.S_IMODE(evidence.summary_path.stat().st_mode))
+        self.assertEqual(0o600, stat.S_IMODE(evidence.completion_lock.stat().st_mode))
 
 
 class BoundedTailTest(unittest.TestCase):

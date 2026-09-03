@@ -60,7 +60,10 @@ checks, rather than through path-following chmod operations.
 newest attempt, including a failed base-resolution attempt. Only the newest 20
 completed runs are kept. Required retention pruning succeeds before the current
 summary and `completed` marker are published, so a pruning failure cannot leave
-an authoritative PASS run.
+an authoritative PASS run. A private, no-follow, owner-validated cross-process
+lock serializes the retention reservation, summary and completion publication,
+and final `latest` update, so concurrent completions share the same 20-run
+limit.
 The terminal prints only the bounded redacted summary; inspect `full.log`
 locally when more detail is required. The complete log is streamed through a
 stateful redactor before only the final redacted lines are retained. Credential
@@ -86,12 +89,17 @@ same interruption-safe lifecycle. Birth-identity and inherited
 lifecycle-descriptor tracking adds best-effort cleanup for known detached
 descendants, but does not claim containment against hostile code that
 deliberately double-forks, creates a new session, and closes inherited
-descriptors. The first interrupt remains
-recorded through snapshot cleanup, evidence finalization, and retention pruning.
-Watched signals pending in the final blocked window are consumed, then the gate
-handlers remain installed while those signals are unblocked. The authoritative
-interrupted summary is refreshed before the caller's handlers and mask are
-restored; later signals follow the caller's original disposition.
+descriptors. The first interrupt remains recorded from process entry through
+snapshot cleanup, evidence finalization, and retention pruning. Watched signals
+are blocked before gate handlers are installed; inherited pending signals are
+consumed into gate state before the caller's intended mask is restored. The
+execution-to-finalization transition blocks watched signals before switching
+to non-raising cleanup, so a signal in that boundary is latched rather than
+escaping without completed evidence. Watched signals pending in the final
+blocked window are consumed, then the gate handlers remain installed while
+those signals are unblocked. The authoritative interrupted summary is refreshed
+before the caller's handlers and mask are restored; later signals follow the
+caller's original disposition.
 
 Run the deterministic policy and fixture suite directly with:
 

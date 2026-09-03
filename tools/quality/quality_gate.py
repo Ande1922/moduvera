@@ -13,6 +13,7 @@ from collections import deque
 import contextlib
 import ctypes
 import datetime as dt
+import fcntl
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -36,6 +37,7 @@ MAX_STREAM_BUFFER_CHARS = 2 * MAX_REDACTED_LINE_CHARS
 STREAM_PATTERN_OVERLAP = 256
 MAX_OPEN_CREDENTIAL_CHARS = 256 * 1024
 MAX_SUMMARY_BYTES = 8192
+EVIDENCE_LOCK_SECONDS = 10.0
 PROCESS_GROUP_TERM_SECONDS = 2.0
 PROCESS_GROUP_KILL_SECONDS = 5.0
 DOC_SUFFIXES = {".md"}
@@ -670,7 +672,11 @@ def _ensure_directory(path: Path, parent: Path) -> None:
         raise GateError(f"unsafe evidence directory parent: {path}")
     state = _lstat(path)
     if state is None:
-        path.mkdir(mode=0o700)
+        try:
+            path.mkdir(mode=0o700)
+        except FileExistsError:
+            # Another gate invocation may have created this shared directory.
+            pass
         state = path.lstat()
     if stat.S_ISLNK(state.st_mode) or not stat.S_ISDIR(state.st_mode):
         raise GateError(f"evidence path must be a real directory: {path}")
@@ -694,7 +700,11 @@ def _validate_regular(path: Path, parent: Path) -> os.stat_result:
         raise GateError(f"evidence path must be a real regular file: {path}")
     if path.resolve(strict=True).parent != parent.resolve(strict=True):
         raise GateError(f"evidence file escapes its validated parent: {path}")
-    parent_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    parent_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
     parent_descriptor = os.open(parent, parent_flags)
     try:
         descriptor = os.open(
@@ -755,6 +765,69 @@ def _open_existing_private(path: Path, parent: Path, mode: str):
     return os.fdopen(descriptor, "a", encoding="utf-8")
 
 
+def _open_private_lock(path: Path, parent: Path) -> int:
+    if path.parent != parent:
+        raise GateError(f"unsafe evidence lock parent: {path}")
+    _ensure_directory(parent, parent.parent)
+    existing = _lstat(path)
+    if existing is not None:
+        if (
+            stat.S_ISLNK(existing.st_mode)
+            or not stat.S_ISREG(existing.st_mode)
+            or existing.st_nlink != 1
+            or (hasattr(os, "geteuid") and existing.st_uid != os.geteuid())
+        ):
+            raise GateError(f"evidence lock is not a private regular file: {path}")
+        if path.resolve(strict=True).parent != parent.resolve(strict=True):
+            raise GateError(f"evidence lock escapes its validated parent: {path}")
+    parent_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    parent_descriptor = os.open(parent, parent_flags)
+    try:
+        descriptor = os.open(
+            path.name,
+            os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+            dir_fd=parent_descriptor,
+        )
+    finally:
+        os.close(parent_descriptor)
+    try:
+        state = os.fstat(descriptor)
+        if not stat.S_ISREG(state.st_mode) or state.st_nlink != 1:
+            raise GateError(f"evidence lock is not a private regular file: {path}")
+        if hasattr(os, "geteuid") and state.st_uid != os.geteuid():
+            raise GateError(f"evidence lock is not owned by the current user: {path}")
+        os.fchmod(descriptor, 0o600)
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+@contextlib.contextmanager
+def _exclusive_private_lock(path: Path, parent: Path):
+    descriptor = _open_private_lock(path, parent)
+    try:
+        deadline = time.monotonic() + EVIDENCE_LOCK_SECONDS
+        while True:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError as error:
+                if time.monotonic() >= deadline:
+                    raise GateError(
+                        "timed out waiting for evidence completion lock"
+                    ) from error
+                time.sleep(0.01)
+            except InterruptedError:
+                continue
+        yield
+    finally:
+        with contextlib.suppress(OSError):
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+
 def _unlink_existing_private(path: Path, parent: Path) -> None:
     if _lstat(path) is None:
         return
@@ -780,6 +853,7 @@ class Evidence:
         self.repo = repo.resolve(strict=True)
         self.root = self.repo / ".quality-gate"
         self.runs = self.root / "runs"
+        self.completion_lock = self.root / "completion.lock"
         old_umask = os.umask(0o077)
         try:
             _ensure_directory(self.root, self.repo)
@@ -800,7 +874,8 @@ class Evidence:
             self.summary_path = self.run_dir / "summary.txt"
             with _open_new_private(self.log_path, self.run_dir):
                 pass
-            self._update_latest()
+            with _exclusive_private_lock(self.completion_lock, self.root):
+                self._update_latest()
         finally:
             os.umask(old_umask)
 
@@ -824,13 +899,15 @@ class Evidence:
         return encoded
 
     def complete(self, summary: str) -> None:
-        self.prune(reserve=1)
-        encoded = self._encode_summary(summary)
-        with _open_new_private(self.summary_path, self.run_dir) as summary_file:
-            summary_file.buffer.write(encoded)
-        marker = self.run_dir / "completed"
-        with _open_new_private(marker, self.run_dir) as completed_file:
-            completed_file.write("complete\n")
+        with _exclusive_private_lock(self.completion_lock, self.root):
+            self.prune(reserve=1)
+            encoded = self._encode_summary(summary)
+            with _open_new_private(self.summary_path, self.run_dir) as summary_file:
+                summary_file.buffer.write(encoded)
+            marker = self.run_dir / "completed"
+            with _open_new_private(marker, self.run_dir) as completed_file:
+                completed_file.write("complete\n")
+            self._update_latest()
 
     def replace_summary(self, summary: str) -> None:
         _validate_regular(self.summary_path, self.run_dir)
@@ -1563,6 +1640,21 @@ def internal_check(arguments: list[str]) -> int:
 
 
 def gate(arguments: list[str]) -> int:
+    watched_signals = (signal.SIGINT, signal.SIGTERM)
+    signal_state = GateSignalState()
+    signal_state.interruptible = False
+    previous_signal_mask = signal.pthread_sigmask(
+        signal.SIG_BLOCK, set(watched_signals)
+    )
+    previous_handlers = {signum: signal.getsignal(signum) for signum in watched_signals}
+
+    def interrupt(signum: int, _frame: object) -> None:
+        signal_state.handle(signum)
+
+    for signum in watched_signals:
+        signal.signal(signum, interrupt)
+    consume_pending_watched_signals(signal_state, watched_signals)
+
     parser = argparse.ArgumentParser(
         prog="quality-gate.sh",
         description="Run the repository quality gate (auto or forced normal).",
@@ -1578,6 +1670,12 @@ def gate(arguments: list[str]) -> int:
         evidence = Evidence(source_repo)
     except (GateError, OSError) as error:
         print(f"quality gate cannot create safe evidence: {error}", file=sys.stderr)
+        consume_pending_watched_signals(signal_state, watched_signals)
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous_signal_mask)
+        if signal_state.first_signum is not None:
+            return 128 + signal_state.first_signum
         return 1
     base_display = options.base or "UNRESOLVED(missing)"
     head_display = options.head
@@ -1587,17 +1685,12 @@ def gate(arguments: list[str]) -> int:
     checkout: Path | None = None
     failure: str | None = None
     interrupted_signum: int | None = None
-    watched_signals = (signal.SIGINT, signal.SIGTERM)
-    signal_state = GateSignalState()
-    previous_signal_mask = signal.pthread_sigmask(signal.SIG_UNBLOCK, set(watched_signals))
-    previous_handlers = {signum: signal.getsignal(signum) for signum in watched_signals}
-
-    def interrupt(signum: int, _frame: object) -> None:
-        signal_state.handle(signum)
-
-    for signum in watched_signals:
-        signal.signal(signum, interrupt)
     try:
+        consume_pending_watched_signals(signal_state, watched_signals)
+        signal_state.interruptible = True
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous_signal_mask)
+        if signal_state.first_signum is not None:
+            raise GateInterrupted(signal_state.first_signum)
         base = resolve_commit(source_repo, options.base or "", "base")
         head = resolve_commit(source_repo, options.head, "head")
         base_display = base
@@ -1717,7 +1810,14 @@ def gate(arguments: list[str]) -> int:
         failure = str(interrupted)
     except (GateError, OSError) as error:
         failure = str(error)
+    try:
+        signal.pthread_sigmask(signal.SIG_BLOCK, set(watched_signals))
+    except GateInterrupted as interrupted:
+        interrupted_signum = interrupted.signum
+        failure = str(interrupted)
+        signal.pthread_sigmask(signal.SIG_BLOCK, set(watched_signals))
     signal_state.interruptible = False
+    consume_pending_watched_signals(signal_state, watched_signals)
     if failure is None and checkout is not None:
         try:
             ensure_pinned_checkout(checkout, head)
