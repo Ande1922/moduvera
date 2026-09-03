@@ -8,6 +8,7 @@ import re
 
 
 REQUIRED_SKILLS = (
+    "add-business-service",
     "grill-with-docs",
     "to-spec",
     "to-tickets",
@@ -87,6 +88,44 @@ class ImplementationRoute:
     stop_after: str
 
 
+@dataclass(frozen=True)
+class BusinessServiceDescription:
+    name: str
+    capability: str
+    owner: str
+    local_direct_consumers: tuple[str, ...] = ()
+    remote_direct_consumers: tuple[str, ...] = ()
+    http_entry: bool = False
+    asynchronous_commands: tuple[str, ...] = ()
+    published_events: tuple[str, ...] = ()
+    internal_use_cases: tuple[str, ...] = ()
+    persistence: bool = False
+    standalone_app: bool = False
+    multi_service_apps: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class PlannedArtifact:
+    target: str
+    required_by: str
+
+
+@dataclass(frozen=True)
+class BusinessServiceTicket:
+    key: str
+    outcome: str
+    blocked_by: tuple[str, ...]
+    artifacts: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class BusinessServicePlan:
+    spec_sections: tuple[str, ...]
+    tickets: tuple[BusinessServiceTicket, ...]
+    artifacts: tuple[PlannedArtifact, ...]
+    implementation_shape: ImplementationShape
+
+
 def implementation_route(shape: ImplementationShape) -> ImplementationRoute:
     if shape.ticket_count < 1 or shape.dependency_edges < 0:
         raise ValueError("implementation shape requires tickets and non-negative edges")
@@ -98,6 +137,181 @@ def implementation_route(shape: ImplementationShape) -> ImplementationRoute:
     if frontier:
         return ImplementationRoute("implement-frontier", "frontier-evidence")
     return ImplementationRoute("implement", "implementation-evidence")
+
+
+def business_service_plan(description: BusinessServiceDescription) -> BusinessServicePlan:
+    for field_name in ("name", "capability", "owner"):
+        if not getattr(description, field_name).strip():
+            raise ValueError(f"business service {field_name} is required")
+    if re.fullmatch(r"[a-z][a-z0-9-]*", description.name) is None:
+        raise ValueError("business service name must be a lowercase hyphenated identifier")
+    if not any((
+        description.local_direct_consumers,
+        description.remote_direct_consumers,
+        description.http_entry,
+        description.asynchronous_commands,
+        description.internal_use_cases,
+    )):
+        raise ValueError(
+            "business service requires at least one consuming entry or internal use case"
+        )
+
+    name = description.name
+    artifacts: list[PlannedArtifact] = []
+    ticket_artifacts: list[tuple[str, str]] = []
+
+    def require(ticket: str, target: str, reason: str) -> None:
+        artifacts.append(PlannedArtifact(target, reason))
+        ticket_artifacts.append((ticket, target))
+
+    has_messages = bool(description.asynchronous_commands or description.published_events)
+    direct_consumers = (
+        description.local_direct_consumers + description.remote_direct_consumers
+    )
+    has_provider_contracts = bool(direct_consumers or has_messages)
+    if has_provider_contracts:
+        contract_reasons: list[str] = []
+        if direct_consumers:
+            contract_reasons.append(
+                "supported direct consumers: " + ", ".join(direct_consumers)
+            )
+        if has_messages:
+            contract_reasons.append("provider-owned asynchronous message contracts")
+        require(
+            "contracts",
+            f"services/{name}/{name}-api",
+            "; ".join(contract_reasons),
+        )
+    if direct_consumers:
+        require(
+            "contracts",
+            f"{name} synchronous Service API",
+            "supported direct local or remote call for "
+            + ", ".join(direct_consumers),
+        )
+    if description.remote_direct_consumers:
+        require(
+            "adapters",
+            f"{name} remote client outbound adapter",
+            "declared remote direct consumers: "
+            + ", ".join(description.remote_direct_consumers),
+        )
+
+    require(
+        "use-cases",
+        f"services/{name}/{name}-service",
+        f"{description.owner} owns the {description.capability} Application use case "
+        "and any required Domain behavior",
+    )
+
+    if description.http_entry:
+        require(
+            "adapters",
+            f"{name} HTTP inbound adapter",
+            "declared HTTP entry invokes the provider-owned Application use case",
+        )
+    if description.asynchronous_commands:
+        require(
+            "adapters",
+            f"{name} message inbound adapter",
+            "declared asynchronous commands: "
+            + ", ".join(description.asynchronous_commands),
+        )
+    if description.published_events:
+        require(
+            "adapters",
+            f"{name} message outbound adapter",
+            "declared published integration events: "
+            + ", ".join(description.published_events),
+        )
+    if description.persistence:
+        require(
+            "persistence",
+            f"{name} persistence outbound adapter",
+            "declared durable business state",
+        )
+        require(
+            "persistence",
+            f"{name} service-owned migration",
+            "persistence requires service-owned schema history and migration definition",
+        )
+    if description.standalone_app:
+        require(
+            "assembly",
+            f"{name}-app assembly",
+            "declared standalone runnable application",
+        )
+    for app in description.multi_service_apps:
+        require(
+            "assembly",
+            f"{app} assembly",
+            f"declared multi-service application consumer of {name}",
+        )
+    if has_messages:
+        require(
+            "verification",
+            "repository message-contract verification",
+            "message identity, asynchronous-only, and inbound contract evidence",
+        )
+    require(
+        "verification",
+        "repository architecture rules",
+        "new API and service boundaries require repository architecture coverage",
+    )
+    if any((
+        description.http_entry,
+        direct_consumers,
+        has_messages,
+        description.standalone_app,
+        description.multi_service_apps,
+    )):
+        require(
+            "verification",
+            "reference-product acceptance entry",
+            "declared public, cross-service, message, or App Assembly support",
+        )
+
+    ordered_keys = (
+        "contracts",
+        "use-cases",
+        "persistence",
+        "adapters",
+        "assembly",
+        "verification",
+    )
+    outcomes = {
+        "contracts": "Publish only the provider contracts required by named consumers",
+        "use-cases": "Implement the owned Application and Domain behavior",
+        "persistence": "Persist business state through service-owned migrations",
+        "adapters": "Connect declared inbound and outbound protocols to the use cases",
+        "assembly": "Select the service in each declared App Assembly",
+        "verification": "Qualify the declared support through architecture and acceptance evidence",
+    }
+    tickets: list[BusinessServiceTicket] = []
+    for key in ordered_keys:
+        targets = tuple(target for owner, target in ticket_artifacts if owner == key)
+        if not targets:
+            continue
+        blockers = (tickets[-1].key,) if tickets else ()
+        tickets.append(BusinessServiceTicket(key, outcomes[key], blockers, targets))
+
+    dependency_edges = sum(len(ticket.blocked_by) for ticket in tickets)
+    return BusinessServicePlan(
+        spec_sections=(
+            "capability and ownership",
+            "use cases and contracts",
+            "application and domain",
+            "adapters and persistence",
+            "app assembly",
+            "verification and exclusions",
+        ),
+        tickets=tuple(tickets),
+        artifacts=tuple(artifacts),
+        implementation_shape=ImplementationShape(
+            ticket_count=len(tickets),
+            dependency_edges=dependency_edges,
+        ),
+    )
 
 
 def final_acceptance_status(evidence: AcceptanceInput) -> str:
@@ -168,6 +382,40 @@ def representative_forward_failures(root: Path) -> list[str]:
         replace(accepted, standards_review_complete=False)
     ) != "FAIL":
         failures.append("forward run did not stop for an incomplete review axis")
+
+    service_plan = business_service_plan(BusinessServiceDescription(
+        name="returns",
+        capability="Decide and track merchandise returns",
+        owner="Returns",
+        local_direct_consumers=("Fulfillment",),
+        remote_direct_consumers=("Customer Support",),
+        http_entry=True,
+        asynchronous_commands=("InspectReturn",),
+        published_events=("ReturnAccepted",),
+        persistence=True,
+        standalone_app=True,
+        multi_service_apps=("fulfillment-app",),
+    ))
+    service_targets = {artifact.target for artifact in service_plan.artifacts}
+    expected_service_targets = {
+        "services/returns/returns-api",
+        "services/returns/returns-service",
+        "returns HTTP inbound adapter",
+        "returns message inbound adapter",
+        "returns message outbound adapter",
+        "returns remote client outbound adapter",
+        "returns persistence outbound adapter",
+        "returns service-owned migration",
+        "returns-app assembly",
+        "fulfillment-app assembly",
+        "repository message-contract verification",
+        "repository architecture rules",
+        "reference-product acceptance entry",
+    }
+    if not expected_service_targets.issubset(service_targets):
+        failures.append("representative business-service plan is incomplete")
+    if any(not artifact.required_by.strip() for artifact in service_plan.artifacts):
+        failures.append("business-service plan contains an unexplained artifact")
     return failures
 
 
@@ -203,6 +451,7 @@ def _frontmatter(path: Path) -> dict[str, str]:
 def _repository_markdown(root: Path) -> list[Path]:
     files = [root / "AGENTS.md", root / "docs/agents/delivery-workflow.md"]
     files.append(root / "docs/agents/delivery-standards.md")
+    files.append(root / "docs/agents/new-business-service.md")
     files.extend(sorted((root / ".agents/skills").glob("**/*.md")))
     return files
 
@@ -229,8 +478,9 @@ def validate_repository(root: Path) -> list[str]:
     skills_root = root / ".agents/skills"
     workflow = root / "docs/agents/delivery-workflow.md"
     standards = root / "docs/agents/delivery-standards.md"
+    service_recipe = root / "docs/agents/new-business-service.md"
 
-    for required in (root / "AGENTS.md", workflow, standards):
+    for required in (root / "AGENTS.md", workflow, standards, service_recipe):
         if not required.is_file():
             failures.append(f"missing repository delivery entry: {required}")
     if failures:
@@ -239,6 +489,14 @@ def validate_repository(root: Path) -> list[str]:
     agents_text = (root / "AGENTS.md").read_text(encoding="utf-8")
     if "docs/agents/delivery-workflow.md" not in agents_text:
         failures.append("AGENTS.md does not link the repository delivery workflow")
+    if "docs/agents/new-business-service.md" not in agents_text:
+        failures.append("AGENTS.md does not link the new Business Service recipe")
+    if ".agents/skills/add-business-service/SKILL.md" not in agents_text:
+        failures.append("AGENTS.md does not link the add-business-service Skill")
+
+    workflow_text = workflow.read_text(encoding="utf-8")
+    if "add-business-service" not in workflow_text:
+        failures.append("delivery workflow does not link the add-business-service entry")
 
     actual_skills = (
         {path.name for path in skills_root.iterdir() if path.is_dir()}

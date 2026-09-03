@@ -16,10 +16,12 @@ sys.path.insert(0, str(TOOLS))
 
 from delivery_contract import (  # noqa: E402
     AcceptanceInput,
+    BusinessServiceDescription,
     DECLARED_DEPENDENCY_ROOTS,
     EXPECTED_ROUTES,
     ImplementationRoute,
     ImplementationShape,
+    business_service_plan,
     final_acceptance_status,
     implementation_route,
     parse_routes,
@@ -142,6 +144,111 @@ class DeliveryForwardTest(unittest.TestCase):
             )).skill,
         )
 
+    def test_business_service_forward_plan_traces_every_artifact_to_a_need(self) -> None:
+        description = BusinessServiceDescription(
+            name="returns",
+            capability="Decide and track merchandise returns",
+            owner="Returns",
+            local_direct_consumers=("Fulfillment",),
+            remote_direct_consumers=("Customer Support",),
+            http_entry=True,
+            asynchronous_commands=("InspectReturn",),
+            published_events=("ReturnAccepted",),
+            persistence=True,
+            standalone_app=True,
+            multi_service_apps=("fulfillment-app",),
+        )
+
+        plan = business_service_plan(description)
+
+        self.assertEqual(
+            (
+                "capability and ownership",
+                "use cases and contracts",
+                "application and domain",
+                "adapters and persistence",
+                "app assembly",
+                "verification and exclusions",
+            ),
+            plan.spec_sections,
+        )
+        self.assertGreater(len(plan.tickets), 1)
+        self.assertTrue(any(ticket.blocked_by for ticket in plan.tickets[1:]))
+        self.assertTrue(all(ticket.outcome.strip() for ticket in plan.tickets))
+        self.assertEqual(
+            "implement-frontier",
+            implementation_route(plan.implementation_shape).skill,
+        )
+        targets = {artifact.target for artifact in plan.artifacts}
+        self.assertIn("services/returns/returns-api", targets)
+        self.assertIn("services/returns/returns-service", targets)
+        self.assertIn("returns HTTP inbound adapter", targets)
+        self.assertIn("returns message inbound adapter", targets)
+        self.assertIn("returns message outbound adapter", targets)
+        self.assertIn("returns remote client outbound adapter", targets)
+        self.assertIn("returns persistence outbound adapter", targets)
+        self.assertIn("returns service-owned migration", targets)
+        self.assertIn("returns-app assembly", targets)
+        self.assertIn("fulfillment-app assembly", targets)
+        self.assertIn("repository message-contract verification", targets)
+        self.assertIn("repository architecture rules", targets)
+        self.assertIn("reference-product acceptance entry", targets)
+        self.assertTrue(all(artifact.required_by.strip() for artifact in plan.artifacts))
+        self.assertCountEqual(
+            [artifact.target for artifact in plan.artifacts],
+            [target for ticket in plan.tickets for target in ticket.artifacts],
+        )
+        self.assertFalse(any(
+            reference in " ".join(targets).lower()
+            for reference in ("catalog", "inventory", "order", "notes")
+        ))
+
+    def test_async_only_plan_has_contracts_without_a_synchronous_service_api(self) -> None:
+        plan = business_service_plan(BusinessServiceDescription(
+            name="reconciliation",
+            capability="Reconcile completed settlements",
+            owner="Finance Operations",
+            asynchronous_commands=("ReconcileSettlement",),
+        ))
+
+        targets = {artifact.target for artifact in plan.artifacts}
+        self.assertIn("services/reconciliation/reconciliation-api", targets)
+        self.assertNotIn("reconciliation synchronous Service API", targets)
+        self.assertIn("reconciliation message inbound adapter", targets)
+        self.assertNotIn("reconciliation persistence outbound adapter", targets)
+        self.assertNotIn("reconciliation service-owned migration", targets)
+
+    def test_internal_only_plan_does_not_propose_unconsumed_modules(self) -> None:
+        plan = business_service_plan(BusinessServiceDescription(
+            name="eligibility",
+            capability="Evaluate an internal eligibility rule",
+            owner="Eligibility",
+            internal_use_cases=("EvaluateEligibility",),
+        ))
+
+        targets = {artifact.target for artifact in plan.artifacts}
+        self.assertNotIn("services/eligibility/eligibility-api", targets)
+        self.assertNotIn("eligibility synchronous Service API", targets)
+        self.assertNotIn("eligibility persistence outbound adapter", targets)
+        self.assertNotIn("eligibility service-owned migration", targets)
+        self.assertFalse(any(target.endswith("assembly") for target in targets))
+        self.assertIn("services/eligibility/eligibility-service", targets)
+
+    def test_business_service_plan_rejects_an_unsafe_or_unconsumed_shape(self) -> None:
+        with self.assertRaisesRegex(ValueError, "lowercase hyphenated identifier"):
+            business_service_plan(BusinessServiceDescription(
+                name="../../returns",
+                capability="Decide returns",
+                owner="Returns",
+                internal_use_cases=("DecideReturn",),
+            ))
+        with self.assertRaisesRegex(ValueError, "consuming entry or internal use case"):
+            business_service_plan(BusinessServiceDescription(
+                name="returns",
+                capability="Decide returns",
+                owner="Returns",
+            ))
+
     def test_failed_or_stale_evidence_cannot_report_pass(self) -> None:
         passing = self.passing_acceptance()
         self.assertEqual("PASS", final_acceptance_status(passing))
@@ -195,15 +302,15 @@ class DeliveryForwardTest(unittest.TestCase):
     def test_future_project_skill_is_allowed_and_structurally_validated(self) -> None:
         temporary, root = self.isolated_checkout()
         self.addCleanup(temporary.cleanup)
-        extra = root / ".agents/skills/add-business-service/SKILL.md"
+        extra = root / ".agents/skills/future-stage/SKILL.md"
         extra.parent.mkdir()
         extra.write_text(
             """---
-name: add-business-service
-description: Route a new business-service request into the repository delivery workflow.
+name: future-stage
+description: Route a future repository delivery stage.
 ---
 
-# Add Business Service
+# Future Stage
 
 Use the repository delivery workflow.
 
@@ -216,11 +323,37 @@ Stop after reporting the selected delivery stage.
         self.assertEqual([], validate_repository(root))
 
         extra.write_text(extra.read_text().replace(
-            "name: add-business-service",
+            "name: future-stage",
             "name: wrong-name",
         ))
         failures = validate_repository(root)
-        self.assertTrue(any("frontmatter name must be add-business-service" in item
+        self.assertTrue(any("frontmatter name must be future-stage" in item
+                            for item in failures))
+
+    def test_business_service_recipe_and_skill_are_required_and_link_checked(self) -> None:
+        temporary, root = self.isolated_checkout()
+        self.addCleanup(temporary.cleanup)
+        recipe = root / "docs/agents/new-business-service.md"
+        recipe.unlink()
+
+        failures = validate_repository(root)
+
+        self.assertTrue(any("missing repository delivery entry" in item
+                            and "new-business-service.md" in item
+                            for item in failures))
+
+        temporary, root = self.isolated_checkout()
+        self.addCleanup(temporary.cleanup)
+        skill = root / ".agents/skills/add-business-service/SKILL.md"
+        skill.write_text(skill.read_text(encoding="utf-8").replace(
+            "../../../docs/agents/new-business-service.md",
+            "../../../docs/agents/missing-business-service-recipe.md",
+        ), encoding="utf-8")
+
+        failures = validate_repository(root)
+
+        self.assertTrue(any("missing link target" in item
+                            and "missing-business-service-recipe.md" in item
                             for item in failures))
 
     def test_cross_platform_personal_skill_paths_fail_closed(self) -> None:
