@@ -47,15 +47,14 @@ final class IdentityController {
         return new TokenResponse(token.token(), "Bearer", token.expiresAt());
     }
 
-    record LoginRequest(
-            @NotBlank String username, @NotBlank String password, @NotBlank String tenantId) {}
+    record LoginRequest(@NotBlank String username, @NotBlank String password, String tenantId) {}
 
     record LoginResponse(String token, Instant expiresAt) {}
 
     record TokenExchangeRequest(@NotBlank String sessionToken, @NotBlank String audience) {}
 
     record ServiceTokenRequest(
-            @NotBlank String tenantId,
+            String tenantId,
             @NotBlank String audience,
             @NotBlank String initiatorType,
             @NotBlank String initiatorId) {}

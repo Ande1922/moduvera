@@ -1,6 +1,7 @@
 package io.github.ande1922.moduvera.messaging.kafka;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.ande1922.moduvera.context.Actor;
 import io.github.ande1922.moduvera.context.ActorType;
@@ -17,6 +18,8 @@ import java.net.URI;
 import java.time.Instant;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.kafka.support.KafkaHeaders;
 import org.springframework.messaging.support.MessageBuilder;
 
@@ -82,7 +85,39 @@ class KafkaMessageMapperTest {
         assertThat(restored.descriptor().actor().permissions()).isEmpty();
     }
 
+    @ParameterizedTest
+    @MethodSource("io.github.ande1922.moduvera.testing.TenantIdContractValues#validTenantIds")
+    void acceptsCanonicalTenantIdsAtTheMessageBoundary(String tenantId) {
+        var mapper = new KafkaMessageMapper();
+        var springMessage = mapper.toSpringMessage(
+                SerializedMessage.json(descriptor(MessageKind.EVENT, tenantId), "{}"));
+
+        SerializedMessage restored = mapper.fromSpringMessage(springMessage);
+
+        assertThat(restored.descriptor().tenantId().value()).isEqualTo(tenantId);
+    }
+
+    @ParameterizedTest
+    @MethodSource("io.github.ande1922.moduvera.testing.TenantIdContractValues#invalidTenantIds")
+    void rejectsInvalidTenantIdsAtTheMessageBoundary(String tenantId) {
+        var mapper = new KafkaMessageMapper();
+        var valid = mapper.toSpringMessage(
+                SerializedMessage.json(descriptor(MessageKind.EVENT), "{}"));
+        String invalidEnvelope = new String(valid.getPayload(), StandardCharsets.UTF_8)
+                .replace("\"tenantid\":\"tenant-a\"", "\"tenantid\":\"" + tenantId + "\"");
+        var message = MessageBuilder.withPayload(invalidEnvelope.getBytes(StandardCharsets.UTF_8))
+                .copyHeaders(valid.getHeaders())
+                .build();
+
+        assertThatThrownBy(() -> mapper.fromSpringMessage(message))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
     private static MessageDescriptor descriptor(MessageKind kind) {
+        return descriptor(kind, "tenant-a");
+    }
+
+    private static MessageDescriptor descriptor(MessageKind kind, String tenantId) {
         return new MessageDescriptor(
                 new MessageId("msg-1"),
                 kind,
@@ -90,7 +125,7 @@ class KafkaMessageMapperTest {
                 URI.create("urn:service:order"),
                 new Destination("inventory.commands"),
                 Instant.parse("2026-08-30T00:00:00Z"),
-                new TenantId("tenant-a"),
+                new TenantId(tenantId),
                 new Actor(ActorType.SERVICE, "order-service", Set.of("inventory:reserve")),
                 "corr-1",
                 new MessageId("request-1"),

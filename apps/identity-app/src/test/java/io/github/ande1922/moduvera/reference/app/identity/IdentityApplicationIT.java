@@ -10,6 +10,7 @@ import io.github.ande1922.moduvera.migration.DatabaseComponent;
 import io.github.ande1922.moduvera.migration.MigrationDefinition;
 import io.github.ande1922.moduvera.migration.autoconfigure.ModuveraDatabaseMigrationMode;
 import io.github.ande1922.moduvera.migration.autoconfigure.ModuveraDatabaseMigrationProperties;
+import io.github.ande1922.moduvera.security.jwt.JwtExecutionContextFactory;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -21,6 +22,8 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
@@ -149,6 +152,52 @@ class IdentityApplicationIT {
         assertThat(claims.getExpiresAt()).isBefore(Instant.now().plusSeconds(6 * 60));
     }
 
+    @ParameterizedTest
+    @MethodSource("io.github.ande1922.moduvera.testing.TenantIdContractValues#validTenantIds")
+    void issuesUserTokensWithCanonicalTenantIdsThatTheResourceServerAccepts(String tenantId)
+            throws Exception {
+        membership("alice", tenantId, List.of("order:read"));
+
+        String session = login("alice", "alice-password", tenantId);
+        HttpResponse<String> response =
+                exchange(session, "order-service", basic("gateway", "gateway-secret"));
+
+        assertThat(response.statusCode()).isEqualTo(200);
+        Jwt claims = validatingDecoder("order-service")
+                .decode(JSON.readTree(response.body()).get("accessToken").asString());
+        assertThat(claims.getClaimAsString("tenant_id")).isEqualTo(tenantId);
+        assertThat(new JwtExecutionContextFactory()
+                        .createPrincipal(claims)
+                        .assertedTenant())
+                .hasValueSatisfying(tenant -> assertThat(tenant.value()).isEqualTo(tenantId));
+    }
+
+    @ParameterizedTest
+    @MethodSource("io.github.ande1922.moduvera.testing.TenantIdContractValues#invalidTenantIds")
+    void rejectsInvalidLoginTenantIdsWithoutRevealingIdentityExistence(String tenantId)
+            throws Exception {
+        HttpResponse<String> response = post(
+                "/v1/session/login",
+                null,
+                """
+                {"username":"alice","password":"alice-password","tenantId":"%s"}
+                """.formatted(tenantId));
+
+        assertProblem(response, 401, "identity.invalid-credentials");
+    }
+
+    @Test
+    void rejectsMissingLoginTenantWithoutRevealingIdentityExistence() throws Exception {
+        HttpResponse<String> response = post(
+                "/v1/session/login",
+                null,
+                """
+                {"username":"alice","password":"alice-password"}
+                """);
+
+        assertProblem(response, 401, "identity.invalid-credentials");
+    }
+
     @Test
     void rejectsCredentialTenantGatewayAudienceAndRevokedSessionFailures() throws Exception {
         assertThat(post(
@@ -229,6 +278,50 @@ class IdentityApplicationIT {
                                 """)
                         .statusCode())
                 .isEqualTo(403);
+    }
+
+    @ParameterizedTest
+    @MethodSource("io.github.ande1922.moduvera.testing.TenantIdContractValues#validTenantIds")
+    void validatesCanonicalTenantIdsWithoutAddingThemToServiceTokens(String tenantId)
+            throws Exception {
+        HttpResponse<String> response = post(
+                "/internal/api/v1/service-token",
+                basic("order-service", "order-secret"),
+                """
+                {"tenantId":"%s","audience":"catalog-service",
+                 "initiatorType":"USER","initiatorId":"alice"}
+                """.formatted(tenantId));
+
+        assertThat(response.statusCode()).isEqualTo(200);
+        Jwt claims = validatingDecoder("catalog-service")
+                .decode(JSON.readTree(response.body()).get("accessToken").asString());
+        assertThat(claims.getClaimAsString("tenant_id")).isNull();
+    }
+
+    @ParameterizedTest
+    @MethodSource("io.github.ande1922.moduvera.testing.TenantIdContractValues#invalidTenantIds")
+    void rejectsInvalidServiceTenantIdsAsInvalidServiceContext(String tenantId) throws Exception {
+        HttpResponse<String> response = post(
+                "/internal/api/v1/service-token",
+                basic("order-service", "order-secret"),
+                """
+                {"tenantId":"%s","audience":"catalog-service",
+                 "initiatorType":"USER","initiatorId":"alice"}
+                """.formatted(tenantId));
+
+        assertProblem(response, 400, "identity.invalid-service-context");
+    }
+
+    @Test
+    void rejectsMissingServiceTenantAsInvalidServiceContext() throws Exception {
+        HttpResponse<String> response = post(
+                "/internal/api/v1/service-token",
+                basic("order-service", "order-secret"),
+                """
+                {"audience":"catalog-service","initiatorType":"USER","initiatorId":"alice"}
+                """);
+
+        assertProblem(response, 400, "identity.invalid-service-context");
     }
 
     @Test
@@ -324,6 +417,12 @@ class IdentityApplicationIT {
     private static String basic(String username, String password) {
         return "Basic " + Base64.getEncoder()
                 .encodeToString((username + ":" + password).getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static void assertProblem(
+            HttpResponse<String> response, int expectedStatus, String expectedCode) throws Exception {
+        assertThat(response.statusCode()).isEqualTo(expectedStatus);
+        assertThat(JSON.readTree(response.body()).get("code").asString()).isEqualTo(expectedCode);
     }
 
     private void user(String userId, String username, String password) {

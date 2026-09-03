@@ -1,5 +1,6 @@
 package io.github.ande1922.moduvera.reference.app.identity;
 
+import io.github.ande1922.moduvera.context.TenantId;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -7,6 +8,7 @@ import java.security.SecureRandom;
 import java.time.Clock;
 import java.util.Base64;
 import java.util.List;
+import java.util.function.Supplier;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.oauth2.jwt.JwtClaimsSet;
@@ -37,16 +39,17 @@ public final class IdentityService {
     }
 
     public BrowserSession login(String username, String password, String tenantId) {
+        String canonicalTenantId = canonicalTenant(tenantId, IdentityService::invalidCredentials).value();
         var user = identities.userByUsername(username).orElseThrow(IdentityService::invalidCredentials);
         if (!passwords.matches(password, user.passwordHash())
-                || !identities.isMember(user.userId(), tenantId)) {
+                || !identities.isMember(user.userId(), canonicalTenantId)) {
             throw invalidCredentials();
         }
         byte[] tokenBytes = new byte[32];
         RANDOM.nextBytes(tokenBytes);
         String token = Base64.getUrlEncoder().withoutPadding().encodeToString(tokenBytes);
         var expiresAt = clock.instant().plus(properties.getSessionTtl());
-        identities.saveSession(hash(token), user.userId(), tenantId, expiresAt);
+        identities.saveSession(hash(token), user.userId(), canonicalTenantId, expiresAt);
         return new BrowserSession(token, expiresAt);
     }
 
@@ -55,11 +58,10 @@ public final class IdentityService {
         authenticateService(authorization);
         requireAudience(audience);
         var session = identities.activeSession(hash(browserToken), clock.instant())
-                .orElseThrow(() -> new IdentityException(
-                        HttpStatus.UNAUTHORIZED,
-                        "identity.invalid-session",
-                        "Browser session is invalid or expired"));
-        List<String> permissions = identities.permissions(session.userId(), session.tenantId());
+                .orElseThrow(IdentityService::invalidSession);
+        String canonicalTenantId =
+                canonicalTenant(session.tenantId(), IdentityService::invalidSession).value();
+        List<String> permissions = identities.permissions(session.userId(), canonicalTenantId);
         var issuedAt = clock.instant();
         var expiresAt = issuedAt.plus(properties.getJwtTtl());
         JwtClaimsSet claims = JwtClaimsSet.builder()
@@ -69,7 +71,7 @@ public final class IdentityService {
                 .issuedAt(issuedAt)
                 .expiresAt(expiresAt)
                 .claim("actor_type", "USER")
-                .claim("tenant_id", session.tenantId())
+                .claim("tenant_id", canonicalTenantId)
                 .claim("permissions", permissions)
                 .claim("initiator_type", "USER")
                 .claim("initiator_id", session.userId())
@@ -86,15 +88,11 @@ public final class IdentityService {
             String initiatorId) {
         var service = authenticateService(authorization);
         requireAudience(audience);
-        if (tenantId == null
-                || !tenantId.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
-                || initiatorId == null
+        canonicalTenant(tenantId, IdentityService::invalidServiceContext);
+        if (initiatorId == null
                 || initiatorId.isBlank()
                 || !("USER".equals(initiatorType) || "SERVICE".equals(initiatorType))) {
-            throw new IdentityException(
-                    HttpStatus.BAD_REQUEST,
-                    "identity.invalid-service-context",
-                    "Service token context is invalid");
+            throw invalidServiceContext();
         }
         List<String> permissions = identities.servicePermissions(service.serviceId(), audience);
         if (permissions.isEmpty()) {
@@ -172,11 +170,34 @@ public final class IdentityService {
                 "Credentials or tenant membership are invalid");
     }
 
+    private static IdentityException invalidSession() {
+        return new IdentityException(
+                HttpStatus.UNAUTHORIZED,
+                "identity.invalid-session",
+                "Browser session is invalid or expired");
+    }
+
     private static IdentityException invalidService() {
         return new IdentityException(
                 HttpStatus.UNAUTHORIZED,
                 "identity.invalid-service",
                 "Service authentication failed");
+    }
+
+    private static IdentityException invalidServiceContext() {
+        return new IdentityException(
+                HttpStatus.BAD_REQUEST,
+                "identity.invalid-service-context",
+                "Service token context is invalid");
+    }
+
+    private static TenantId canonicalTenant(
+            String value, Supplier<IdentityException> invalidTenant) {
+        try {
+            return new TenantId(value);
+        } catch (IllegalArgumentException | NullPointerException invalid) {
+            throw invalidTenant.get();
+        }
     }
 
     public record BrowserSession(String token, java.time.Instant expiresAt) {}
