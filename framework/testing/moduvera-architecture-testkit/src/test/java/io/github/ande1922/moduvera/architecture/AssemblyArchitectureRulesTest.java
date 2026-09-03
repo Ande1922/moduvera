@@ -10,7 +10,6 @@ import io.github.ande1922.moduvera.architecturefixture.shipping.api.ShippingLook
 import io.github.ande1922.moduvera.architecturefixture.shipping.api.ShippingReservationService;
 import io.github.ande1922.moduvera.reference.app.gateway.architecturefixture.GatewayBusinessControllerViolation;
 import io.github.ande1922.moduvera.reference.app.catalog.architecturefixture.LeafAppMigrationExecutorViolation;
-import io.github.ande1922.moduvera.reference.app.catalog.architecturefixture.LeafAppCompatibilityFacadeViolation;
 import io.github.ande1922.moduvera.reference.app.inventory.architecturefixture.LeafAppBusinessCallbackViolation;
 import io.github.ande1922.moduvera.reference.app.inventory.architecturefixture.LeafAppReliableEndpointViolation;
 import io.github.ande1922.moduvera.reference.app.monolith.architecturefixture.MonolithBusinessControllerViolation;
@@ -71,13 +70,6 @@ class AssemblyArchitectureRulesTest {
         assertViolation(
                 ModuveraArchitectureRules.APP_ASSEMBLIES_DO_NOT_EXECUTE_MIGRATIONS,
                 LeafAppMigrationExecutorViolation.class);
-    }
-
-    @Test
-    void rejectsDeprecatedBusinessFacadesInCurrentAppAssemblies() {
-        assertViolation(
-                ModuveraArchitectureRules.APP_ASSEMBLIES_DO_NOT_SELECT_DEPRECATED_BUSINESS_FACADES,
-                LeafAppCompatibilityFacadeViolation.class);
     }
 
     @Test

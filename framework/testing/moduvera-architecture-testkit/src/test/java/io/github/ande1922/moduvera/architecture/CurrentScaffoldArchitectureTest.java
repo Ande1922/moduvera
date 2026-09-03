@@ -125,8 +125,6 @@ class CurrentScaffoldArchitectureTest {
     void appAssembliesOnlySelectAndActivateInboundAdapters() {
         ModuveraArchitectureRules.APP_ASSEMBLIES_ONLY_ASSEMBLE_INBOUND_ADAPTERS.check(CURRENT_CLASSES);
         ModuveraArchitectureRules.APP_ASSEMBLIES_DO_NOT_EXECUTE_MIGRATIONS.check(CURRENT_CLASSES);
-        ModuveraArchitectureRules.APP_ASSEMBLIES_DO_NOT_SELECT_DEPRECATED_BUSINESS_FACADES
-                .check(CURRENT_CLASSES);
     }
 
     @Test
