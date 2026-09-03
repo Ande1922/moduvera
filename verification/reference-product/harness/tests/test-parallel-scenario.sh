@@ -191,7 +191,11 @@ if mode == "early-descendant":
     descendant = os.fork()
     if descendant == 0:
         signal.signal(signal.SIGINT, signal.SIG_IGN)
-        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        def record_term(_received, _frame):
+            (state / "validator.early-descendant-term-seen").write_text(
+                "TERM", encoding="ascii"
+            )
+        signal.signal(signal.SIGTERM, record_term)
         while True:
             time.sleep(1)
     (state / "validator.early-descendant-pid").write_text(
@@ -278,6 +282,48 @@ for _ in {1..40}; do kill -0 "$VALIDATOR_EARLY_PID" 2>/dev/null || break; sleep 
 if kill -0 "$VALIDATOR_EARLY_PID" 2>/dev/null; then
   fail "successful validator descendant $VALIDATOR_EARLY_PID survived process-group drain"
 fi
+
+run_validator_drain_signal_case() {
+  local name="$1" signal_name="$2" signal_number="$3" expected_status="$4"
+  local case_dir="$TEST_DIR/$name" status descendant_pid
+  mkdir "$case_dir" "$case_dir/state"
+  STUB_STATE_DIR="$case_dir/state" STUB_RUNNER_MODE=success \
+    STUB_VALIDATOR_MODE=early-descendant \
+    REAL_VALIDATOR="$HARNESS_DIR/validate-parallel-scenario.py" \
+    REFERENCE_PARALLEL_TERM_TIMEOUT_SECONDS=2 \
+    REFERENCE_PARALLEL_EVIDENCE_DIR="$case_dir/evidence" \
+    python3 "$HARNESS_DIR/parallel_supervisor.py" \
+      --runner "$STUB_RUNNER" --validator "$STUB_VALIDATOR" \
+      20 21 >"$case_dir/out" 2>"$case_dir/err" &
+  SUPERVISOR_PID=$!
+  for _ in {1..200}; do
+    [[ -f "$case_dir/state/validator.early-descendant-term-seen" ]] && break
+    sleep 0.01
+  done
+  [[ -f "$case_dir/state/validator.early-descendant-term-seen" ]] \
+    || fail "$signal_name supervisor test did not enter validator group drain"
+  kill -s "$signal_name" "$SUPERVISOR_PID"
+  set +e
+  wait "$SUPERVISOR_PID"
+  status=$?
+  set -e
+  SUPERVISOR_PID=""
+  [[ $status -eq $expected_status ]] \
+    || fail "$signal_name during validator drain returned $status instead of $expected_status"
+  grep -F "interrupted by signal $signal_number" "$case_dir/err" >/dev/null \
+    || fail "$signal_name during validator drain was not diagnosed"
+  if grep -F 'Parallel reference product verification: PASS' "$case_dir/out" >/dev/null; then
+    fail "$signal_name during validator drain incorrectly reported PASS"
+  fi
+  descendant_pid="$(<"$case_dir/state/validator.early-descendant-pid")"
+  for _ in {1..40}; do kill -0 "$descendant_pid" 2>/dev/null || break; sleep 0.05; done
+  if kill -0 "$descendant_pid" 2>/dev/null; then
+    fail "$signal_name validator-drain descendant $descendant_pid survived"
+  fi
+}
+
+run_validator_drain_signal_case validator-drain-term TERM 15 143
+run_validator_drain_signal_case validator-drain-int INT 2 130
 
 STUB_VALIDATOR_MODE=fail-descendant \
   REAL_VALIDATOR="$HARNESS_DIR/validate-parallel-scenario.py" \

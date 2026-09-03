@@ -87,7 +87,12 @@ def main(arguments: list[str]) -> int:
             return 124
         time.sleep(POLL_SECONDS)
     return_code = process.returncode
-    if process_group_exists(process.pid) and not stop_process_group(process):
+    group_drained = True
+    if process_group_exists(process.pid):
+        group_drained = stop_process_group(process)
+    if interrupted_by is not None:
+        return 128 + interrupted_by
+    if not group_drained:
         print(
             f"Command leader exited but process group {process.pid} could not be drained",
             file=sys.stderr,

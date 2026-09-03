@@ -4,7 +4,15 @@ set -euo pipefail
 HARNESS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/moduvera-cleanup-test.XXXXXX")"
 REAL_PYTHON="$(command -v python3)"
-trap 'rm -rf "$TEST_DIR"' EXIT
+BOUNDED_PID=""
+cleanup_test_directory() {
+  if [[ -n "$BOUNDED_PID" ]] && kill -0 "$BOUNDED_PID" 2>/dev/null; then
+    kill -KILL "$BOUNDED_PID" 2>/dev/null || true
+    wait "$BOUNDED_PID" 2>/dev/null || true
+  fi
+  rm -rf "$TEST_DIR"
+}
+trap cleanup_test_directory EXIT
 
 fail() {
   echo "cleanup test failed: $*" >&2
@@ -211,7 +219,13 @@ import time
 descendant = os.fork()
 if descendant == 0:
     signal.signal(signal.SIGINT, signal.SIG_IGN)
-    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    marker = os.environ.get("EARLY_DESCENDANT_TERM_MARKER")
+    if marker:
+        def record_term(_received, _frame):
+            pathlib.Path(marker).write_text("TERM", encoding="ascii")
+        signal.signal(signal.SIGTERM, record_term)
+    else:
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
     while True:
         time.sleep(1)
 pathlib.Path(os.environ["EARLY_DESCENDANT_PID_FILE"]).write_text(
@@ -231,6 +245,39 @@ done
 if kill -0 "$EARLY_DESCENDANT_PID" 2>/dev/null; then
   fail "normal-exit command descendant survived bounded process-group drain"
 fi
+
+run_bounded_drain_signal_case() {
+  local name="$1" signal_name="$2" expected_status="$3"
+  local case_dir="$TEST_DIR/$name" status descendant_pid
+  mkdir "$case_dir"
+  EARLY_DESCENDANT_PID_FILE="$case_dir/descendant-pid" \
+    EARLY_DESCENDANT_TERM_MARKER="$case_dir/drain-term-seen" \
+    python3 "$HARNESS_DIR/bounded_process.py" 2 -- "$EARLY_LEADER" \
+      >"$case_dir/out" 2>"$case_dir/err" &
+  BOUNDED_PID=$!
+  for _ in {1..100}; do
+    [[ -f "$case_dir/drain-term-seen" ]] && break
+    sleep 0.01
+  done
+  [[ -f "$case_dir/drain-term-seen" ]] \
+    || fail "$signal_name bounded-process test did not enter residual-group drain"
+  kill -s "$signal_name" "$BOUNDED_PID"
+  set +e
+  wait "$BOUNDED_PID"
+  status=$?
+  set -e
+  BOUNDED_PID=""
+  [[ $status -eq $expected_status ]] \
+    || fail "$signal_name during bounded-process drain returned $status instead of $expected_status"
+  descendant_pid="$(<"$case_dir/descendant-pid")"
+  for _ in {1..40}; do kill -0 "$descendant_pid" 2>/dev/null || break; sleep 0.05; done
+  if kill -0 "$descendant_pid" 2>/dev/null; then
+    fail "$signal_name bounded-process drain left descendant $descendant_pid alive"
+  fi
+}
+
+run_bounded_drain_signal_case bounded-drain-term TERM 143
+run_bounded_drain_signal_case bounded-drain-int INT 130
 
 run_case diagnostics-hang diagnostics-hang 1
 [[ "$(<"$TEST_DIR/diagnostics-hang/status")" == "23" ]] \

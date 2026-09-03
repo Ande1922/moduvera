@@ -218,7 +218,14 @@ def main(arguments: list[str]) -> int:
                 print(tail(logs[topology]), end="", file=sys.stderr)
             return 1
 
-        if not stop_process_groups(processes, timeout):
+        runner_groups_drained = stop_process_groups(processes, timeout)
+        if interrupted_signal:
+            print(
+                f"Parallel reference scenario interrupted by signal {interrupted_signal}",
+                file=sys.stderr,
+            )
+            return 128 + interrupted_signal
+        if not runner_groups_drained:
             print(
                 "Parallel reference scenario failed: completed runner process groups were not empty",
                 file=sys.stderr,
@@ -270,6 +277,12 @@ def main(arguments: list[str]) -> int:
                 "Parallel reference scenario failed: completed validator process group was not empty",
                 file=sys.stderr,
             )
+        if interrupted_signal:
+            print(
+                f"Parallel reference scenario interrupted by signal {interrupted_signal}",
+                file=sys.stderr,
+            )
+            return 128 + interrupted_signal
         if validator_status != 0:
             return validator_status
         if not validator_group_drained:
