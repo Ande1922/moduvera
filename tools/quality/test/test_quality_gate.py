@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import os
 from pathlib import Path
+import shlex
 import shutil
 import signal
 import stat
@@ -194,7 +195,9 @@ class QualityGatePolicyTest(unittest.TestCase):
                 f"{secret_key} = ${{DB_PASSWORD}}",
             )
         )
-        self.assertFalse(quality_gate._hunk_has_sensitive_content(safe_content))
+        self.assertFalse(
+            quality_gate._hunk_has_sensitive_content(safe_content, "TestConfig.java")
+        )
         self.fixture.write(
             "src/TestConfig.java",
             "class TestConfig {\n"
@@ -222,6 +225,46 @@ class QualityGatePolicyTest(unittest.TestCase):
         unsafe_head = self.fixture.commit("unsafe config values")
         with self.assertRaises(quality_gate.GateError):
             quality_gate.check_sensitive_content(self.fixture.root, safe_head, unsafe_head)
+
+    def test_changed_multiline_json_value_uses_unchanged_key_context(self) -> None:
+        credential_key = "client_" + "secret"
+        self.fixture.write(
+            "config.json",
+            "{\n" f'  "{credential_key}":\n' '    "${DB_PASSWORD}"\n' "}\n",
+        )
+        before = self.fixture.commit("placeholder config")
+        exposed_value = "replacement-live-" + "value-1234567890"
+        self.fixture.write(
+            "config.json",
+            "{\n" f'  "{credential_key}":\n' f'    "{exposed_value}"\n' "}\n",
+        )
+        after = self.fixture.commit("replace only credential value")
+        with self.assertRaises(quality_gate.GateError) as caught:
+            quality_gate.check_sensitive_content(self.fixture.root, before, after)
+        self.assertIn("config.json: added line 3", str(caught.exception))
+        self.assertNotIn(exposed_value, str(caught.exception))
+
+    def test_java_identifier_assignment_is_exempt_but_config_literal_is_strict(self) -> None:
+        java_key = "client" + "Secret"
+        self.fixture.write(
+            "src/TestConfig.java",
+            "class TestConfig {\n"
+            f"  String {java_key};\n"
+            f"  void set(String {java_key}) {{\n"
+            f"    this.{java_key} = {java_key};\n"
+            "  }\n"
+            "}\n",
+        )
+        java_head = self.fixture.commit("Java identifier assignment")
+        quality_gate.check_sensitive_content(self.fixture.root, self.base, java_head)
+        config_value = "client" + "Secret"
+        self.fixture.write(
+            "config/application.properties", f"{java_key}={config_value}\n"
+        )
+        config_head = self.fixture.commit("matching config literal")
+        with self.assertRaises(quality_gate.GateError) as caught:
+            quality_gate.check_sensitive_content(self.fixture.root, java_head, config_head)
+        self.assertIn("config/application.properties", str(caught.exception))
 
     def test_unresolvable_base_fails_closed(self) -> None:
         with self.assertRaises(quality_gate.GateError):
@@ -280,10 +323,20 @@ class QualityGateEvidenceTest(unittest.TestCase):
             f'"{key}": "{client_value}"' for key in credential_keys
         )
         escaped_terminal_value = "escaped-" + r'quote\"-live-value-123456'
+        double_multiline_value = (
+            "double-secret-one\nescaped-\\\"-middle\ndouble-secret-three"
+        )
+        single_multiline_value = (
+            "single-secret-one\nescaped-\\'-middle\nsingle-secret-three"
+        )
         credential_assignments += (
             f'"{credential_keys[0]}":\n  "{escaped_terminal_value}"',
+            f'"{credential_keys[0]}": "{double_multiline_value}"',
+            f"{credential_keys[2]}='{single_multiline_value}'",
         )
-        credential_arguments = " ".join(f"'{assignment}'" for assignment in credential_assignments)
+        credential_arguments = " ".join(
+            shlex.quote(assignment) for assignment in credential_assignments
+        )
         extension.write_text(
             "#!/usr/bin/env bash\n"
             f"printf '%s\\n' '{exposed}' '{pem_begin}' '{pem_payload}' '{pem_end}' "
@@ -306,6 +359,8 @@ class QualityGateEvidenceTest(unittest.TestCase):
         self.assertIn("[REDACTED_PRIVATE_KEY_BLOCK]", result.stdout)
         self.assertNotIn(client_value, result.stdout)
         self.assertNotIn(escaped_terminal_value, result.stdout)
+        self.assertNotIn("double-secret", result.stdout)
+        self.assertNotIn("single-secret", result.stdout)
         self.assertIn('"client_secret": "[REDACTED]"', result.stdout)
         self.assertIn('"access-token": "[REDACTED]"', result.stdout)
         self.assertIn('"refresh-token": "[REDACTED]"', result.stdout)
@@ -732,6 +787,34 @@ class BoundedTailTest(unittest.TestCase):
         self.assertIn("[REDACTED_PRIVATE_KEY_BLOCK]", retained)
         self.assertIn("[REDACTED]", retained)
         self.assertLessEqual(len(tail), quality_gate.MAX_FAILURE_LINES)
+
+    def test_multiline_single_and_double_quoted_credentials_remain_redacted(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "multiline.log"
+            double_key = "client_" + "secret"
+            single_key = "access_" + "token"
+            double_payload = "double-line-one\nescaped-\\\"-still-secret\ndouble-line-three"
+            single_payload = "single-line-one\nescaped-\\'-still-secret\nsingle-line-three"
+            path.write_text(
+                f'"{double_key}": "{double_payload}"\n'
+                f"{single_key}='{single_payload}'\n"
+                "after-redaction\n",
+                encoding="utf-8",
+            )
+            tail = quality_gate.redacted_tail(path)
+            direct = quality_gate.redact(path.read_text(encoding="utf-8"))
+        retained = "\n".join(tail)
+        for payload_fragment in (
+            "double-line-one",
+            "still-secret",
+            "double-line-three",
+            "single-line-one",
+            "single-line-three",
+        ):
+            self.assertNotIn(payload_fragment, retained)
+            self.assertNotIn(payload_fragment, direct)
+        self.assertGreaterEqual(retained.count("[REDACTED]"), 2)
+        self.assertIn("after-redaction", retained)
 
 
 if __name__ == "__main__":

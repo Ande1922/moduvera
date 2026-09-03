@@ -56,14 +56,17 @@ completed runs are kept.
 The terminal prints only the bounded redacted summary; inspect `full.log`
 locally when more detail is required. The complete log is streamed through a
 stateful redactor before only the final redacted lines are retained. Credential
-redaction recognizes escaped and multiline quoted JSON plus shell-style
-assignments, and private-key blocks are removed in full. Exact environment
-placeholders and ordinary code expressions are not scanner findings; longer
-placeholder-like or config values still fail closed and terminal redaction
-remains conservative. SIGINT/SIGTERM is masked through child launch and process
-group capture. Cleanup then tracks the group through descendant exit, escalates
-resistant members to SIGKILL, and completes interrupted evidence only after the
-direct child has been reaped.
+redaction keeps bounded single- and double-quote state across physical lines,
+recognizes escaped quotes, and removes private-key blocks in full. The scanner
+parses complete changed-head files and reports an assignment only when its span
+overlaps an added line, so a changed multiline value cannot hide behind an
+unchanged key. Exact environment placeholders remain allowed. Identifier and
+code-expression exemptions apply only to Java source; config-like files remain
+strict, while terminal redaction stays conservative for every file type.
+SIGINT/SIGTERM is masked through child launch and process group capture. Cleanup
+then tracks the group through descendant exit, escalates resistant members to
+SIGKILL, and completes interrupted evidence only after the direct child has
+been reaped.
 
 Run the deterministic policy and fixture suite directly with:
 

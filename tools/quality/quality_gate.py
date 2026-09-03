@@ -21,6 +21,7 @@ import stat
 import subprocess
 import sys
 import time
+from typing import NamedTuple
 import urllib.parse
 
 
@@ -30,6 +31,7 @@ MAX_TAIL_BYTES = 64 * 1024
 MAX_REDACTED_LINE_CHARS = 4096
 MAX_STREAM_BUFFER_CHARS = 2 * MAX_REDACTED_LINE_CHARS
 STREAM_PATTERN_OVERLAP = 256
+MAX_OPEN_CREDENTIAL_CHARS = 256 * 1024
 MAX_SUMMARY_BYTES = 8192
 PROCESS_GROUP_TERM_SECONDS = 2.0
 PROCESS_GROUP_KILL_SECONDS = 5.0
@@ -43,19 +45,19 @@ CREDENTIAL_KEY = (
 CREDENTIAL_ASSIGNMENT = re.compile(
     rf"(?i)(?P<prefix>(?P<key_quote>['\"]?)\b{CREDENTIAL_KEY}\b"
     rf"(?P=key_quote)\s*[:=]\s*)"
-    r"(?P<value>\$\{[^}\r\n]+\}|\"(?:\\.|[^\"\\\r\n])+\"|"
-    r"'(?:\\.|[^'\\\r\n])+'|[^\s,;}\]]+)"
+    r"(?P<value>\$\{[^}\r\n]+\}|\"(?:\\.|[^\"\\])+\"|"
+    r"'(?:\\.|[^'\\])+'|[^\s,;}\]]+)"
 )
-SECRET_PATTERNS = (
-    PRIVATE_KEY_BEGIN,
+CREDENTIAL_QUOTED_START = re.compile(
+    rf"(?i)(?P<prefix>(?P<key_quote>['\"]?)\b{CREDENTIAL_KEY}\b"
+    rf"(?P=key_quote)\s*[:=]\s*)(?P<value_quote>['\"])"
+)
+STANDALONE_SECRET_PATTERNS = (
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
     re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"),
     re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"),
     re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{16,}"),
-    CREDENTIAL_ASSIGNMENT,
 )
-
-
 def _redact_credential(match: re.Match[str]) -> str:
     value = match.group("value")
     if len(value) >= 2 and value[0] in {'"', "'"} and value[-1] == value[0]:
@@ -70,8 +72,9 @@ EXACT_PLACEHOLDER = re.compile(
     r"\[?REDACTED\]?|CHANGEME|example|dummy|test)$",
     re.IGNORECASE,
 )
-CODE_EXPRESSION = re.compile(
+JAVA_CODE_EXPRESSION = re.compile(
     r"^(?:null|true|false|Optional\.empty\(\)|"
+    r"[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*|"
     r"[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)+\([^\r\n]*\))$"
 )
 
@@ -84,11 +87,17 @@ def _credential_value(match: re.Match[str]) -> tuple[str, bool]:
     return raw, False
 
 
-def is_sensitive_credential_assignment(match: re.Match[str]) -> bool:
+def is_sensitive_credential_assignment(
+    match: re.Match[str], path: str | None = None
+) -> bool:
     value, quoted = _credential_value(match)
     if EXACT_PLACEHOLDER.fullmatch(value):
         return False
-    if CODE_EXPRESSION.fullmatch(value):
+    if (
+        path is not None
+        and path.lower().endswith(".java")
+        and JAVA_CODE_EXPRESSION.fullmatch(value)
+    ):
         return False
     if quoted:
         return True
@@ -101,7 +110,6 @@ def is_sensitive_credential_assignment(match: re.Match[str]) -> bool:
 
 REDACTIONS = (
     (re.compile(r"(?i)(\bBearer\s+)[A-Za-z0-9._~+/=-]+"), r"\1[REDACTED]"),
-    (CREDENTIAL_ASSIGNMENT, _redact_credential),
     (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "[REDACTED_AWS_KEY]"),
     (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"), "[REDACTED_GITHUB_TOKEN]"),
     (re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"), "[REDACTED_SLACK_TOKEN]"),
@@ -265,42 +273,158 @@ def check_skill_structure(repo: Path, head: str) -> None:
     print(f"checked {len(roots)} project Skill directorie(s)")
 
 
-def added_hunks(repo: Path, base: str, head: str) -> list[str]:
-    result = git(repo, "diff", "--unified=0", "--no-color", base, head, check=False)
+class ChangedFileContext(NamedTuple):
+    path: str
+    content: str
+    added_lines: frozenset[int]
+
+
+HUNK_HEADER = re.compile(
+    r"^@@ -\d+(?:,\d+)? \+(?P<start>\d+)(?:,(?P<count>\d+))? @@"
+)
+
+
+def _added_line_numbers(repo: Path, base: str, head: str, path: str) -> frozenset[int]:
+    result = git(
+        repo,
+        "diff",
+        "--unified=0",
+        "--no-color",
+        "--no-ext-diff",
+        base,
+        head,
+        "--",
+        path,
+        check=False,
+    )
     if result.returncode != 0:
         raise GateError(result.stderr.strip() or "cannot inspect changed content")
-    hunks: list[str] = []
-    added: list[str] = []
+    added: set[int] = set()
+    new_line: int | None = None
     for line in result.stdout.splitlines():
-        if line.startswith("@@"):
-            if added:
-                hunks.append("\n".join(added))
-                added = []
+        header = HUNK_HEADER.match(line)
+        if header:
+            new_line = int(header.group("start"))
+        elif new_line is None or line.startswith(("diff ", "index ", "---", "+++")):
+            continue
         elif line.startswith("+") and not line.startswith("+++"):
-            added.append(line[1:])
-    if added:
-        hunks.append("\n".join(added))
-    return hunks
+            added.add(new_line)
+            new_line += 1
+        elif line.startswith("-") and not line.startswith("---"):
+            continue
+        elif not line.startswith("\\"):
+            new_line += 1
+    return frozenset(added)
 
 
-def _hunk_has_sensitive_content(content: str) -> bool:
-    for pattern in SECRET_PATTERNS:
-        if pattern is CREDENTIAL_ASSIGNMENT:
-            if any(is_sensitive_credential_assignment(match) for match in pattern.finditer(content)):
-                return True
-        elif pattern.search(content):
-            return True
-    return False
+def _blob_text(repo: Path, revision: str, path: str) -> str:
+    result = subprocess.run(
+        ["git", "show", f"{revision}:{path}"],
+        cwd=repo,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise GateError(f"cannot read {path} at {revision}")
+    return result.stdout.decode("utf-8", "replace")
+
+
+def changed_file_contexts(repo: Path, base: str, head: str) -> list[ChangedFileContext]:
+    contexts: list[ChangedFileContext] = []
+    for status, paths in changed_entries(repo, base, head):
+        if status[:1] not in {"A", "M", "R", "C"}:
+            continue
+        path = paths[-1]
+        if tree_mode(repo, head, path) not in {"100644", "100755"}:
+            continue
+        added_lines = _added_line_numbers(repo, base, head, path)
+        if added_lines:
+            contexts.append(
+                ChangedFileContext(path, _blob_text(repo, head, path), added_lines)
+            )
+    return contexts
+
+
+def _line_span(content: str, start: int, end: int) -> tuple[int, int]:
+    first = content.count("\n", 0, start) + 1
+    last_offset = start if end <= start else end - 1
+    last = content.count("\n", 0, last_offset) + 1
+    return first, last
+
+
+def _overlaps_added_line(
+    content: str, start: int, end: int, added_lines: frozenset[int]
+) -> int | None:
+    first, last = _line_span(content, start, end)
+    return next((line for line in sorted(added_lines) if first <= line <= last), None)
+
+
+def _sensitive_spans(content: str, path: str) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    for beginning in PRIVATE_KEY_BEGIN.finditer(content):
+        ending = PRIVATE_KEY_END.search(content, beginning.end())
+        spans.append((beginning.start(), ending.end() if ending else len(content)))
+    for pattern in STANDALONE_SECRET_PATTERNS:
+        spans.extend((match.start(), match.end()) for match in pattern.finditer(content))
+    spans.extend(
+        (match.start(), match.end())
+        for match in CREDENTIAL_ASSIGNMENT.finditer(content)
+        if is_sensitive_credential_assignment(match, path)
+    )
+    return spans
+
+
+def _hunk_has_sensitive_content(content: str, path: str = "fixture.conf") -> bool:
+    return bool(_sensitive_spans(content, path))
 
 
 def check_sensitive_content(repo: Path, base: str, head: str) -> None:
     findings: list[str] = []
-    for number, content in enumerate(added_hunks(repo, base, head), 1):
-        if _hunk_has_sensitive_content(content):
-            findings.append(f"added hunk {number}: possible credential or private key")
+    for context in changed_file_contexts(repo, base, head):
+        for start, end in _sensitive_spans(context.content, context.path):
+            line = _overlaps_added_line(context.content, start, end, context.added_lines)
+            if line is not None:
+                findings.append(
+                    f"{context.path}: added line {line}: possible credential or private key"
+                )
+                break
     if findings:
         raise GateError("\n".join(findings))
     print("checked added content for high-confidence credential patterns")
+
+
+def _find_unescaped_quote(
+    text: str, start: int, quote: str, escaped: bool = False
+) -> tuple[int | None, bool]:
+    for index in range(start, len(text)):
+        character = text[index]
+        if escaped:
+            escaped = False
+        elif character == "\\":
+            escaped = True
+        elif character == quote:
+            return index, False
+    return None, escaped
+
+
+def redact_credentials(text: str) -> str:
+    output: list[str] = []
+    cursor = 0
+    while quoted_start := CREDENTIAL_QUOTED_START.search(text, cursor):
+        output.append(
+            CREDENTIAL_ASSIGNMENT.sub(
+                _redact_credential, text[cursor : quoted_start.start()]
+            )
+        )
+        quote = quoted_start.group("value_quote")
+        output.append(f"{quoted_start.group('prefix')}{quote}[REDACTED]{quote}")
+        closing, _escaped = _find_unescaped_quote(text, quoted_start.end(), quote)
+        if closing is None:
+            return "".join(output)
+        cursor = closing + 1
+    output.append(CREDENTIAL_ASSIGNMENT.sub(_redact_credential, text[cursor:]))
+    return "".join(output)
 
 
 def redact(text: str) -> str:
@@ -317,7 +441,7 @@ def redact(text: str) -> str:
             inside_private_key = not bool(PRIVATE_KEY_END.search(line))
             continue
         redacted_lines.append(line)
-    result = "".join(redacted_lines)
+    result = redact_credentials("".join(redacted_lines))
     for pattern, replacement in REDACTIONS:
         result = pattern.sub(replacement, result)
     return result
@@ -580,12 +704,21 @@ CREDENTIAL_PREFIX = re.compile(
 )
 
 
+class OpenCredentialQuote:
+    def __init__(self, quote: str) -> None:
+        self.quote = quote
+        self.escaped = False
+        self.scanned_chars = 0
+        self.limit_reported = False
+
+
 class StreamingRedactor:
     def __init__(self, max_lines: int = MAX_FAILURE_LINES) -> None:
         self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
         self.buffer = ""
         self.pending_credential = ""
         self.inside_private_key = False
+        self.open_credential_quote: OpenCredentialQuote | None = None
         self.oversized_preview: str | None = None
         self.discarding_sensitive_line = False
         self.lines: deque[str] = deque(maxlen=max_lines)
@@ -597,6 +730,9 @@ class StreamingRedactor:
     def finish(self) -> list[str]:
         self.buffer += self.decoder.decode(b"", final=True)
         self._drain(final=True)
+        if self.open_credential_quote is not None:
+            self._append_line("[REDACTED_CREDENTIAL_BLOCK_UNTERMINATED]")
+            self.open_credential_quote = None
         if self.pending_credential:
             self._append_redacted(self.pending_credential)
             self.pending_credential = ""
@@ -644,6 +780,15 @@ class StreamingRedactor:
         split_at = len(self.buffer) - STREAM_PATTERN_OVERLAP
         fragment = self.buffer[:split_at]
         self.buffer = self.buffer[split_at:]
+        if self.open_credential_quote is not None:
+            self._consume_open_credential(fragment)
+            return
+        combined = self.pending_credential + fragment
+        if self._begin_open_quoted_credential(combined):
+            self.pending_credential = ""
+            self.oversized_preview = None
+            self.discarding_sensitive_line = False
+            return
         if (
             self.pending_credential
             or self.discarding_sensitive_line
@@ -675,8 +820,14 @@ class StreamingRedactor:
         self.discarding_sensitive_line = False
 
     def _process_line(self, line: str) -> None:
+        if self.open_credential_quote is not None:
+            self._consume_open_credential(line)
+            return
         if self.pending_credential:
             combined = self.pending_credential + line
+            if self._begin_open_quoted_credential(combined):
+                self.pending_credential = ""
+                return
             if CREDENTIAL_ASSIGNMENT.search(combined):
                 self._append_redacted(combined)
                 self.pending_credential = ""
@@ -687,14 +838,57 @@ class StreamingRedactor:
                 return
             self._append_redacted(self.pending_credential)
             self.pending_credential = ""
+        if self._begin_open_quoted_credential(line):
+            return
         if PENDING_CREDENTIAL_KEY.search(line.rstrip("\r\n")):
             self.pending_credential = line
             return
         self._append_redacted(line)
 
+    def _begin_open_quoted_credential(self, text: str) -> bool:
+        cursor = 0
+        while quoted_start := CREDENTIAL_QUOTED_START.search(text, cursor):
+            quote = quoted_start.group("value_quote")
+            closing, _escaped = _find_unescaped_quote(text, quoted_start.end(), quote)
+            if closing is not None:
+                cursor = closing + 1
+                continue
+            safe_prefix = (
+                text[: quoted_start.start()]
+                + quoted_start.group("prefix")
+                + quote
+                + "[REDACTED]"
+                + quote
+            )
+            self._append_redacted(safe_prefix)
+            self.open_credential_quote = OpenCredentialQuote(quote)
+            self._consume_open_credential(text[quoted_start.end() :])
+            return True
+        return False
+
+    def _consume_open_credential(self, text: str) -> None:
+        state = self.open_credential_quote
+        assert state is not None
+        closing, escaped = _find_unescaped_quote(text, 0, state.quote, state.escaped)
+        consumed = len(text) if closing is None else closing + 1
+        state.scanned_chars = min(
+            MAX_OPEN_CREDENTIAL_CHARS + 1, state.scanned_chars + consumed
+        )
+        if state.scanned_chars > MAX_OPEN_CREDENTIAL_CHARS and not state.limit_reported:
+            self._append_line("[REDACTED_CREDENTIAL_BLOCK_LIMIT_EXCEEDED]")
+            state.limit_reported = True
+        state.escaped = escaped
+        if closing is None:
+            return
+        self.open_credential_quote = None
+        suffix = text[closing + 1 :]
+        if suffix:
+            self._process_line(suffix)
+
     def _append_redacted(self, text: str) -> None:
         for line in redact(text).splitlines():
-            self._append_line(line)
+            if line:
+                self._append_line(line)
 
     def _append_line(self, line: str) -> None:
         if len(line) > MAX_REDACTED_LINE_CHARS:
