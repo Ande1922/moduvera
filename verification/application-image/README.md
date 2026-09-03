@@ -14,12 +14,16 @@ verification/application-image/verify.sh
 
 The scenario packages all Runnable Apps, builds every image with its own
 parameterized `EXPOSE` metadata, checks the four Spring Boot tools layers and
-their shared loader layer, inspects runtime identity and filesystem content,
-then starts `catalog-app` with a real PostgreSQL dependency. The smoke overrides
+their shared loader layer, verifies root-owned content is read-only to the
+runtime identity, and rejects credential artifacts, private keys, keystores and
+high-confidence literal credentials without printing their values. It then
+starts `catalog-app` with a real PostgreSQL dependency. The smoke overrides
 the application port, checks Actuator health and an unauthenticated HTTP
 response, and proves that JDWP is closed unless JVM options explicitly enable
 it. The same smoke then supplies the JDWP agent option at runtime and completes
-the protocol handshake over an independently mapped host port.
+the protocol handshake over an independently mapped host port. It also starts
+`app-monolith` without a server-port override and verifies that the process is
+actually listening through its declared `8083` mapping.
 
 `MODUVERA_IMAGE_REPOSITORY` and `MODUVERA_IMAGE_TAG` select local image names.
 Set `MODUVERA_IMAGE_SKIP_PACKAGE=1` only when the executable JARs are already

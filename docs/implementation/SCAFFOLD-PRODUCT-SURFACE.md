@@ -15,7 +15,7 @@ This is the only current status source for the repository. Status is based on ex
 | `moduvera-message-core` | transport-neutral Event/Async Command descriptors, durable Outbox state machine and atomic Inbox contract | unit contracts plus PostgreSQL/MySQL store integration |
 | `moduvera-messaging-kafka-spring-boot-starter` | Cloud Stream imperative model, structured CloudEvents for Events, distinct async-command envelope, logical route mapping, handler-bound reliable inbound endpoints, synchronous broker ACK, JDBC Outbox/Inbox, bounded retry and Kafka DLQ integration | real Kafka Notes/App tests, topology-specific duplicate-delivery ITs and dual-topology recovery black box |
 | `moduvera-test-support` | deterministic clocks, bounded eventually and run identifiers | test-scope consumers only |
-| Runnable App image construction | all six `apps/` assemblies use one parameterized Dockerfile over Maven-built JARs, with Boot tools layers, a digest-pinned Java 26 JRE, non-root execution and runtime-owned configuration | all-image build/inspection plus `catalog-app` health and HTTP smoke against real PostgreSQL |
+| Runnable App image construction | all six `apps/` assemblies use one parameterized Dockerfile over Maven-built JARs, with Boot tools layers, a digest-pinned Java 26 JRE, root-owned read-only content, non-root execution and runtime-owned configuration | all-image build/inspection plus `catalog-app` health and HTTP smoke against real PostgreSQL and a live `app-monolith` default-port probe |
 
 The supported database default is PostgreSQL. MySQL is supported as a compatibility target for Catalog, Order, Inventory and messaging persistence contracts; it does not own Gateway/Kafka end-to-end, AI/vector, performance or failure-recovery claims.
 

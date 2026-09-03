@@ -19,6 +19,8 @@ require_text 'java -Djarmode=tools -jar application.jar extract --layers --launc
 for layer in dependencies spring-boot-loader snapshot-dependencies application; do
   require_text "/workspace/extracted/$layer/ ./" "$DOCKERFILE"
 done
+[[ "$(grep -Fc -- '--chown=0:0' "$DOCKERFILE")" == "4" ]] \
+  || fail "each extracted runtime layer must remain root-owned"
 require_text 'USER 10001:10001' "$DOCKERFILE"
 require_text 'EXPOSE ${APP_PORT}' "$DOCKERFILE"
 require_text 'ENTRYPOINT ["java", "org.springframework.boot.loader.launch.JarLauncher"]' "$DOCKERFILE"
@@ -39,5 +41,6 @@ require_text '!apps/*/target/*.jar' "$PROJECT_ROOT/.dockerignore"
 for script in "$IMAGE_DIR"/*.sh "$IMAGE_DIR"/tests/*.sh; do bash -n "$script"; done
 python3 -c 'import ast, pathlib, sys; ast.parse(pathlib.Path(sys.argv[1]).read_text())' \
   "$IMAGE_DIR/inspect_images.py"
+PYTHONDONTWRITEBYTECODE=1 python3 "$SCRIPT_DIR/test_image_policy.py"
 
 echo "Application image static contract: PASS"

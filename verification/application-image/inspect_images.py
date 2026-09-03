@@ -4,9 +4,12 @@
 from __future__ import annotations
 
 import json
+from io import BytesIO
 import os
 from pathlib import Path
 import subprocess
+
+from image_policy import ImagePolicyError, scan_tar_stream
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -29,6 +32,15 @@ def run(*command: str) -> subprocess.CompletedProcess[str]:
         command,
         check=True,
         text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+
+def run_bytes(*command: str) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(
+        command,
+        check=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
@@ -91,8 +103,29 @@ def main() -> None:
             test -z "$(find /opt/moduvera -type d \
                 \( -name src -o -name .git -o -name .m2 -o -name test-classes \) \
                 -print -quit)"
+            test -z "$(find /opt/moduvera \( ! -uid 0 -o ! -gid 0 \) -print -quit)"
+            test -z "$(find /opt/moduvera -perm /022 -print -quit)"
+            test ! -w /opt/moduvera
+            ! touch /opt/moduvera/.runtime-write-probe 2>/dev/null
             """,
         )
+        filesystem = run_bytes(
+            "docker",
+            "run",
+            "--rm",
+            "--entrypoint",
+            "tar",
+            image,
+            "-C",
+            "/opt/moduvera",
+            "-cf",
+            "-",
+            ".",
+        ).stdout
+        try:
+            scan_tar_stream(BytesIO(filesystem))
+        except ImagePolicyError as error:
+            fail(f"{image} failed the sensitive-content policy: {error}")
         print(f"Image contract PASS: {app} ({image})")
 
     if len(loader_layers) != 1:
