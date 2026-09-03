@@ -18,17 +18,25 @@ class TenantPersistenceSchemaGateTest {
 
     private static final String TENANT_IDENTIFIER =
             "(?:tenant_id|\"tenant_id\"|`tenant_id`|\\[tenant_id\\])";
+    private static final String SQL_IDENTIFIER =
+            "(?:[a-z_][a-z0-9_$]*|\"[^\"]+\"|`[^`]+`|\\[[^]]+\\])";
     private static final Pattern CREATE_TABLE =
             Pattern.compile("(?is)\\bCREATE\\s+TABLE\\b.*?;");
     private static final Pattern CREATE_TABLE_TENANT_COLUMN = Pattern.compile(
-            "(?is)(?:\\(|,)\\s*" + TENANT_IDENTIFIER
+            "(?is)^\\s*" + TENANT_IDENTIFIER
                     + "\\s+([a-z][a-z0-9_]*)(?:\\s*\\(\\s*(\\d+)\\s*\\))?");
     private static final Pattern ALTER_TABLE =
             Pattern.compile("(?is)\\bALTER\\s+TABLE\\b.*?;");
     private static final Pattern ALTER_TABLE_TENANT_COLUMN = Pattern.compile(
-            "(?is)\\b(?:ALTER\\s+COLUMN|MODIFY(?:\\s+COLUMN)?|ADD(?:\\s+COLUMN)?)\\s+"
+            "(?is)\\b(?:ALTER(?:\\s+COLUMN)?|MODIFY(?:\\s+COLUMN)?|ADD(?:\\s+COLUMN)?)\\s+"
                     + TENANT_IDENTIFIER
                     + "\\s+(?:TYPE\\s+)?([a-z][a-z0-9_]*)(?:\\s*\\(\\s*(\\d+)\\s*\\))?");
+    private static final Pattern CHANGE_TABLE_TENANT_COLUMN = Pattern.compile(
+            "(?is)\\bCHANGE(?:\\s+COLUMN)?\\s+"
+                    + SQL_IDENTIFIER
+                    + "\\s+"
+                    + TENANT_IDENTIFIER
+                    + "\\s+([a-z][a-z0-9_]*)(?:\\s*\\(\\s*(\\d+)\\s*\\))?");
 
     private static final Map<String, Upgrade> LEGACY_UPGRADES = Map.of(
             "services/catalog/catalog-service/src/main/resources/db/migration/catalog/V1__create_catalog.sql",
@@ -93,6 +101,36 @@ class TenantPersistenceSchemaGateTest {
 
             assertThat(violations).as(declaration).hasSize(1);
         }
+
+        for (String mutation : List.of(
+                "ALTER" + " TABLE mutation ALTER tenant_id TYPE BIGINT;",
+                "ALTER" + " TABLE mutation ALTER COLUMN \"tenant_id\" TYPE TEXT;",
+                "ALTER" + " TABLE mutation CHANGE COLUMN legacy_tenant tenant_id BIGINT;",
+                "ALTER" + " TABLE mutation CHANGE `legacy_tenant` `tenant_id` VARCHAR(128);")) {
+            List<String> violations = new ArrayList<>();
+
+            inspectDefinitions("mutation.sql", mutation, violations, ignored -> {});
+
+            assertThat(violations).as(mutation).hasSize(1);
+        }
+    }
+
+    @Test
+    void tableConstraintsAreNotMistakenForTenantColumnDeclarations() {
+        String content = """
+                CREATE TABLE tenant_record (
+                    tenant_id VARCHAR(64) NOT NULL,
+                    CHECK (tenant_id IS NOT NULL),
+                    CONSTRAINT tenant_not_blank CHECK (LENGTH(tenant_id) > 0)
+                );
+                """;
+        List<String> violations = new ArrayList<>();
+        List<TenantColumnDefinition> definitions = new ArrayList<>();
+
+        inspectDefinitions("constraints.sql", content, violations, definitions::add);
+
+        assertThat(definitions).containsExactly(new TenantColumnDefinition("VARCHAR", "64"));
+        assertThat(violations).isEmpty();
     }
 
     @Test
@@ -132,15 +170,71 @@ class TenantPersistenceSchemaGateTest {
             List<String> violations,
             Consumer<TenantColumnDefinition> definitionConsumer) {
         String inspectable = stripCommentsAndSqlStrings(content);
-        inspectStatements(
+        inspectCreateStatements(
                 CREATE_TABLE.matcher(inspectable),
-                CREATE_TABLE_TENANT_COLUMN,
                 relative,
                 violations,
                 definitionConsumer);
         inspectStatements(
                 ALTER_TABLE.matcher(inspectable),
                 ALTER_TABLE_TENANT_COLUMN,
+                relative,
+                violations,
+                definitionConsumer);
+        inspectStatements(
+                ALTER_TABLE.matcher(inspectable),
+                CHANGE_TABLE_TENANT_COLUMN,
+                relative,
+                violations,
+                definitionConsumer);
+    }
+
+    private static void inspectCreateStatements(
+            Matcher statements,
+            String relative,
+            List<String> violations,
+            Consumer<TenantColumnDefinition> definitionConsumer) {
+        while (statements.find()) {
+            String statement = statements.group();
+            int open = statement.indexOf('(');
+            if (open < 0) {
+                continue;
+            }
+            int depth = 1;
+            int elementStart = open + 1;
+            for (int index = elementStart; index < statement.length(); index++) {
+                char current = statement.charAt(index);
+                if (current == '(') {
+                    depth++;
+                } else if (current == ')') {
+                    depth--;
+                    if (depth == 0) {
+                        inspectColumnElement(
+                                statement.substring(elementStart, index),
+                                relative,
+                                violations,
+                                definitionConsumer);
+                        break;
+                    }
+                } else if (current == ',' && depth == 1) {
+                    inspectColumnElement(
+                            statement.substring(elementStart, index),
+                            relative,
+                            violations,
+                            definitionConsumer);
+                    elementStart = index + 1;
+                }
+            }
+        }
+    }
+
+    private static void inspectColumnElement(
+            String element,
+            String relative,
+            List<String> violations,
+            Consumer<TenantColumnDefinition> definitionConsumer) {
+        inspectColumnMatches(
+                CREATE_TABLE_TENANT_COLUMN.matcher(element),
                 relative,
                 violations,
                 definitionConsumer);
@@ -153,17 +247,28 @@ class TenantPersistenceSchemaGateTest {
             List<String> violations,
             Consumer<TenantColumnDefinition> definitionConsumer) {
         while (statements.find()) {
-            Matcher columns = tenantColumns.matcher(statements.group());
-            while (columns.find()) {
-                TenantColumnDefinition definition = new TenantColumnDefinition(
-                        columns.group(1).toUpperCase(Locale.ROOT), columns.group(2));
-                definitionConsumer.accept(definition);
-                boolean canonical = definition.isVarchar(64);
-                boolean preservedLegacy = LEGACY_UPGRADES.containsKey(relative)
-                        && definition.isVarchar(128);
-                if (!canonical && !preservedLegacy) {
-                    violations.add(relative + ": " + columns.group());
-                }
+            inspectColumnMatches(
+                    tenantColumns.matcher(statements.group()),
+                    relative,
+                    violations,
+                    definitionConsumer);
+        }
+    }
+
+    private static void inspectColumnMatches(
+            Matcher columns,
+            String relative,
+            List<String> violations,
+            Consumer<TenantColumnDefinition> definitionConsumer) {
+        while (columns.find()) {
+            TenantColumnDefinition definition = new TenantColumnDefinition(
+                    columns.group(1).toUpperCase(Locale.ROOT), columns.group(2));
+            definitionConsumer.accept(definition);
+            boolean canonical = definition.isVarchar(64);
+            boolean preservedLegacy = LEGACY_UPGRADES.containsKey(relative)
+                    && definition.isVarchar(128);
+            if (!canonical && !preservedLegacy) {
+                violations.add(relative + ": " + columns.group());
             }
         }
     }
