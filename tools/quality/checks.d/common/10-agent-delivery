@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/../../../.." && pwd)"
+if [[ ! -f "$REPO_ROOT/tools/agent-delivery/validate.py" ]]; then
+    echo "agent delivery validation is required but tools/agent-delivery/validate.py is missing" >&2
+    exit 1
+fi
+if [[ ! -x "$REPO_ROOT/tools/agent-delivery/test/run-tests.sh" ]]; then
+    echo "agent delivery forward tests are required but tools/agent-delivery/test/run-tests.sh is missing or not executable" >&2
+    exit 1
+fi
+python3 "$REPO_ROOT/tools/agent-delivery/validate.py" --repo "$REPO_ROOT"
+"$REPO_ROOT/tools/agent-delivery/test/run-tests.sh"

@@ -25,6 +25,14 @@ Use four-space Java indentation, `UpperCamelCase` types, `lowerCamelCase` member
 
 ## Agent skills
 
+### Delivery workflow
+
+For requirement decisions, specifications, ticket breakdown, implementation,
+fixed-point review, quality gates, or final acceptance, follow
+[the repository delivery workflow](docs/agents/delivery-workflow.md). It routes
+single-ticket and dependency-frontier work to the project Skills under
+`.agents/skills/` and defines their stopping and authorization boundaries.
+
 ### Issue tracker
 
 Issues and specs use local Markdown under `.scratch/<feature-slug>/`. See `docs/agents/issue-tracker.md`.
