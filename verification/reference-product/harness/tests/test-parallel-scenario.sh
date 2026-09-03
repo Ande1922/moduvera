@@ -197,6 +197,17 @@ if mode == "early-descendant":
     (state / "validator.early-descendant-pid").write_text(
         str(descendant), encoding="ascii"
     )
+if mode == "fail-descendant":
+    descendant = os.fork()
+    if descendant == 0:
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        while True:
+            time.sleep(1)
+    (state / "validator.fail-descendant-pid").write_text(
+        str(descendant), encoding="ascii"
+    )
+    raise SystemExit(9)
 if mode != "hang":
     os.execv(sys.executable, [sys.executable, os.environ["REAL_VALIDATOR"], *sys.argv[1:]])
 
@@ -266,6 +277,16 @@ VALIDATOR_EARLY_PID="$(<"$TEST_DIR/validator-early-descendant/state/validator.ea
 for _ in {1..40}; do kill -0 "$VALIDATOR_EARLY_PID" 2>/dev/null || break; sleep 0.05; done
 if kill -0 "$VALIDATOR_EARLY_PID" 2>/dev/null; then
   fail "successful validator descendant $VALIDATOR_EARLY_PID survived process-group drain"
+fi
+
+STUB_VALIDATOR_MODE=fail-descendant \
+  REAL_VALIDATOR="$HARNESS_DIR/validate-parallel-scenario.py" \
+  REFERENCE_PARALLEL_TERM_TIMEOUT_SECONDS=0.2 \
+  run_supervisor validator-failure-descendant success 9 explicit "$STUB_VALIDATOR"
+VALIDATOR_FAILURE_PID="$(<"$TEST_DIR/validator-failure-descendant/state/validator.fail-descendant-pid")"
+for _ in {1..40}; do kill -0 "$VALIDATOR_FAILURE_PID" 2>/dev/null || break; sleep 0.05; done
+if kill -0 "$VALIDATOR_FAILURE_PID" 2>/dev/null; then
+  fail "failed validator descendant $VALIDATOR_FAILURE_PID survived process-group drain"
 fi
 
 run_supervisor microservices-failure fail-microservices 1 explicit

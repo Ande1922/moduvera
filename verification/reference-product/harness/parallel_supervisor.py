@@ -262,13 +262,17 @@ def main(arguments: list[str]) -> int:
                 file=sys.stderr,
             )
             return 128 + interrupted_signal
-        if validator_status != 0:
-            return validator_status
-        if not stop_process_groups({"validator": validator_process}, timeout):
+        validator_group_drained = stop_process_groups(
+            {"validator": validator_process}, timeout
+        )
+        if not validator_group_drained:
             print(
                 "Parallel reference scenario failed: completed validator process group was not empty",
                 file=sys.stderr,
             )
+        if validator_status != 0:
+            return validator_status
+        if not validator_group_drained:
             return 1
 
         success = True
@@ -282,7 +286,7 @@ def main(arguments: list[str]) -> int:
     finally:
         if processes and (interrupted_signal or not success):
             stop_process_groups(processes, timeout)
-        if validator_process is not None and validator_process.poll() is None:
+        if validator_process is not None and process_group_exists(validator_process.pid):
             stop_process_groups({"validator": validator_process}, timeout)
         for log_handle in log_handles:
             log_handle.close()
