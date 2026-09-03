@@ -1,5 +1,5 @@
 Type: issue
-Status: ready-for-agent
+Status: blocked
 Blocked by: 02, 03, 04
 
 # 05 — 接入安全、可安装的 pre-push Hook

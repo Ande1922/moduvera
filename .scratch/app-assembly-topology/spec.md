@@ -1,4 +1,4 @@
-Status: ready-for-agent
+Status: resolved
 
 # 支持微服务与业务核心模块化单体的 App 装配
 

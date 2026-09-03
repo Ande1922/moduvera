@@ -14,3 +14,8 @@
 - [x] retryable 错误有界退避，non-retryable 或耗尽错误进入 DLQ/terminal state，并提供安全、可关联的可观察信息。
 - [x] 故障由进程/容器外部控制，不添加测试专用生产 endpoint，也不用固定长 sleep 或自动重跑掩盖 flaky behavior。
 
+## Answer
+
+由 `71d3f37` 完成。JDBC Outbox/Inbox、lease/token fencing、retry/terminal
+状态和真实 Kafka 故障恢复路径已提交；仓库测试通过，验证事务回滚、重复投递、
+重启接管和有界失败分类，未引入测试专用生产端点。

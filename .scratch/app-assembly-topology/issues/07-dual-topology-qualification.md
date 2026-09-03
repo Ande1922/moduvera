@@ -11,3 +11,9 @@
 - [x] 两次运行通过公共结果观察 Kafka 驱动的确认/拒绝终态，并具备重复交付与恢复语义的对应执行证据。
 - [x] `/internal/**`、Catalog Internal HTTP、Actuator 和 Identity 内部端点不被公共 Gateway 暴露或公共前缀误改写。
 - [x] Reactor、相关 App integration tests、架构测试与两种拓扑黑盒契约全部通过后，README、Context、模块地图和产品状态同步为真实支持范围。
+
+## Answer
+
+由 `ea72d7d` 交付共享双拓扑黑盒 harness 与支持范围文档。相同公共 HTTP
+测试覆盖五 App 微服务和业务核心模块化单体，验证认证、租户隔离、Problem
+Details、Kafka 最终结果及内部端点边界。

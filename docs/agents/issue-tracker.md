@@ -21,6 +21,22 @@ When a skill says to publish to the issue tracker, create a file under `.scratch
 - Blocking uses `Blocked by: NN, NN`; a ticket is unblocked when every listed ticket is `resolved` or `wontfix`.
 - Claim a ticket by setting `Status: claimed`; resolve it by appending `## Answer`, setting `Status: resolved`, and linking the decision from the map.
 
+Run `python3 tools/tracker/check.py` after tracker edits. The checker accepts the
+legacy bold metadata form, but fails closed on missing or cyclic local blockers,
+invalid type/status combinations, stale blocked/unblocked states, non-terminal
+children beneath a resolved spec, and resolved issues without completed
+acceptance items, a concrete commit, and affirmative verification evidence in
+their Answer. Negative statements such as unavailable, unrun, or failed tests
+are not completion evidence, including negated claims that tests cover nothing
+or do not cover the change. `Blocked by` entries must fully match `None`, a
+two-digit local issue number, or `External — description`; `None` and local
+issue numbers may also carry a description after the dash. A `wontfix` issue is
+terminal without requiring its blockers to be resolved. A terminal spec may be
+`resolved` or `wontfix`: `resolved` requires at least one child and all children
+terminal; `wontfix` may have no children, but any children it has must all be
+terminal. The common quality gate extension runs the same checker for both
+docs-only and Normal profiles.
+
 ## System reviews
 
 System audits live under `.scratch/review-<YYYY-MM-DD>-<slug>/`. Follow `review-workflow.md` to publish, verify, plan, and close them. Findings use finding states rather than issue execution states.

@@ -16,6 +16,8 @@
 
 ## Answer
 
+实现提交：`71d3f37`。
+
 Catalog 的领域、持久化、HTTP 与 App Assembly 已形成真实纵向闭环。租户字段只存在于 `CatalogProductRow` 与 Mapper SQL，Repository adapter 从可信 `ExecutionContext` 获取租户；领域和应用接口不接收 `TenantId`。`catalog-app` 直接导入 `CatalogModuleConfiguration`（module/API）、`CatalogPersistenceOutboundConfiguration`（persistence）、`CatalogInternalHttpInboundConfiguration`（HTTP inbound）与 `CatalogMigrationConfiguration`（migration）四个受支持 slice；它们分别注册 Catalog API、Mapper/Repository、Controller/error mapping 和独立 Flyway history。
 
 验收命令：

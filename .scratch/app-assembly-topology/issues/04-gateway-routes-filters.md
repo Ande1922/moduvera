@@ -11,3 +11,9 @@
 - [x] 删除手写 `GatewayController` 及业务响应代理；Gateway 不解析 Order Path Variable、不执行业务校验、不构造业务 Problem Details。
 - [x] `/internal/**`、Catalog Internal HTTP、Identity exchange/service-token 和管理端点均不能成为公共 Route。
 - [x] Gateway integration test 使用真实 Route/Filter 与轻量下游 stub 验证路径、Location、状态、响应体和 Header 透明性。
+
+## Answer
+
+由 `ea72d7d` 实现，并由 `56ed028` 收紧装配边界。Gateway 使用服务名
+Route/Filter 完成前缀、token exchange 与 correlation 处理；Gateway
+integration tests 通过，验证公共路径、透明响应和内部端点不可达。

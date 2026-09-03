@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
+CHECKER="${REPO_ROOT}/tools/tracker/check.py"
+TESTS="${REPO_ROOT}/tools/tracker/test/run-tests.sh"
+
+if [[ ! -f "${CHECKER}" || ! -x "${TESTS}" ]]; then
+    echo "tracker consistency tooling is missing" >&2
+    exit 1
+fi
+
+python3 "${CHECKER}" --root "${REPO_ROOT}"
+"${TESTS}"

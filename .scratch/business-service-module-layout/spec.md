@@ -1,4 +1,4 @@
-Status: ready-for-agent
+Status: resolved
 
 # 按业务模块和 Adapter 方向重构业务服务
 

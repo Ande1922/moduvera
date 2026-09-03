@@ -10,3 +10,9 @@
 - [x] 架构测试禁止叶子 App 声明业务 HTTP/消息映射、Inbound Message Contract、payload mapping 或业务 handler。
 - [x] 架构测试保证 Controller/Consumer 位于提供方 Service 的明确 Inbound Adapter package。
 - [x] `*-api` 不依赖 Web/Gateway/传输 DTO，Domain/Application 不依赖 Spring Web、Messaging、Cloud Stream、Kafka 或可靠消费实现。
+
+## Answer
+
+由 `ea72d7d` 实现并由 `56ed028` 修正。Architecture Testkit 已验证 Gateway、
+叶子 App、提供方 Inbound Adapter 与协议中立 API/Application 的所有权边界，
+当前结构测试继续作为回归门禁。

@@ -14,3 +14,8 @@
 - [x] 成功响应保持未包装，Order API major version 保留在 Service-owned path，Gateway 不重写业务版本。
 - [x] correlation ID 在 Gateway 生成或透传，并能关联 Catalog HTTP、Order、Kafka 和 Inventory 日志。
 
+## Answer
+
+由 `71d3f37` 实现，并由 `56ed028` 收紧 Gateway 装配边界。Gateway 的公共
+登录与 Order 流、内部 token exchange、路由隔离及 RFC 9457 错误契约均有
+integration test 与公共黑盒验证均通过。

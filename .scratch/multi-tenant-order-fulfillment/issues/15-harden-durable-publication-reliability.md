@@ -1,5 +1,6 @@
 Status: resolved
 Labels: resolved
+Blocked by: None
 
 # 15 — 加固 Durable Publication 的低延迟、多实例与生命周期可靠性
 
@@ -148,3 +149,18 @@ Relay 在本地采用 `WAITING`、`RUNNING`、`STOPPING` 生命周期。after-co
 - 当前实现可作为 prior art：定时单线程 Relay、批量 claim、批次 token、lease 过期、stale-token 拒绝和同步 `acks=all` 均应尽量演进而非平行重写。主要差异是 after-commit wake、连续 drain、完整状态机、数据库时间 lease、保守本地 deadline、目标顺序域、生命周期操作和多实例证据。
 - 首次实现应偏向小批次、短且严格的 send timeout、可推导的 lease 与 shutdown grace。默认参数必须通过真实 Kafka/数据库测试校准，并允许部署按环境调整。
 - 16 号 issue 是明确的后续性能待办。必要索引、短事务清理和查询路径属于本 P0，不得以“等性能测试后再做”为由推迟；自适应批次、批量状态更新、表分区、更高 Relay 并发和 CDC 才属于有证据后的优化方向。
+
+## Answer
+
+逐项证据复核确认该 P0 由 `71d3f37` 实现，后续 JDBC runtime-adapter
+证据由 `2409dc2`、`4dab6fa` 等提交继续验证。当前实现包含 after-commit
+wake 与连续单 Worker 状态机、数据库时间 lease、批次 token fencing、
+`destination + partitionKey` 顺序域、ACK timeout、terminal redrive、
+published cleanup、低基数指标以及 PostgreSQL/MySQL 专属索引。
+
+验证证据位于 `OutboxWorkerTest`、`OutboxRelayIT`、`JdbcMessagingStoreIT`、
+`JdbcMessagingMySqlIT`、真实 Kafka App tests 和参考产品故障恢复 harness；
+本次校准运行消息 Starter 七模块聚焦 `verify`，结果 PASS。官方 Normal
+quality gate 在固定基线的 `ModuveraMonolithApplicationIT` V2 migration
+assertion 失败；外部 Ticket 09 的 `542fdc5` 已修复该基线缺口，但不属于当前
+HEAD ancestry。

@@ -14,3 +14,8 @@
 - [x] MySQL 测试不启动 Gateway/Kafka/完整订单 E2E，不要求 PostgreSQL-native AI/pgvector 能力对等。
 - [x] 文档明确 PostgreSQL 继续拥有默认配置、端到端、性能基线和故障恢复证据，MySQL 状态仅来自该兼容 TCK。
 
+## Answer
+
+由 `71d3f37` 完成。Catalog、Order、Inventory 和 JDBC Messaging 的 MySQL
+runtime-adapter TCK 覆盖租户隔离、迁移、事务、claim/lease、fencing、
+cleanup 与 redrive 且测试通过；PostgreSQL 仍是唯一黄金路径和端到端验证环境。

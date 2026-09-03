@@ -16,4 +16,6 @@
 
 ## Answer
 
+Implementation commit: `71d3f37`.
+
 `identity-app` now owns a PostgreSQL-backed opaque browser-session contract and a Gateway-only exchange that issues five-minute RSA-signed internal JWTs. Its real PostgreSQL HTTP integration test covers valid issuance, membership and credential failures, revoked sessions, audience allowlisting, and rejection of expired, wrong-issuer, wrong-audience, and wrong-signature JWTs. USER and SERVICE tenant-entry semantics remain enforced by the platform resource-server contract tests. Runtime database credentials are mandatory environment inputs; acceptance identities and passwords exist only in test setup.

@@ -1,4 +1,4 @@
-Status: ready-for-agent
+Status: resolved
 
 # 收紧基础运行时能力并移除无消费者的对象存储契约
 

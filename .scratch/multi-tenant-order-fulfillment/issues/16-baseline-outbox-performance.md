@@ -1,4 +1,4 @@
-Status: blocked
+Status: ready-for-agent
 Labels: performance, follow-up
 
 # 16 — 建立 Outbox 发布性能基线并验证数据库瓶颈方向
