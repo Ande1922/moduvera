@@ -47,6 +47,8 @@ class IdentityMigrationStartupIT {
         assertThat(tenantColumnLength("identity_tenant_membership")).isEqualTo(128);
         execute("DROP SCHEMA public CASCADE");
         execute("CREATE SCHEMA public");
+        migrateIdentityToV1();
+        seedCompatibleIdentityV1Data();
 
         try (var ignored = startIdentity(
                 "--moduvera.database.migration.mode=startup",
@@ -56,6 +58,7 @@ class IdentityMigrationStartupIT {
             assertThat(tenantColumnLength("identity_permission_assignment")).isEqualTo(64);
             assertThat(tenantColumnLength("identity_browser_session")).isEqualTo(64);
         }
+        assertCompatibleIdentityDataAndConstraints();
 
         try (var validated = startIdentity()) {
             var migration = validated.getBean(ModuveraDatabaseMigrationProperties.class);
@@ -114,6 +117,93 @@ class IdentityMigrationStartupIT {
                 .target(MigrationVersion.fromVersion("1"))
                 .load()
                 .migrate();
+    }
+
+    private static void seedCompatibleIdentityV1Data() throws SQLException {
+        execute("""
+                INSERT INTO identity_user(user_id, username, password_hash) VALUES
+                    ('compatible-user-a', 'compatible-a', 'hash-a'),
+                    ('compatible-user-b', 'compatible-b', 'hash-b')
+                """);
+        execute("""
+                INSERT INTO identity_tenant_membership(user_id, tenant_id) VALUES
+                    ('compatible-user-a', 'tenant-a'),
+                    ('compatible-user-b', 'tenant-b')
+                """);
+        execute("""
+                INSERT INTO identity_permission_assignment(user_id, tenant_id, permission)
+                VALUES ('compatible-user-a', 'tenant-a', 'catalog.read')
+                """);
+        execute("""
+                INSERT INTO identity_browser_session(
+                    token_hash, user_id, tenant_id, issued_at, expires_at, revoked)
+                VALUES (
+                    'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                    'compatible-user-a', 'tenant-a', CURRENT_TIMESTAMP,
+                    CURRENT_TIMESTAMP + INTERVAL '1 hour', FALSE)
+                """);
+    }
+
+    private static void assertCompatibleIdentityDataAndConstraints() throws SQLException {
+        assertThat(rowCount("identity_tenant_membership")).isEqualTo(2);
+        assertThat(rowCount("identity_permission_assignment")).isEqualTo(1);
+        assertThat(rowCount("identity_browser_session")).isEqualTo(1);
+        assertThat(membershipTenant("compatible-user-a")).isEqualTo("tenant-a");
+
+        assertSqlState(
+                "INSERT INTO identity_tenant_membership(user_id, tenant_id) "
+                        + "VALUES ('compatible-user-a', 'tenant-a')",
+                "23505");
+        assertSqlState(
+                "INSERT INTO identity_permission_assignment(user_id, tenant_id, permission) "
+                        + "VALUES ('compatible-user-a', 'tenant-a', 'catalog.read')",
+                "23505");
+        assertSqlState(
+                "INSERT INTO identity_browser_session("
+                        + "token_hash, user_id, tenant_id, issued_at, expires_at, revoked) VALUES ("
+                        + "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', "
+                        + "'compatible-user-a', 'tenant-a', CURRENT_TIMESTAMP, "
+                        + "CURRENT_TIMESTAMP + INTERVAL '1 hour', FALSE)",
+                "23505");
+
+        execute("INSERT INTO identity_permission_assignment(user_id, tenant_id, permission) "
+                + "VALUES ('compatible-user-b', 'tenant-b', 'catalog.read')");
+        execute("INSERT INTO identity_browser_session("
+                + "token_hash, user_id, tenant_id, issued_at, expires_at, revoked) VALUES ("
+                + "'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', "
+                + "'compatible-user-b', 'tenant-b', CURRENT_TIMESTAMP, "
+                + "CURRENT_TIMESTAMP + INTERVAL '1 hour', FALSE)");
+
+        assertSqlState(
+                "INSERT INTO identity_permission_assignment(user_id, tenant_id, permission) "
+                        + "VALUES ('compatible-user-a', 'tenant-b', 'invalid.cross-tenant')",
+                "23503");
+        assertSqlState(
+                "INSERT INTO identity_browser_session("
+                        + "token_hash, user_id, tenant_id, issued_at, expires_at, revoked) VALUES ("
+                        + "'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc', "
+                        + "'compatible-user-a', 'tenant-b', CURRENT_TIMESTAMP, "
+                        + "CURRENT_TIMESTAMP + INTERVAL '1 hour', FALSE)",
+                "23503");
+    }
+
+    private static void assertSqlState(String sql, String expectedSqlState) {
+        assertThatThrownBy(() -> execute(sql))
+                .isInstanceOf(SQLException.class)
+                .satisfies(exception -> assertThat(((SQLException) exception).getSQLState())
+                        .isEqualTo(expectedSqlState));
+    }
+
+    private static int rowCount(String table) throws SQLException {
+        try (var connection =
+                        DriverManager.getConnection(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
+                var statement = connection.createStatement();
+                var result = statement.executeQuery("SELECT COUNT(*) FROM " + table)) {
+            if (!result.next()) {
+                throw new SQLException("missing row count for " + table);
+            }
+            return result.getInt(1);
+        }
     }
 
     private static String membershipTenant(String user) throws SQLException {

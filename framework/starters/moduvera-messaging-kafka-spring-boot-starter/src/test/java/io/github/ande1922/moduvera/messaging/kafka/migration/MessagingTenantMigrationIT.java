@@ -50,23 +50,28 @@ class MessagingTenantMigrationIT {
     private static void verifyUpgradeContract(
             DataSource dataSource, String location, String schemaExpression, boolean mysql) {
         JdbcTemplate jdbc = new JdbcTemplate(dataSource);
-        reset(jdbc, mysql);
-        migrateToV1(dataSource, location);
-        insertInbox(jdbc, OVERLONG_TENANT, "overlong-message");
+        for (String table : new String[] {"inbox", "outbox"}) {
+            reset(jdbc, mysql);
+            migrateToV1(dataSource, location);
+            String message = "overlong-" + table + "-message";
+            insertTenantRow(jdbc, table, OVERLONG_TENANT, message);
 
-        assertThatThrownBy(() -> migrateLatest(dataSource, location))
-                .hasStackTraceContaining(
-                        "messaging tenant_id exceeds 64 characters; refusing to narrow persistence contract");
-        assertThat(inboxTenant(jdbc, "overlong-message")).isEqualTo(OVERLONG_TENANT);
-        assertTenantColumns(jdbc, schemaExpression, 128);
+            assertThatThrownBy(() -> migrateLatest(dataSource, location))
+                    .hasStackTraceContaining(
+                            "messaging tenant_id exceeds 64 characters; refusing to narrow persistence contract");
+            assertThat(tenantFor(jdbc, table, message)).isEqualTo(OVERLONG_TENANT);
+            assertTenantColumns(jdbc, schemaExpression, 128);
+        }
 
         reset(jdbc, mysql);
         migrateToV1(dataSource, location);
         insertInbox(jdbc, COMPATIBLE_TENANT, "compatible-message");
+        insertOutbox(jdbc, COMPATIBLE_TENANT, "compatible-outbox-message");
 
         migrateLatest(dataSource, location);
 
         assertThat(inboxTenant(jdbc, "compatible-message")).isEqualTo(COMPATIBLE_TENANT);
+        assertThat(outboxTenant(jdbc, "compatible-outbox-message")).isEqualTo(COMPATIBLE_TENANT);
         assertTenantColumns(jdbc, schemaExpression, 64);
         assertThatThrownBy(() -> insertInbox(jdbc, COMPATIBLE_TENANT, "compatible-message"))
                 .hasMessageContaining("moduvera_message_inbox");
@@ -95,11 +100,53 @@ class MessagingTenantMigrationIT {
                 message);
     }
 
+    private static void insertOutbox(JdbcTemplate jdbc, String tenant, String message) {
+        jdbc.update(
+                """
+                INSERT INTO moduvera_message_outbox(
+                    message_id, message_kind, message_type, source, destination, occurred_at,
+                    tenant_id, actor_type, actor_subject, correlation_id, causation_id,
+                    initiator_type, initiator_subject, partition_key, content_type, payload,
+                    status, next_attempt_at, attempt_count)
+                VALUES (?, 'EVENT', 'migration.test', 'migration-test', 'migration-test',
+                    CURRENT_TIMESTAMP, ?, 'USER', 'migration-test', ?, NULL,
+                    'USER', 'migration-test', ?, 'application/json', ?,
+                    'PENDING', CURRENT_TIMESTAMP, 0)
+                """,
+                message,
+                tenant,
+                "correlation-" + message,
+                "partition-" + message,
+                "{}".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    private static void insertTenantRow(
+            JdbcTemplate jdbc, String table, String tenant, String message) {
+        if (table.equals("inbox")) {
+            insertInbox(jdbc, tenant, message);
+        } else {
+            insertOutbox(jdbc, tenant, message);
+        }
+    }
+
     private static String inboxTenant(JdbcTemplate jdbc, String message) {
         return jdbc.queryForObject(
                 "SELECT tenant_id FROM moduvera_message_inbox WHERE message_id = ?",
                 String.class,
                 message);
+    }
+
+    private static String outboxTenant(JdbcTemplate jdbc, String message) {
+        return jdbc.queryForObject(
+                "SELECT tenant_id FROM moduvera_message_outbox WHERE message_id = ?",
+                String.class,
+                message);
+    }
+
+    private static String tenantFor(JdbcTemplate jdbc, String table, String message) {
+        return table.equals("inbox")
+                ? inboxTenant(jdbc, message)
+                : outboxTenant(jdbc, message);
     }
 
     private static void assertTenantColumns(

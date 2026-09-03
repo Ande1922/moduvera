@@ -39,6 +39,8 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import javax.sql.DataSource;
+import org.flywaydb.core.Flyway;
+import org.flywaydb.core.api.MigrationVersion;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -51,6 +53,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.junit.jupiter.Container;
@@ -245,12 +248,114 @@ class MySqlBusinessRepositoriesIT {
         assertThat(reconstructedSecond.result()).isEqualTo(secondDecision.result());
     }
 
+    @Test
+    void catalogMigrationRejectsOverlongV1DataBeforeNarrowingAndPreservesCompatibleData() {
+        String schema = "catalog_tenant_upgrade_test";
+        String overlongTenant = "t".repeat(65);
+        String compatibleTenant = "t".repeat(64);
+        JdbcTemplate upgradeJdbc = catalogUpgradeJdbc();
+        resetDatabase(upgradeJdbc, schema);
+        try {
+            migrateCatalogToV1(schema);
+            insertCatalogUpgradeProduct(upgradeJdbc, schema, overlongTenant, 1);
+
+            assertThatThrownBy(() -> migrateCatalogLatest(schema))
+                    .hasStackTraceContaining(
+                            "catalog tenant_id exceeds 64 characters; refusing to narrow persistence contract");
+            assertThat(catalogUpgradeTenant(upgradeJdbc, schema, 1)).isEqualTo(overlongTenant);
+            assertThat(catalogTenantColumnLength(upgradeJdbc, schema)).isEqualTo(128);
+
+            resetDatabase(upgradeJdbc, schema);
+            migrateCatalogToV1(schema);
+            insertCatalogUpgradeProduct(upgradeJdbc, schema, compatibleTenant, 2);
+
+            migrateCatalogLatest(schema);
+
+            assertThat(catalogUpgradeTenant(upgradeJdbc, schema, 2)).isEqualTo(compatibleTenant);
+            assertThat(catalogTenantColumnLength(upgradeJdbc, schema)).isEqualTo(64);
+        } finally {
+            upgradeJdbc.execute("DROP DATABASE IF EXISTS " + schema);
+        }
+    }
+
     private static void migrate(DatabaseMigrator migrator, String component, String location) {
         migrator.migrate(new MigrationPlan(new DatabaseComponent(component), List.of(location), true));
         assertThat(migrator.validate(
                                 new MigrationPlan(new DatabaseComponent(component), List.of(location), false))
                         .validationSuccessful)
                 .isTrue();
+    }
+
+    private void migrateCatalogToV1(String schema) {
+        catalogFlyway(schema, MigrationVersion.fromVersion("1")).migrate();
+    }
+
+    private void migrateCatalogLatest(String schema) {
+        catalogFlyway(schema, null).migrate();
+    }
+
+    private Flyway catalogFlyway(String schema, MigrationVersion target) {
+        var configuration = Flyway.configure()
+                .dataSource(catalogUpgradeDataSource())
+                .locations("classpath:db/migration/catalog-mysql")
+                .schemas(schema)
+                .defaultSchema(schema);
+        if (target != null) {
+            configuration.target(target);
+        }
+        return configuration.load();
+    }
+
+    private static DataSource catalogUpgradeDataSource() {
+        return new DriverManagerDataSource(
+                "jdbc:mysql://%s:%d/mysql".formatted(MYSQL.getHost(), MYSQL.getFirstMappedPort()),
+                "root",
+                MYSQL.getPassword());
+    }
+
+    private static JdbcTemplate catalogUpgradeJdbc() {
+        return new JdbcTemplate(catalogUpgradeDataSource());
+    }
+
+    private static void resetDatabase(JdbcTemplate upgradeJdbc, String schema) {
+        upgradeJdbc.execute("DROP DATABASE IF EXISTS " + schema);
+        upgradeJdbc.execute("CREATE DATABASE " + schema);
+    }
+
+    private static void insertCatalogUpgradeProduct(
+            JdbcTemplate upgradeJdbc, String schema, String tenant, long productId) {
+        upgradeJdbc.update(
+                """
+                INSERT INTO %s.catalog_product(
+                    tenant_id, product_id, name, unit_price, currency, version,
+                    created_at, created_by, updated_at, updated_by)
+                VALUES (?, ?, 'Legacy', 1.00, 'CNY', 0,
+                    CURRENT_TIMESTAMP, 'test', CURRENT_TIMESTAMP, 'test')
+                """
+                        .formatted(schema),
+                tenant,
+                productId);
+    }
+
+    private static String catalogUpgradeTenant(
+            JdbcTemplate upgradeJdbc, String schema, long productId) {
+        return upgradeJdbc.queryForObject(
+                "SELECT tenant_id FROM %s.catalog_product WHERE product_id = ?".formatted(schema),
+                String.class,
+                productId);
+    }
+
+    private static int catalogTenantColumnLength(JdbcTemplate upgradeJdbc, String schema) {
+        return upgradeJdbc.queryForObject(
+                """
+                SELECT character_maximum_length
+                  FROM information_schema.columns
+                 WHERE table_schema = ?
+                   AND table_name = 'catalog_product'
+                   AND column_name = 'tenant_id'
+                """,
+                Integer.class,
+                schema);
     }
 
     private void assertTenantColumnLength(String table) {
