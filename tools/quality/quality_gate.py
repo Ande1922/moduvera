@@ -14,6 +14,8 @@ from pathlib import Path, PurePosixPath
 import re
 import shlex
 import shutil
+import signal
+import stat
 import subprocess
 import sys
 import urllib.parse
@@ -21,16 +23,23 @@ import urllib.parse
 
 MAX_COMPLETED_RUNS = 20
 MAX_FAILURE_LINES = 20
+MAX_TAIL_BYTES = 64 * 1024
 MAX_SUMMARY_BYTES = 8192
 DOC_SUFFIXES = {".md"}
+PRIVATE_KEY_BEGIN = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----")
+PRIVATE_KEY_END = re.compile(r"-----END [A-Z0-9 ]*PRIVATE KEY-----")
+CREDENTIAL_KEY = (
+    r"(?:password|passwd|token|secret|api[_-]?key|client[_-]?secret|"
+    r"access[_-]?token|refresh[_-]?token)"
+)
 SECRET_PATTERNS = (
-    re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----"),
+    PRIVATE_KEY_BEGIN,
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
     re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"),
     re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"),
     re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{16,}"),
     re.compile(
-        r"(?i)\b(?:password|passwd|token|secret|api[_-]?key)\b\s*[:=]\s*"
+        rf"(?i)\b{CREDENTIAL_KEY}\b\s*[:=]\s*"
         r"['\"]?(?!\$\{|<|REDACTED|CHANGEME|example\b|dummy\b|test\b)"
         r"[A-Za-z0-9._~+/=-]{12,}"
     ),
@@ -39,7 +48,7 @@ REDACTIONS = (
     (re.compile(r"(?i)(\bBearer\s+)[A-Za-z0-9._~+/=-]+"), r"\1[REDACTED]"),
     (
         re.compile(
-            r"(?i)(\b(?:password|passwd|token|secret|api[_-]?key)\b\s*[:=]\s*)"
+            rf"(?i)(\b{CREDENTIAL_KEY}\b\s*[:=]\s*)"
             r"([^\s,;]+)"
         ),
         r"\1[REDACTED]",
@@ -225,59 +234,230 @@ def check_sensitive_content(repo: Path, base: str, head: str) -> None:
 
 
 def redact(text: str) -> str:
-    result = text
+    redacted_lines: list[str] = []
+    inside_private_key = False
+    for line in text.splitlines(keepends=True):
+        if inside_private_key:
+            if PRIVATE_KEY_END.search(line):
+                inside_private_key = False
+            continue
+        if PRIVATE_KEY_BEGIN.search(line):
+            ending = "\n" if line.endswith("\n") else ""
+            redacted_lines.append(f"[REDACTED_PRIVATE_KEY_BLOCK]{ending}")
+            inside_private_key = not bool(PRIVATE_KEY_END.search(line))
+            continue
+        redacted_lines.append(line)
+    result = "".join(redacted_lines)
     for pattern, replacement in REDACTIONS:
         result = pattern.sub(replacement, result)
     return result
 
 
+def ensure_pinned_checkout(repo: Path, head: str) -> None:
+    checked_out = resolve_commit(repo, "HEAD", "head")
+    if checked_out != head:
+        raise GateError(f"resolved head {head} does not match checked-out HEAD {checked_out}")
+    status_result = git(
+        repo,
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+        check=False,
+    )
+    if status_result.returncode != 0:
+        raise GateError(status_result.stderr.strip() or "cannot inspect checkout cleanliness")
+    if status_result.stdout:
+        entries = [entry for entry in status_result.stdout.split("\0") if entry]
+        bounded = ", ".join(entries[:20])
+        if len(entries) > 20:
+            bounded += f", ... ({len(entries) - 20} more)"
+        raise GateError(f"checkout must be clean and contain no untracked files: {bounded}")
+
+
+def _lstat(path: Path) -> os.stat_result | None:
+    try:
+        return path.lstat()
+    except FileNotFoundError:
+        return None
+
+
+def _ensure_directory(path: Path, parent: Path) -> None:
+    if path.parent != parent:
+        raise GateError(f"unsafe evidence directory parent: {path}")
+    state = _lstat(path)
+    if state is None:
+        path.mkdir(mode=0o700)
+        state = path.lstat()
+    if stat.S_ISLNK(state.st_mode) or not stat.S_ISDIR(state.st_mode):
+        raise GateError(f"evidence path must be a real directory: {path}")
+    if path.resolve(strict=True).parent != parent.resolve(strict=True):
+        raise GateError(f"evidence directory escapes its validated parent: {path}")
+    os.chmod(path, 0o700, follow_symlinks=False)
+
+
+def _validate_regular(path: Path, parent: Path) -> os.stat_result:
+    if path.parent != parent:
+        raise GateError(f"unsafe evidence file parent: {path}")
+    state = path.lstat()
+    if stat.S_ISLNK(state.st_mode) or not stat.S_ISREG(state.st_mode):
+        raise GateError(f"evidence path must be a real regular file: {path}")
+    if path.resolve(strict=True).parent != parent.resolve(strict=True):
+        raise GateError(f"evidence file escapes its validated parent: {path}")
+    return state
+
+
+def _open_new_private(path: Path, parent: Path):
+    if path.parent != parent:
+        raise GateError(f"unsafe evidence file parent: {path}")
+    _ensure_directory(parent, parent.parent)
+    parent_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    parent_descriptor = os.open(parent, parent_flags)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path.name, flags, 0o600, dir_fd=parent_descriptor)
+    finally:
+        os.close(parent_descriptor)
+    state = os.fstat(descriptor)
+    if not stat.S_ISREG(state.st_mode):
+        os.close(descriptor)
+        raise GateError(f"new evidence path is not a regular file: {path}")
+    return os.fdopen(descriptor, "w", encoding="utf-8")
+
+
+def _open_existing_private(path: Path, parent: Path, mode: str):
+    _validate_regular(path, parent)
+    parent_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    parent_descriptor = os.open(parent, parent_flags)
+    access_flags = os.O_RDONLY if mode == "rb" else os.O_WRONLY | os.O_APPEND
+    try:
+        descriptor = os.open(
+            path.name,
+            access_flags | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=parent_descriptor,
+        )
+    finally:
+        os.close(parent_descriptor)
+    state = os.fstat(descriptor)
+    if not stat.S_ISREG(state.st_mode):
+        os.close(descriptor)
+        raise GateError(f"evidence path is not a regular file: {path}")
+    if mode == "rb":
+        return os.fdopen(descriptor, "rb")
+    return os.fdopen(descriptor, "a", encoding="utf-8")
+
+
+def _validate_run_tree(run: Path, runs: Path) -> None:
+    _ensure_directory(run, runs)
+    for current_root, directory_names, file_names in os.walk(run, followlinks=False):
+        current = Path(current_root)
+        for name in [*directory_names, *file_names]:
+            child = current / name
+            state = child.lstat()
+            if stat.S_ISLNK(state.st_mode):
+                raise GateError(f"symlinked evidence run component is forbidden: {child}")
+            if child.resolve(strict=True).is_relative_to(run.resolve(strict=True)) is False:
+                raise GateError(f"evidence run component escapes run directory: {child}")
+
+
 class Evidence:
     def __init__(self, repo: Path) -> None:
-        self.repo = repo
-        self.root = repo / ".quality-gate"
+        self.repo = repo.resolve(strict=True)
+        self.root = self.repo / ".quality-gate"
         self.runs = self.root / "runs"
         old_umask = os.umask(0o077)
         try:
-            self.runs.mkdir(parents=True, exist_ok=True, mode=0o700)
-            os.chmod(self.root, 0o700)
-            os.chmod(self.runs, 0o700)
+            _ensure_directory(self.root, self.repo)
+            _ensure_directory(self.runs, self.root)
+            latest = self.root / "latest"
+            if _lstat(latest) is not None:
+                _validate_regular(latest, self.root)
+            for existing in self.runs.iterdir():
+                state = existing.lstat()
+                if stat.S_ISLNK(state.st_mode) or not stat.S_ISDIR(state.st_mode):
+                    raise GateError(f"invalid evidence run component: {existing}")
+                _validate_run_tree(existing, self.runs)
             stamp = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%S.%fZ")
             self.run_id = f"{stamp}-{os.getpid()}"
             self.run_dir = self.runs / self.run_id
-            self.run_dir.mkdir(mode=0o700)
+            _ensure_directory(self.run_dir, self.runs)
             self.log_path = self.run_dir / "full.log"
             self.summary_path = self.run_dir / "summary.txt"
-            self.log_path.touch(mode=0o600)
+            with _open_new_private(self.log_path, self.run_dir):
+                pass
             self._update_latest()
         finally:
             os.umask(old_umask)
 
     def _update_latest(self) -> None:
         temporary = self.root / f".latest-{os.getpid()}"
-        temporary.unlink(missing_ok=True)
-        temporary.symlink_to(f"runs/{self.run_id}")
+        if _lstat(temporary) is not None:
+            raise GateError(f"unexpected evidence pointer temporary exists: {temporary}")
+        with _open_new_private(temporary, self.root) as pointer:
+            pointer.write(f"{self.run_id}\n")
+        latest = self.root / "latest"
+        if _lstat(latest) is not None:
+            _validate_regular(latest, self.root)
         os.replace(temporary, self.root / "latest")
+        _validate_regular(latest, self.root)
 
     def complete(self, summary: str) -> None:
         encoded = redact(summary).encode("utf-8", "replace")[:MAX_SUMMARY_BYTES]
         if len(encoded) == MAX_SUMMARY_BYTES:
             encoded = encoded.rsplit(b"\n", 1)[0] + b"\n[summary truncated]\n"
-        self.summary_path.write_bytes(encoded)
-        os.chmod(self.summary_path, 0o600)
+        with _open_new_private(self.summary_path, self.run_dir) as summary_file:
+            summary_file.buffer.write(encoded)
         marker = self.run_dir / "completed"
-        marker.write_text("complete\n", encoding="utf-8")
-        os.chmod(marker, 0o600)
+        with _open_new_private(marker, self.run_dir) as completed_file:
+            completed_file.write("complete\n")
         self.prune()
 
     def prune(self) -> None:
-        completed = sorted(
-            path for path in self.runs.iterdir() if path.is_dir() and (path / "completed").is_file()
-        )
+        completed: list[Path] = []
+        for path in sorted(self.runs.iterdir()):
+            _validate_run_tree(path, self.runs)
+            marker = path / "completed"
+            if _lstat(marker) is not None:
+                _validate_regular(marker, path)
+                completed.append(path)
         removable = [path for path in completed if path != self.run_dir]
         while len(completed) > MAX_COMPLETED_RUNS and removable:
             victim = removable.pop(0)
+            _validate_run_tree(victim, self.runs)
             shutil.rmtree(victim)
             completed.remove(victim)
+
+
+class GateInterrupted(GateError):
+    def __init__(self, signum: int) -> None:
+        super().__init__(f"interrupted by {signal.Signals(signum).name}")
+        self.signum = signum
+
+
+def bounded_tail(path: Path, max_lines: int = MAX_FAILURE_LINES) -> list[str]:
+    with _open_existing_private(path, path.parent, "rb") as stream:
+        stream.seek(0, os.SEEK_END)
+        size = stream.tell()
+        stream.seek(max(0, size - MAX_TAIL_BYTES))
+        content = stream.read(MAX_TAIL_BYTES)
+    return content.decode("utf-8", "replace").splitlines()[-max_lines:]
+
+
+def _terminate_process_group(process: subprocess.Popen[str], signum: int = signal.SIGTERM) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        os.killpg(process.pid, signum)
+    except ProcessLookupError:
+        return
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
 
 
 class Runner:
@@ -287,33 +467,63 @@ class Runner:
         self.results: list[tuple[str, int, list[str]]] = []
 
     def step(self, name: str, command: list[str], env: dict[str, str] | None = None) -> bool:
-        with self.evidence.log_path.open("a", encoding="utf-8") as log:
+        process: subprocess.Popen[str] | None = None
+        with _open_existing_private(self.evidence.log_path, self.evidence.run_dir, "a") as log:
             log.write(f"\n=== {name} ===\n$ {shlex.join(command)}\n")
             log.flush()
-            result = subprocess.run(
+            process = subprocess.Popen(
                 command,
                 cwd=self.repo,
                 env=env,
                 text=True,
                 stdout=log,
                 stderr=subprocess.STDOUT,
-                check=False,
+                start_new_session=True,
             )
-        tail = self.evidence.log_path.read_text(encoding="utf-8", errors="replace").splitlines()
-        excerpt = tail[-MAX_FAILURE_LINES:] if result.returncode else []
-        self.results.append((name, result.returncode, excerpt))
-        return result.returncode == 0
+            try:
+                return_code = process.wait()
+            except GateInterrupted as interrupted:
+                _terminate_process_group(process, interrupted.signum)
+                self.results.append(
+                    (name, 128 + interrupted.signum, bounded_tail(self.evidence.log_path))
+                )
+                raise
+            except BaseException:
+                _terminate_process_group(process)
+                raise
+            finally:
+                if process.poll() is None:
+                    _terminate_process_group(process)
+        excerpt = bounded_tail(self.evidence.log_path) if return_code else []
+        self.results.append((name, return_code, excerpt))
+        return return_code == 0
 
 
-def extension_commands(repo: Path, groups: tuple[str, ...]) -> list[tuple[str, list[str]]]:
+def extension_commands(repo: Path, head: str, groups: tuple[str, ...]) -> list[tuple[str, list[str]]]:
     commands: list[tuple[str, list[str]]] = []
     for group in groups:
-        directory = repo / "tools" / "quality" / "checks.d" / group
-        if not directory.is_dir():
-            continue
-        for path in sorted(directory.iterdir()):
-            if path.is_file() and os.access(path, os.X_OK):
-                commands.append((f"extension:{group}/{path.name}", [str(path)]))
+        prefix = f"tools/quality/checks.d/{group}"
+        listing = git(repo, "ls-tree", "-r", "-z", head, "--", prefix, check=False)
+        if listing.returncode != 0:
+            raise GateError(listing.stderr.strip() or f"cannot inspect {prefix} extensions")
+        records = [item for item in listing.stdout.split("\0") if item]
+        for record in sorted(records, key=lambda item: item.partition("\t")[2]):
+            metadata, relative = record.split("\t", 1)
+            mode, object_type, _object_id = metadata.split(" ", 2)
+            relative_path = PurePosixPath(relative)
+            if relative_path.parent.as_posix() != prefix or relative_path.name.startswith("."):
+                continue
+            if mode != "100755" or object_type != "blob":
+                raise GateError(f"committed extension must be a regular 100755 file: {relative}")
+            path = repo / relative
+            state = path.lstat()
+            if stat.S_ISLNK(state.st_mode) or not stat.S_ISREG(state.st_mode):
+                raise GateError(f"extension working path must be a regular file: {relative}")
+            if not path.resolve(strict=True).is_relative_to(repo.resolve(strict=True)):
+                raise GateError(f"extension escapes repository: {relative}")
+            if not os.access(path, os.X_OK):
+                raise GateError(f"extension working path is not executable: {relative}")
+            commands.append((f"extension:{group}/{relative_path.name}", [str(path)]))
     return commands
 
 
@@ -351,18 +561,32 @@ def gate(arguments: list[str]) -> int:
     options = parser.parse_args(arguments)
 
     repo = Path(__file__).resolve().parents[2]
-    evidence = Evidence(repo)
+    try:
+        evidence = Evidence(repo)
+    except (GateError, OSError) as error:
+        print(f"quality gate cannot create safe evidence: {error}", file=sys.stderr)
+        return 1
     base_display = options.base or "UNRESOLVED(missing)"
     head_display = options.head
     profile = "normal"
     reason = "fail-closed before classification"
     runner = Runner(evidence, repo)
     failure: str | None = None
+    interrupted_signum: int | None = None
+    watched_signals = (signal.SIGINT, signal.SIGTERM)
+    previous_handlers = {signum: signal.getsignal(signum) for signum in watched_signals}
+
+    def interrupt(signum: int, _frame: object) -> None:
+        raise GateInterrupted(signum)
+
+    for signum in watched_signals:
+        signal.signal(signum, interrupt)
     try:
         base = resolve_commit(repo, options.base or "", "base")
         head = resolve_commit(repo, options.head, "head")
         base_display = base
         head_display = head
+        ensure_pinned_checkout(repo, head)
         selected, classified_reason, entries = classify(repo, base, head)
         if options.mode == "normal":
             profile = "normal"
@@ -382,6 +606,8 @@ def gate(arguments: list[str]) -> int:
             }
         )
         core = str(Path(__file__).resolve())
+        common_extensions = extension_commands(repo, head, ("common",))
+        normal_extensions = extension_commands(repo, head, ("normal",)) if profile == "normal" else []
         steps: list[tuple[str, list[str], dict[str, str] | None]] = [
             ("gate-self-tests", [str(repo / "tools/quality/test/run-tests.sh")], environment),
             ("diff-whitespace", ["git", "diff", "--check", base, head], environment),
@@ -403,7 +629,7 @@ def gate(arguments: list[str]) -> int:
         ]
         steps.extend(
             (name, command, environment)
-            for name, command in extension_commands(repo, ("common",))
+            for name, command in common_extensions
         )
         for name, command, env in steps:
             if not runner.step(name, command, env):
@@ -413,15 +639,21 @@ def gate(arguments: list[str]) -> int:
             if not runner.step("maven-clean-verify", ["./mvnw", "-B", "-ntp", "clean", "verify"], environment):
                 failure = "step failed: maven-clean-verify"
             else:
-                for name, command in extension_commands(repo, ("normal",)):
+                for name, command in normal_extensions:
                     if not runner.step(name, command, environment):
                         failure = f"step failed: {name}"
                         break
         del entries
+    except GateInterrupted as interrupted:
+        interrupted_signum = interrupted.signum
+        failure = str(interrupted)
     except (GateError, OSError) as error:
         failure = str(error)
+    finally:
+        for signum in watched_signals:
+            signal.signal(signum, signal.SIG_IGN)
 
-    status_text = "PASS" if failure is None else "FAIL"
+    status_text = "PASS" if failure is None else ("INTERRUPTED" if interrupted_signum else "FAIL")
     lines = [
         f"status: {status_text}",
         f"mode: {options.mode}",
@@ -441,8 +673,15 @@ def gate(arguments: list[str]) -> int:
     if failure:
         lines.append(f"failure: {failure}")
     summary = "\n".join(lines) + "\n"
-    evidence.complete(summary)
-    print(evidence.summary_path.read_text(encoding="utf-8"), end="")
+    try:
+        evidence.complete(summary)
+        with _open_existing_private(evidence.summary_path, evidence.run_dir, "rb") as summary_file:
+            print(summary_file.read().decode("utf-8", "replace"), end="")
+    finally:
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
+    if interrupted_signum:
+        return 128 + interrupted_signum
     return 0 if failure is None else 1
 
 

@@ -15,6 +15,11 @@ or mixed changes select Normal. `normal` is an explicit upgrade and
 cannot be used to skip work. An absent or unresolvable base fails closed and
 creates a new failed evidence run.
 
+Official evidence runs only from a clean checkout whose `HEAD` exactly matches
+the resolved `--head`. Staged, unstaged, or non-ignored untracked paths stop
+the gate before any check executes. This pins the scripts, Maven wrapper, and
+inputs used by the recorded commit.
+
 Both profiles run the gate self-tests, `git diff --check`, changed-Markdown
 local-link checks, project Skill structure checks, and a high-confidence scan
 of added content for credentials. Normal additionally runs exactly
@@ -28,6 +33,9 @@ Later repository checks plug into executable files under these stable seams:
   Changed-code coverage and CRAP scoring belong here so they can consume only
   reports produced by the current run.
 
+Only direct extension files committed at the resolved head as regular
+executable (`100755`) blobs are loaded. Untracked, symbolic, out-of-tree, or
+non-executable extension candidates fail closed rather than execute.
 Extensions receive `QUALITY_GATE_BASE`, `QUALITY_GATE_HEAD`,
 `QUALITY_GATE_REF`, `QUALITY_GATE_PROFILE`, and `QUALITY_GATE_RUN_DIR`. They
 must be deterministic and return non-zero on failure. The orchestrator runs
@@ -35,8 +43,10 @@ them in bytewise filename order and preserves their complete output.
 
 Evidence is written beneath the Git-ignored `.quality-gate/runs/<run-id>/`.
 Directories are mode `0700`; the full log and bounded, redacted summary are
-mode `0600`. `.quality-gate/latest` points to the newest attempt, including a
-failed base-resolution attempt. Only the newest 20 completed runs are kept.
+mode `0600`. Symlinked evidence components are rejected before use.
+`.quality-gate/latest` is a private regular file containing the run ID of the
+newest attempt, including a failed base-resolution attempt. Only the newest 20
+completed runs are kept.
 The terminal prints only the bounded redacted summary; inspect `full.log`
 locally when more detail is required.
 

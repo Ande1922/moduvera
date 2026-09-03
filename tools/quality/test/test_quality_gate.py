@@ -4,9 +4,11 @@ import importlib.util
 import os
 from pathlib import Path
 import shutil
+import signal
 import stat
 import subprocess
 import tempfile
+import time
 import unittest
 
 
@@ -119,6 +121,29 @@ class QualityGatePolicyTest(unittest.TestCase):
             quality_gate.check_sensitive_content(self.fixture.root, self.base, head)
         self.assertNotIn(secret, str(caught.exception))
 
+    def test_common_credential_key_forms_are_scanned_and_redacted(self) -> None:
+        value = "credential-" + "value-1234567890"
+        keys = ("client_secret", "client-secret", "access_token", "access-token", "refresh_token")
+        self.fixture.write("notes.md", "".join(f"{key}={value}\n" for key in keys))
+        head = self.fixture.commit("credentials")
+        with self.assertRaises(quality_gate.GateError) as caught:
+            quality_gate.check_sensitive_content(self.fixture.root, self.base, head)
+        self.assertNotIn(value, str(caught.exception))
+        redacted = quality_gate.redact("".join(f"{key}={value}\n" for key in keys))
+        self.assertNotIn(value, redacted)
+        for key in keys:
+            self.assertIn(f"{key}=[REDACTED]", redacted)
+
+    def test_private_key_redaction_removes_entire_multiline_block(self) -> None:
+        begin = "-----BEGIN " + "PRIVATE KEY-----"
+        end = "-----END " + "PRIVATE KEY-----"
+        payload = "c2Vuc2l0aXZlLXByaXZhdGUta2V5"
+        result = quality_gate.redact(f"before\n{begin}\n{payload}\n{end}\nafter\n")
+        self.assertEqual("before\n[REDACTED_PRIVATE_KEY_BLOCK]\nafter\n", result)
+        self.assertNotIn(begin, result)
+        self.assertNotIn(payload, result)
+        self.assertNotIn(end, result)
+
     def test_unresolvable_base_fails_closed(self) -> None:
         with self.assertRaises(quality_gate.GateError):
             quality_gate.resolve_commit(self.fixture.root, "missing-revision", "base")
@@ -140,6 +165,11 @@ class QualityGateEvidenceTest(unittest.TestCase):
         runner.chmod(0o755)
         gate = target / "quality-gate.sh"
         gate.chmod(0o755)
+        self.fixture.write(".gitignore", ".quality-gate/\n.maven-args\n")
+
+    def latest_run(self) -> Path:
+        run_id = (self.fixture.root / ".quality-gate/latest").read_text().strip()
+        return self.fixture.root / ".quality-gate/runs" / run_id
 
     def run_gate(self, *arguments: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -152,20 +182,36 @@ class QualityGateEvidenceTest(unittest.TestCase):
 
     def test_docs_only_gate_has_private_evidence_and_redacted_bounded_failure(self) -> None:
         self.install_gate()
-        self.base = self.fixture.commit("install gate")
-        self.fixture.write("guide.md", "# Guide\n")
-        head = self.fixture.commit("docs")
         extension = self.fixture.root / "tools/quality/checks.d/common/10-fail.sh"
         extension.parent.mkdir(parents=True, exist_ok=True)
         exposed = "Bear" + "er very-secret-token-1234567890"
-        extension.write_text(f"#!/usr/bin/env bash\necho '{exposed}'\nexit 7\n", encoding="utf-8")
+        pem_begin = "-----BEGIN " + "PRIVATE KEY-----"
+        pem_end = "-----END " + "PRIVATE KEY-----"
+        pem_payload = "cHJpdmF0ZS1rZXktcGF5bG9hZA=="
+        client_value = "client-value-1234567890"
+        extension.write_text(
+            "#!/usr/bin/env bash\n"
+            f"printf '%s\\n' '{exposed}' '{pem_begin}' '{pem_payload}' '{pem_end}' "
+            f"'client_secret={client_value}'\n"
+            "exit 7\n",
+            encoding="utf-8",
+        )
         extension.chmod(0o755)
+        self.base = self.fixture.commit("install gate and extension")
+        self.fixture.write("guide.md", "# Guide\n")
+        head = self.fixture.commit("docs")
         result = self.run_gate("auto", "--base", self.base, "--head", head, "--ref", "fixture")
         self.assertNotEqual(0, result.returncode)
         self.assertIn("profile: docs-only", result.stdout)
         self.assertNotIn("very-secret-token", result.stdout)
         self.assertIn("Bearer [REDACTED]", result.stdout)
-        latest = (self.fixture.root / ".quality-gate/latest").resolve()
+        self.assertNotIn(pem_begin, result.stdout)
+        self.assertNotIn(pem_payload, result.stdout)
+        self.assertNotIn(pem_end, result.stdout)
+        self.assertIn("[REDACTED_PRIVATE_KEY_BLOCK]", result.stdout)
+        self.assertNotIn(client_value, result.stdout)
+        self.assertIn("client_secret=[REDACTED]", result.stdout)
+        latest = self.latest_run()
         self.assertEqual(
             0o700, stat.S_IMODE((self.fixture.root / ".quality-gate").stat().st_mode)
         )
@@ -191,9 +237,6 @@ class QualityGateEvidenceTest(unittest.TestCase):
 
     def test_normal_gate_runs_exact_clean_verify_and_post_maven_extension(self) -> None:
         self.install_gate()
-        self.base = self.fixture.commit("install gate")
-        self.fixture.write("src.txt", "code\n")
-        head = self.fixture.commit("code")
         mvnw = self.fixture.root / "mvnw"
         mvnw.write_text(
             "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" > .maven-args\n",
@@ -204,6 +247,9 @@ class QualityGateEvidenceTest(unittest.TestCase):
         extension.parent.mkdir(parents=True, exist_ok=True)
         extension.write_text("#!/usr/bin/env bash\ntest -f .maven-args\n", encoding="utf-8")
         extension.chmod(0o755)
+        self.base = self.fixture.commit("install gate and normal extension")
+        self.fixture.write("src.txt", "code\n")
+        head = self.fixture.commit("code")
         result = self.run_gate("normal", "--base", self.base, "--head", head)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertEqual("-B -ntp clean verify\n", (self.fixture.root / ".maven-args").read_text())
@@ -214,6 +260,62 @@ class QualityGateEvidenceTest(unittest.TestCase):
         result = self.run_gate("docs-only", "--base", self.base)
         self.assertEqual(2, result.returncode)
         self.assertIn("auto or normal", result.stderr)
+
+    def test_dirty_tracked_checkout_is_rejected_before_steps(self) -> None:
+        self.install_gate()
+        self.base = self.fixture.commit("install gate")
+        self.fixture.write("guide.md", "# Guide\n")
+        head = self.fixture.commit("docs")
+        self.fixture.write("README.md", "# Dirty fixture\n")
+        result = self.run_gate("auto", "--base", self.base, "--head", head)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("checkout must be clean", result.stdout)
+        self.assertNotIn("gate-self-tests: PASS", result.stdout)
+
+    def test_untracked_extension_is_rejected_instead_of_executed(self) -> None:
+        self.install_gate()
+        self.base = self.fixture.commit("install gate")
+        self.fixture.write("guide.md", "# Guide\n")
+        head = self.fixture.commit("docs")
+        marker = self.fixture.root / "untracked-extension-ran"
+        extension = self.fixture.root / "tools/quality/checks.d/common/10-untracked"
+        extension.write_text(f"#!/usr/bin/env bash\ntouch '{marker}'\n", encoding="utf-8")
+        extension.chmod(0o755)
+        result = self.run_gate("auto", "--base", self.base, "--head", head)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("checkout must be clean", result.stdout)
+        self.assertFalse(marker.exists())
+
+    def test_head_must_match_checked_out_commit(self) -> None:
+        self.install_gate()
+        self.base = self.fixture.commit("install gate")
+        self.fixture.write("guide.md", "# Guide\n")
+        self.fixture.commit("docs")
+        result = self.run_gate("auto", "--base", self.base, "--head", self.base)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("does not match checked-out HEAD", result.stdout)
+
+    def test_committed_symlink_extension_outside_repository_is_rejected(self) -> None:
+        self.install_gate()
+        with tempfile.TemporaryDirectory() as outside:
+            target = Path(outside) / "external-extension"
+            target.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+            extension = self.fixture.root / "tools/quality/checks.d/common/10-linked"
+            os.symlink(target, extension)
+            self.base = self.fixture.commit("install symlink extension")
+            result = self.run_gate("normal", "--base", self.base, "--head", self.base)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("committed extension must be a regular 100755 file", result.stdout)
+
+    def test_committed_non_executable_extension_is_rejected(self) -> None:
+        self.install_gate()
+        extension = self.fixture.root / "tools/quality/checks.d/common/10-not-executable"
+        extension.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+        extension.chmod(0o644)
+        self.base = self.fixture.commit("install non-executable extension")
+        result = self.run_gate("normal", "--base", self.base, "--head", self.base)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("committed extension must be a regular 100755 file", result.stdout)
 
     def test_only_twenty_completed_runs_are_retained(self) -> None:
         root = self.fixture.root / ".quality-gate/runs"
@@ -234,9 +336,110 @@ class QualityGateEvidenceTest(unittest.TestCase):
         first.complete("status: PASS\n")
         result = self.run_gate("auto", "--base", "not-a-revision")
         self.assertNotEqual(0, result.returncode)
-        latest = (self.fixture.root / ".quality-gate/latest").resolve()
+        latest = self.latest_run()
         self.assertNotEqual(first.run_dir, latest)
         self.assertIn("status: FAIL", (latest / "summary.txt").read_text())
+
+    def test_interruption_terminates_child_and_completes_evidence(self) -> None:
+        self.install_gate()
+        extension = self.fixture.root / "tools/quality/checks.d/common/10-wait"
+        extension.write_text(
+            "#!/usr/bin/env bash\n"
+            "echo $$ > \"$QUALITY_GATE_RUN_DIR/child.pid\"\n"
+            "exec sleep 60\n",
+            encoding="utf-8",
+        )
+        extension.chmod(0o755)
+        self.base = self.fixture.commit("install waiting extension")
+        self.fixture.write("guide.md", "# Guide\n")
+        head = self.fixture.commit("docs")
+        process = subprocess.Popen(
+            [
+                str(self.fixture.root / "tools/quality/quality-gate.sh"),
+                "auto",
+                "--base",
+                self.base,
+                "--head",
+                head,
+            ],
+            cwd=self.fixture.root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        child_pid_path: Path | None = None
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            latest_pointer = self.fixture.root / ".quality-gate/latest"
+            if latest_pointer.is_file():
+                run_id = latest_pointer.read_text().strip()
+                candidate = self.fixture.root / ".quality-gate/runs" / run_id / "child.pid"
+                if candidate.is_file():
+                    child_pid_path = candidate
+                    break
+            time.sleep(0.05)
+        self.assertIsNotNone(child_pid_path, "waiting extension did not start")
+        assert child_pid_path is not None
+        child_pid = int(child_pid_path.read_text().strip())
+        os.kill(process.pid, signal.SIGTERM)
+        stdout, stderr = process.communicate(timeout=10)
+        self.assertEqual(128 + signal.SIGTERM, process.returncode, stdout + stderr)
+        self.assertIn("status: INTERRUPTED", stdout)
+        run_dir = child_pid_path.parent
+        self.assertTrue((run_dir / "completed").is_file())
+        with self.assertRaises(ProcessLookupError):
+            os.kill(child_pid, 0)
+
+
+class EvidencePathSafetyTest(unittest.TestCase):
+    def test_symlinked_evidence_components_never_mutate_external_target(self) -> None:
+        for scenario in ("root", "runs", "latest", "run"):
+            with self.subTest(scenario=scenario):
+                fixture = RepositoryFixture()
+                self.addCleanup(fixture.close)
+                with tempfile.TemporaryDirectory() as outside_text:
+                    outside = Path(outside_text)
+                    sentinel = outside / "sentinel"
+                    sentinel.write_text("unchanged\n", encoding="utf-8")
+                    quality_root = fixture.root / ".quality-gate"
+                    if scenario == "root":
+                        os.symlink(outside, quality_root)
+                    else:
+                        quality_root.mkdir()
+                        if scenario == "runs":
+                            os.symlink(outside, quality_root / "runs")
+                        else:
+                            runs = quality_root / "runs"
+                            runs.mkdir()
+                            if scenario == "latest":
+                                os.symlink(sentinel, quality_root / "latest")
+                            else:
+                                os.symlink(outside, runs / "20000101T000000.000000Z-1")
+                    before = {
+                        path.name: (path.read_bytes(), stat.S_IMODE(path.stat().st_mode))
+                        for path in outside.iterdir()
+                    }
+                    with self.assertRaises(quality_gate.GateError):
+                        quality_gate.Evidence(fixture.root)
+                    after = {
+                        path.name: (path.read_bytes(), stat.S_IMODE(path.stat().st_mode))
+                        for path in outside.iterdir()
+                    }
+                    self.assertEqual(before, after)
+
+
+class BoundedTailTest(unittest.TestCase):
+    def test_tail_reads_only_bounded_suffix(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "large.log"
+            prefix = "not-in-tail\n" * (quality_gate.MAX_TAIL_BYTES * 3 // 12)
+            suffix = "".join(f"tail-{index}\n" for index in range(30))
+            path.write_text(prefix + suffix, encoding="utf-8")
+            tail = quality_gate.bounded_tail(path)
+        self.assertEqual(quality_gate.MAX_FAILURE_LINES, len(tail))
+        self.assertEqual("tail-10", tail[0])
+        self.assertEqual("tail-29", tail[-1])
+        self.assertNotIn("not-in-tail", tail)
 
 
 if __name__ == "__main__":
