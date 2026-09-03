@@ -11,3 +11,9 @@
 - [x] Monolith 为 Order 公共 Controller 恰好增加一次 `/api/order` 前缀；Catalog Internal Controller、Actuator 与其他内部端点不被公共前缀改写。
 - [x] Gateway 的组合目标模式保留完整公共路径，而 Identity 仍按独立服务规则去前缀。
 - [x] Monolith integration tests 覆盖 Local Catalog 选择、确认/拒绝、重复交付、bounded Eventually 与 Kafka 故障恢复。
+
+## Answer
+
+由 `ea72d7d` 实现。`app-monolith` 显式组合 Local Catalog、Order/Inventory
+Application、Persistence 与服务拥有的 Inbound Adapter，并由真实
+PostgreSQL/Kafka integration tests 验证确认、拒绝、重复交付和恢复。

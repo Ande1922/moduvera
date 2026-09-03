@@ -15,3 +15,8 @@
 - [x] 多个公共订单并发竞争有限库存时，确认总量不超过库存、库存不为负，失败订单为 `REJECTED`，且多行预留全成或全回滚。
 - [x] 架构测试禁止 Domain/Application 直接操作 ThreadLocal、ScopedValue、Executor context wrapper 或 `ExecutionContextHolder`；传播机制留在系统入口和平台基础设施 seam。
 
+## Answer
+
+由 `71d3f37` 完成。Execution Context capture/restore、平台线程与虚拟线程
+隔离、异常清理和并发库存条件更新均有测试验证；架构规则禁止业务核心直接
+依赖上下文载体，跨租户读写继续 fail closed。

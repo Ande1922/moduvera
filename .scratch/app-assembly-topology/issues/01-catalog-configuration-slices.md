@@ -10,3 +10,9 @@
 - [x] Local `CatalogApi`、MyBatis `ProductRepository` 与 Internal Controller 由不同配置入口激活；未导入某个 slice 时不会连带激活该能力。
 - [x] Repository 业务端口保持 Spring/MyBatis 中立，具体 Persistence Adapter 通过显式 configuration binding 注册。
 - [x] 不新增 Maven artifact，不改变 Catalog Internal HTTP 路径或数据库所有权。
+
+## Answer
+
+由 `ea72d7d` 实现。Catalog 的 Application、Persistence 与 Internal HTTP
+configuration slices 及其聚焦测试均已提交；当前仓库验证继续覆盖独立 App
+装配、鉴权、租户隔离和稳定 HTTP 契约。

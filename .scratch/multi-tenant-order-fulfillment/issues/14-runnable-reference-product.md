@@ -15,3 +15,9 @@
 - [x] supported surface 只有一个当前状态来源，并按 consumer evidence 更新 supported、incubating、planned 和 deferred；BOM 管理坐标不等于能力启用。
 - [x] 架构、dependency convergence、production/test-support 隔离和“新增 Maven 模块必须有真实 consumer”门禁全部通过。
 - [x] 新业务开发者或 AI 能从参考成品实现相邻用例，而无需在业务代码中理解 TenantLine、JWT claim、Kafka header、Flyway history、Outbox lease 或 MyBatis-Plus Wrapper。
+
+## Answer
+
+由 `71d3f37` 交付可运行参考产品、公共 HTTP 黑盒验收和支持范围文档，随后
+`ea72d7d` 补齐共享双拓扑验证。验证 harness 使用真实 PostgreSQL/Kafka、
+隔离 Run ID 和有界 Eventually 断言，并提供不泄露凭据的失败诊断。

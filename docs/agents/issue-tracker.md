@@ -21,6 +21,13 @@ When a skill says to publish to the issue tracker, create a file under `.scratch
 - Blocking uses `Blocked by: NN, NN`; a ticket is unblocked when every listed ticket is `resolved` or `wontfix`.
 - Claim a ticket by setting `Status: claimed`; resolve it by appending `## Answer`, setting `Status: resolved`, and linking the decision from the map.
 
+Run `python3 tools/tracker/check.py` after tracker edits. The checker accepts the
+legacy bold metadata form, but fails closed on missing or cyclic local blockers,
+invalid type/status combinations, stale blocked/unblocked states, non-terminal
+children beneath a resolved spec, and resolved issues without completed
+acceptance items and verification evidence in their Answer. The common quality
+gate extension runs the same checker for both docs-only and Normal profiles.
+
 ## System reviews
 
 System audits live under `.scratch/review-<YYYY-MM-DD>-<slug>/`. Follow `review-workflow.md` to publish, verify, plan, and close them. Findings use finding states rather than issue execution states.

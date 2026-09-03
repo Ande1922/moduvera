@@ -13,3 +13,9 @@
 - [x] 通过真实 HTTP 创建库存充足与库存不足订单，并使用 bounded Eventually assertion 查询到两种最终状态。
 - [x] 订单保留创建时的产品名称、单价、数量和币种快照，最终状态变化不重新读取 Catalog。
 - [x] Correlation、causation、tenant、service actor 与 original initiator 在 HTTP、两次消息和结果查询链路可关联。
+
+## Answer
+
+由平台交付提交 `71d3f37` 完成。Order 与 Inventory 的 provider-owned 消息
+契约、Outbox/Inbox 事务边界及状态机均已落地；真实 Kafka/PostgreSQL App
+测试验证确认、拒绝、重复交付、快照和可信上下文传播。

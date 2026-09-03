@@ -1,4 +1,4 @@
-Status: ready-for-agent
+Status: resolved
 
 # 收紧异步库存预占的 Service API 与适配接缝
 

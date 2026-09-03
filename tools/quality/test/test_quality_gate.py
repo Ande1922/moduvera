@@ -388,6 +388,28 @@ class QualityGateEvidenceTest(unittest.TestCase):
             encoding="utf-8",
         )
         delivery_tests.chmod(0o755)
+        # Core orchestration fixtures do not carry the repository tracker.
+        # Supply the declared common-extension dependency explicitly so the
+        # production extension remains fail-closed when tooling is absent.
+        tracker_checker = self.fixture.root / "tools/tracker/check.py"
+        tracker_checker.parent.mkdir(parents=True, exist_ok=True)
+        tracker_checker.write_text(
+            "#!/usr/bin/env python3\n"
+            "import os\n"
+            "from pathlib import Path\n"
+            "Path(os.environ['QUALITY_GATE_RUN_DIR'], 'tracker-checker-ran').write_text('yes\\n')\n"
+            "print('fixture tracker consistency: PASS')\n",
+            encoding="utf-8",
+        )
+        tracker_tests = self.fixture.root / "tools/tracker/test/run-tests.sh"
+        tracker_tests.parent.mkdir(parents=True, exist_ok=True)
+        tracker_tests.write_text(
+            "#!/usr/bin/env bash\n"
+            "set -euo pipefail\n"
+            "printf 'yes\\n' > \"$QUALITY_GATE_RUN_DIR/tracker-tests-ran\"\n",
+            encoding="utf-8",
+        )
+        tracker_tests.chmod(0o755)
         self.fixture.write(".gitignore", ".quality-gate/\n.maven-args\n")
 
     def latest_run(self) -> Path:
@@ -493,6 +515,23 @@ class QualityGateEvidenceTest(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertIn("profile: docs-only", result.stdout)
         self.assertNotIn("maven-clean-verify", result.stdout)
+        self.assertEqual(
+            "yes\n", (self.latest_run() / "tracker-checker-ran").read_text()
+        )
+        self.assertEqual(
+            "yes\n", (self.latest_run() / "tracker-tests-ran").read_text()
+        )
+
+    def test_tracker_common_extension_fails_closed_when_checker_is_missing(self) -> None:
+        self.install_gate()
+        (self.fixture.root / "tools/tracker/check.py").unlink()
+        self.base = self.fixture.commit("install gate without tracker checker")
+        self.fixture.write("guide.md", "# Guide\n")
+        head = self.fixture.commit("docs")
+        result = self.run_gate("auto", "--base", self.base, "--head", head)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("extension:common/20-tracker-consistency: FAIL", result.stdout)
+        self.assertIn("tracker consistency tooling is missing", result.stdout)
 
     def test_normal_gate_runs_exact_clean_verify_and_post_maven_extension(self) -> None:
         self.install_gate()
@@ -524,6 +563,12 @@ class QualityGateEvidenceTest(unittest.TestCase):
         )
         self.assertEqual(
             "yes\n", (self.latest_run() / "delivery-tests-ran").read_text()
+        )
+        self.assertEqual(
+            "yes\n", (self.latest_run() / "tracker-checker-ran").read_text()
+        )
+        self.assertEqual(
+            "yes\n", (self.latest_run() / "tracker-tests-ran").read_text()
         )
         self.assertIn("extension:normal/40-changed-code: PASS", result.stdout)
 
