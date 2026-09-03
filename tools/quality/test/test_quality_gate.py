@@ -134,6 +134,9 @@ class QualityGatePolicyTest(unittest.TestCase):
         for assignment in assignments:
             self.assertIsNotNone(quality_gate.CREDENTIAL_ASSIGNMENT.search(assignment))
             self.assertNotIn(value, quality_gate.redact(assignment))
+        template_assignment = '"client_secret": "{value}"'
+        self.assertIsNone(quality_gate.CREDENTIAL_ASSIGNMENT.search(template_assignment))
+        self.assertEqual(template_assignment, quality_gate.redact(template_assignment))
         self.fixture.write("notes.md", "\n".join(assignments) + "\n")
         head = self.fixture.commit("credentials")
         with self.assertRaises(quality_gate.GateError) as caught:

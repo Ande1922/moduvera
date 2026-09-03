@@ -38,7 +38,8 @@ CREDENTIAL_KEY = (
 CREDENTIAL_ASSIGNMENT = re.compile(
     rf"(?i)(?P<prefix>(?P<key_quote>['\"]?)\b{CREDENTIAL_KEY}\b"
     rf"(?P=key_quote)\s*[:=]\s*)"
-    r"(?!['\"]?(?:\$\{|<|REDACTED\b|CHANGEME\b|example\b|dummy\b|test\b))"
+    r"(?!['\"]?(?:\$\{|\{[A-Za-z_][A-Za-z0-9_]*\}|<|\[REDACTED\]|"
+    r"REDACTED\b|CHANGEME\b|example\b|dummy\b|test\b))"
     r"(?P<value>\"[^\"\r\n]+\"|'[^'\r\n]+'|[^\s,;}\]]+)"
 )
 SECRET_PATTERNS = (
