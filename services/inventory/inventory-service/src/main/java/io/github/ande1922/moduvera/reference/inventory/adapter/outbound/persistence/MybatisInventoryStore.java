@@ -1,12 +1,12 @@
 package io.github.ande1922.moduvera.reference.inventory.adapter.outbound.persistence;
 
 import io.github.ande1922.moduvera.context.ExecutionContextHolder;
-import io.github.ande1922.moduvera.reference.inventory.api.InventoryRejected;
-import io.github.ande1922.moduvera.reference.inventory.api.InventoryReservationResult;
-import io.github.ande1922.moduvera.reference.inventory.api.InventoryReserved;
 import io.github.ande1922.moduvera.reference.inventory.api.ReserveInventoryCommand;
 import io.github.ande1922.moduvera.reference.inventory.domain.InventoryStore;
 import io.github.ande1922.moduvera.reference.inventory.domain.ReservationDecision;
+import io.github.ande1922.moduvera.reference.inventory.domain.ReservationExecution;
+import io.github.ande1922.moduvera.reference.inventory.domain.ReservationPolicy;
+import io.github.ande1922.moduvera.reference.inventory.domain.StockAvailability;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
@@ -23,15 +23,16 @@ public final class MybatisInventoryStore implements InventoryStore {
     }
 
     @Override
-    public ReservationDecision reserve(ReserveInventoryCommand command, Instant now) {
+    public ReservationExecution reserve(
+            ReserveInventoryCommand request, Instant now, ReservationPolicy policy) {
         var context = ExecutionContextHolder.require();
         String tenantId = context.tenantId().value();
-        InventoryResultRow previous = mapper.findResult(tenantId, command.commandId());
+        InventoryResultRow previous = mapper.findResult(tenantId, request.commandId());
         if (previous != null) {
-            return new ReservationDecision(toResult(previous), false);
+            return toExecution(previous, false);
         }
 
-        var orderedLines = command.lines().stream()
+        var orderedLines = request.lines().stream()
                 .sorted(java.util.Comparator.comparingLong(line -> line.productId()))
                 .toList();
         Map<Long, InventoryStockRow> locked = mapper.lockStocks(
@@ -39,20 +40,18 @@ public final class MybatisInventoryStore implements InventoryStore {
                 .stream()
                 .collect(Collectors.toMap(InventoryStockRow::getProductId, Function.identity()));
 
-        previous = mapper.findResult(tenantId, command.commandId());
+        previous = mapper.findResult(tenantId, request.commandId());
         if (previous != null) {
-            return new ReservationDecision(toResult(previous), false);
+            return toExecution(previous, false);
         }
 
-        List<Long> unavailable = orderedLines.stream()
-                .filter(line -> {
-                    InventoryStockRow stock = locked.get(line.productId());
-                    return stock == null || stock.getAvailable() < line.quantity();
-                })
-                .map(line -> line.productId())
-                .toList();
-        InventoryReservationResult result;
-        if (unavailable.isEmpty()) {
+        ReservationDecision decision = policy.decide(
+                request,
+                locked.values().stream()
+                        .map(stock -> new StockAvailability(
+                                stock.getProductId(), stock.getAvailable()))
+                        .toList());
+        if (decision.isReserved()) {
             for (var line : orderedLines) {
                 InventoryStockRow stock = locked.get(line.productId());
                 int updated = mapper.reserve(
@@ -66,34 +65,42 @@ public final class MybatisInventoryStore implements InventoryStore {
                     throw new InventoryConcurrencyException(line.productId());
                 }
             }
-            result = new InventoryReserved(command.commandId(), command.orderId(), now);
-        } else {
-            result = new InventoryRejected(command.commandId(), command.orderId(), unavailable, now);
         }
 
+        String unavailableProductIds = decision.unavailableProductIds().stream()
+                .map(String::valueOf)
+                .collect(Collectors.joining(","));
         int inserted = mapper.insertResult(
                 tenantId,
-                command.commandId(),
-                command.orderId(),
-                result instanceof InventoryReserved ? "RESERVED" : "REJECTED",
-                unavailable.stream().map(String::valueOf).collect(Collectors.joining(",")),
+                request.commandId(),
+                request.orderId(),
+                decision.outcome().name(),
+                unavailableProductIds,
                 now,
                 context.actor().subjectId());
         if (inserted != 1) {
             throw new IllegalStateException("reservation result raced after stock locks");
         }
-        return new ReservationDecision(result, true);
+        return new ReservationExecution(
+                request.commandId(), request.orderId(), decision, now, true);
     }
 
-    private static InventoryReservationResult toResult(InventoryResultRow row) {
-        if ("RESERVED".equals(row.getResultType())) {
-            return new InventoryReserved(row.getCommandId(), row.getOrderId(), row.getDecidedAt());
-        }
-        List<Long> unavailable = Arrays.stream(row.getUnavailableProductIds().split(","))
+    private static ReservationExecution toExecution(
+            InventoryResultRow row, boolean created) {
+        ReservationDecision decision;
+        if (ReservationDecision.Outcome.RESERVED.name().equals(row.getResultType())) {
+            decision = ReservationDecision.reserved();
+        } else if (ReservationDecision.Outcome.REJECTED.name().equals(row.getResultType())) {
+            List<Long> unavailable = Arrays.stream(row.getUnavailableProductIds().split(","))
                 .filter(value -> !value.isBlank())
                 .map(Long::valueOf)
                 .toList();
-        return new InventoryRejected(
-                row.getCommandId(), row.getOrderId(), unavailable, row.getDecidedAt());
+            decision = ReservationDecision.rejected(unavailable);
+        } else {
+            throw new IllegalStateException(
+                    "unknown persisted inventory result type: " + row.getResultType());
+        }
+        return new ReservationExecution(
+                row.getCommandId(), row.getOrderId(), decision, row.getDecidedAt(), created);
     }
 }

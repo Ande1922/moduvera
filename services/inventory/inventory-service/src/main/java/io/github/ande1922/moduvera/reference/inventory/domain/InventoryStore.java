@@ -5,5 +5,6 @@ import java.time.Instant;
 
 public interface InventoryStore {
 
-    ReservationDecision reserve(ReserveInventoryCommand command, Instant now);
+    ReservationExecution reserve(
+            ReserveInventoryCommand request, Instant now, ReservationPolicy policy);
 }
