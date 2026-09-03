@@ -225,9 +225,25 @@ bash -c '
   grep -F ":recovery-owner" "$2/moduvera-reference-slot-11.lock/owner" >/dev/null
   reference_release_run_locks
 ' bash "$HARNESS_DIR/port-plan.sh" "$LOCK_ROOT" 2>"$TEST_DIR/stale-recovery.err"
-grep -F "Reclaiming stale Reference run slot 11 lock owned by dead pid 999999" \
+grep -F "Reclaiming stale Reference run slot 11 lock (dead pid 999999)" \
   "$TEST_DIR/stale-recovery.err" >/dev/null || fail "stale lock was not diagnosed"
 [[ ! -e "$STALE_LOCK" ]] || fail "recovered lock was not released"
+
+REUSED_PID_LOCK="$LOCK_ROOT/moduvera-reference-pid-reuse.lock"
+mkdir "$REUSED_PID_LOCK"
+printf '%s:%064d:%s\n' "$$" 0 reused-owner > "$REUSED_PID_LOCK/owner"
+bash -c '
+  set -euo pipefail
+  source "$1"
+  REFERENCE_LOCK_ROOT="$2"
+  REFERENCE_LOCK_OWNER=recovery-owner
+  reference_prepare_locking
+  reference_acquire_named_lock pid-reuse "PID reuse"
+  reference_release_run_locks
+' bash "$HARNESS_DIR/port-plan.sh" "$LOCK_ROOT" 2>"$TEST_DIR/pid-reuse.err"
+grep -F "Reclaiming stale PID reuse lock (birth identity does not match live pid $$)" \
+  "$TEST_DIR/pid-reuse.err" >/dev/null || fail "PID reuse stale lock was not diagnosed"
+[[ ! -e "$REUSED_PID_LOCK" ]] || fail "PID reuse stale lock was not safely reclaimed"
 
 MISSING_OWNER_LOCK="$LOCK_ROOT/moduvera-reference-slot-12.lock"
 mkdir "$MISSING_OWNER_LOCK"
@@ -254,14 +270,20 @@ expect_failure "Reference lock root is missing" bash -c '
 UNWRITABLE_LOCK_ROOT="$TEST_DIR/unwritable-lock-root"
 mkdir "$UNWRITABLE_LOCK_ROOT"
 chmod 500 "$UNWRITABLE_LOCK_ROOT"
-expect_failure "Reference lock root is not writable" bash -c '
-  set -euo pipefail
-  source "$1"
-  RUN_SLOT=14
-  REFERENCE_LOCK_ROOT="$2"
-  reference_configure_port_plan business-core-monolith
-  reference_acquire_run_locks
-' bash "$HARNESS_DIR/port-plan.sh" "$UNWRITABLE_LOCK_ROOT"
+if [[ -w "$UNWRITABLE_LOCK_ROOT" ]]; then
+  [[ "$(id -u)" == "0" ]] \
+    || fail "chmod 500 lock root remained writable for a non-root test process"
+  echo "Skipping mode-bit unwritable assertion for root test process"
+else
+  expect_failure "Reference lock root is not writable" bash -c '
+    set -euo pipefail
+    source "$1"
+    RUN_SLOT=14
+    REFERENCE_LOCK_ROOT="$2"
+    reference_configure_port_plan business-core-monolith
+    reference_acquire_run_locks
+  ' bash "$HARNESS_DIR/port-plan.sh" "$UNWRITABLE_LOCK_ROOT"
+fi
 chmod 700 "$UNWRITABLE_LOCK_ROOT"
 
 expect_failure "Reference lock ownership changed; refusing to release" bash -c '
@@ -325,7 +347,7 @@ bash -c '
   reference_acquire_named_lock tombstone-race "Tombstone race"
   reference_release_run_locks
 ' bash "$HARNESS_DIR/port-plan.sh" "$LOCK_ROOT" 2>"$TEST_DIR/tombstone-race.err"
-grep -F "Reclaiming stale Tombstone race lock owned by dead pid 999999" \
+grep -F "Reclaiming stale Tombstone race lock (dead pid 999999)" \
   "$TEST_DIR/tombstone-race.err" >/dev/null || fail "tombstone race did not recover safely"
 [[ "$(<"$SYMLINK_TARGET/sentinel")" == "external-sentinel" ]] \
   || fail "tombstone race modified its external target"

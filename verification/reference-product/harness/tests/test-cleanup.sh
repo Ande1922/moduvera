@@ -26,8 +26,16 @@ if [[ " $* " == *" up "* ]]; then
 fi
 if [[ " $* " == *" down "* ]]; then
   if [[ -f "$STUB_STATE_DIR/compose-started" ]]; then
+    : > "$STUB_STATE_DIR/compose-down-started"
     if [[ "${STUB_CLEANUP_MODE:-}" == "compose-failure" ]]; then
       exit 42
+    fi
+    if [[ "${STUB_CLEANUP_MODE:-}" == "compose-hang" ]]; then
+      echo "$$" >> "$STUB_STATE_DIR/docker-pids"
+      (trap '' INT TERM; while true; do sleep 1; done) &
+      echo "$!" >> "$STUB_STATE_DIR/docker-pids"
+      trap '' INT TERM
+      while true; do sleep 1; done
     fi
     if [[ "${STUB_CLEANUP_MODE:-}" == "lock-failure" ]]; then
       for lock_path in "$REFERENCE_LOCK_ROOT"/moduvera-reference-*.lock; do
@@ -113,6 +121,40 @@ grep -F "Reference cleanup failure: docker compose down failed" \
   "$TEST_DIR/compose-failure/err" >/dev/null \
   || fail "compose cleanup failure evidence is missing"
 
+run_case compose-hang compose-hang 0
+[[ "$(<"$TEST_DIR/compose-hang/status")" == "70" ]] \
+  || fail "hung compose cleanup returned $(<"$TEST_DIR/compose-hang/status") instead of 70"
+(( $(<"$TEST_DIR/compose-hang/elapsed") < 6 )) \
+  || fail "hung compose cleanup exceeded its bounded wall-clock deadline"
+grep -F "Reference cleanup failure: docker compose down failed" \
+  "$TEST_DIR/compose-hang/err" >/dev/null \
+  || fail "hung compose cleanup failure evidence is missing"
+grep -F "Reference cleanup detail: compose down exceeded the 2s wall-clock deadline" \
+  "$TEST_DIR/compose-hang/err" >/dev/null \
+  || fail "hung compose cleanup timeout evidence is missing"
+[[ -f "$TEST_DIR/compose-hang/state/compose-down-started" ]] \
+  || fail "hung compose cleanup did not reach docker compose down"
+[[ -z "$(find "$TEST_DIR/compose-hang/locks" -mindepth 1 -maxdepth 1 -print -quit)" ]] \
+  || fail "hung compose cleanup did not release owned locks"
+HUNG_RUN_DIR="$($REAL_PYTHON - "$TEST_DIR/compose-hang/manifest.json" <<'PY'
+import json
+import pathlib
+import sys
+
+print(json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))["resources"]["tempDirectory"])
+PY
+)"
+[[ ! -e "$HUNG_RUN_DIR" ]] || fail "hung compose cleanup leaked temporary run directory"
+while IFS= read -r pid; do
+  for _ in {1..40}; do
+    if ! kill -0 "$pid" 2>/dev/null; then break; fi
+    sleep 0.05
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    fail "hung compose process $pid survived watchdog escalation"
+  fi
+done < "$TEST_DIR/compose-hang/state/docker-pids"
+
 run_case lock-failure lock-failure 0
 [[ "$(<"$TEST_DIR/lock-failure/status")" == "70" ]] \
   || fail "lock cleanup failure returned $(<"$TEST_DIR/lock-failure/status") instead of 70"
@@ -141,5 +183,22 @@ while IFS= read -r pid; do
     fail "slow JVM process $pid survived cleanup"
   fi
 done < "$TEST_DIR/slow-jvm-cleanup/state/java-pids"
+
+INVALID_TMP="$TEST_DIR/invalid-timeout-tmp"
+mkdir "$INVALID_TMP"
+set +e
+TMPDIR="$INVALID_TMP" RUN_SLOT=50 REFERENCE_APP_STOP_TIMEOUT_SECONDS=invalid \
+  REFERENCE_LOCK_ROOT="$TEST_DIR/success/locks" \
+  "$HARNESS_DIR/run-topology.sh" microservices \
+  >"$TEST_DIR/invalid-timeout.out" 2>"$TEST_DIR/invalid-timeout.err"
+INVALID_TIMEOUT_STATUS=$?
+set -e
+[[ "$INVALID_TIMEOUT_STATUS" == "64" ]] \
+  || fail "invalid timeout returned $INVALID_TIMEOUT_STATUS instead of 64"
+[[ -z "$(find "$INVALID_TMP" -mindepth 1 -maxdepth 1 -print -quit)" ]] \
+  || fail "invalid timeout leaked a temporary run directory"
+grep -F "Invalid REFERENCE_APP_STOP_TIMEOUT_SECONDS 'invalid'" \
+  "$TEST_DIR/invalid-timeout.err" >/dev/null \
+  || fail "invalid timeout diagnostic is missing"
 
 echo "Reference cleanup tests: PASS"

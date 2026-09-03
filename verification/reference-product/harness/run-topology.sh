@@ -28,6 +28,16 @@ HEALTH_TIMEOUT_SECONDS="${REFERENCE_HEALTH_TIMEOUT_SECONDS:-180}"
 APP_STOP_TIMEOUT_SECONDS="${REFERENCE_APP_STOP_TIMEOUT_SECONDS:-5}"
 COMPOSE_DOWN_TIMEOUT_SECONDS="${REFERENCE_COMPOSE_DOWN_TIMEOUT_SECONDS:-10}"
 REFERENCE_JAVA_TOOL_OPTIONS="${REFERENCE_JAVA_TOOL_OPTIONS:--Xms64m -Xmx256m}"
+for timeout_specification in \
+  "REFERENCE_APP_STOP_TIMEOUT_SECONDS=$APP_STOP_TIMEOUT_SECONDS" \
+  "REFERENCE_COMPOSE_DOWN_TIMEOUT_SECONDS=$COMPOSE_DOWN_TIMEOUT_SECONDS"; do
+  timeout_name="${timeout_specification%%=*}"
+  timeout_value="${timeout_specification#*=}"
+  if [[ ! "$timeout_value" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Invalid $timeout_name '$timeout_value'; expected a positive integer number of seconds" >&2
+    exit 64
+  fi
+done
 RUN_DIR="$(mktemp -d "${TMPDIR:-/tmp}/moduvera-reference.XXXXXX")"
 PORT_MANIFEST="${REFERENCE_PORT_MANIFEST:-$RUN_DIR/port-manifest.json}"
 REFERENCE_MANIFEST_RUN_ID="$RUN_ID"
@@ -40,18 +50,14 @@ FAILED=1
 COMPOSE_STARTED=0
 JAVA_BIN="${JAVA_HOME:-}/bin/java"
 if [[ ! -x "$JAVA_BIN" ]]; then JAVA_BIN="$(command -v java || true)"; fi
-for timeout_specification in \
-  "REFERENCE_APP_STOP_TIMEOUT_SECONDS=$APP_STOP_TIMEOUT_SECONDS" \
-  "REFERENCE_COMPOSE_DOWN_TIMEOUT_SECONDS=$COMPOSE_DOWN_TIMEOUT_SECONDS"; do
-  timeout_name="${timeout_specification%%=*}"
-  timeout_value="${timeout_specification#*=}"
-  if [[ ! "$timeout_value" =~ ^[1-9][0-9]*$ ]]; then
-    echo "Invalid $timeout_name '$timeout_value'; expected a positive integer number of seconds" >&2
-    exit 64
-  fi
-done
 
 compose() { docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE" "$@"; }
+
+compose_down() {
+  python3 "$HARNESS_DIR/bounded_process.py" "$COMPOSE_DOWN_TIMEOUT_SECONDS" -- \
+    docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE" down \
+      --timeout "$COMPOSE_DOWN_TIMEOUT_SECONDS" -v --remove-orphans
+}
 
 diagnostics() {
   echo "Reference-product diagnostics for $REFERENCE_TOPOLOGY_NAME (secrets and payloads omitted)" >&2
@@ -101,14 +107,21 @@ stop_apps() {
 }
 
 cleanup() {
-  local primary_status=$? cleanup_status=0
+  local primary_status=$? cleanup_status=0 compose_status=0
   trap - EXIT INT TERM
   set +e
   stop_apps gateway monolith inventory order catalog identity
   if [[ $FAILED -ne 0 && $primary_status -ne 0 && $COMPOSE_STARTED -eq 1 ]]; then diagnostics; fi
   if [[ $COMPOSE_STARTED -eq 1 ]]; then
-    if ! compose down --timeout "$COMPOSE_DOWN_TIMEOUT_SECONDS" -v --remove-orphans >/dev/null 2>&1; then
+    compose_down >/dev/null 2>"$RUN_DIR/compose-down-cleanup.err"
+    compose_status=$?
+    if [[ $compose_status -ne 0 ]]; then
       echo "Reference cleanup failure: docker compose down failed for $COMPOSE_PROJECT" >&2
+      if [[ $compose_status -eq 124 ]]; then
+        echo "Reference cleanup detail: compose down exceeded the ${COMPOSE_DOWN_TIMEOUT_SECONDS}s wall-clock deadline" >&2
+      else
+        echo "Reference cleanup detail: compose down exited with status $compose_status" >&2
+      fi
       cleanup_status=70
     fi
   fi
@@ -254,7 +267,7 @@ for executable in docker curl uv; do
 done
 [[ -n "$JAVA_BIN" ]] || { echo "Required executable is unavailable: java" >&2; exit 127; }
 
-compose down --timeout "$COMPOSE_DOWN_TIMEOUT_SECONDS" -v --remove-orphans >/dev/null 2>&1
+compose_down >/dev/null 2>&1
 COMPOSE_STARTED=1
 compose up -d postgres zookeeper kafka
 wait_postgres

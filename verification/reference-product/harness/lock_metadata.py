@@ -3,8 +3,12 @@
 
 from __future__ import annotations
 
+import ctypes
+import hashlib
 import os
+import pathlib
 import stat
+import subprocess
 import sys
 
 
@@ -33,7 +37,82 @@ def read_metadata(directory: int, entry: str) -> str:
         os.close(descriptor)
 
 
+def process_birth_identity(pid_text: str) -> str:
+    if not pid_text.isascii() or not pid_text.isdecimal() or int(pid_text, 10) <= 0:
+        raise OSError("invalid process id")
+    pid = int(pid_text, 10)
+    os.kill(pid, 0)
+    proc_stat = pathlib.Path(f"/proc/{pid}/stat")
+    if sys.platform == "darwin":
+        class ProcBsdInfo(ctypes.Structure):
+            _fields_ = [
+                (name, ctypes.c_uint32)
+                for name in (
+                    "flags", "status", "xstatus", "pid", "ppid", "uid", "gid",
+                    "ruid", "rgid", "svuid", "svgid", "reserved",
+                )
+            ] + [
+                ("command", ctypes.c_char * 16),
+                ("name", ctypes.c_char * 32),
+            ] + [
+                (name, ctypes.c_uint32)
+                for name in ("nfiles", "pgid", "pjobc", "tdev", "tpgid")
+            ] + [
+                ("nice", ctypes.c_int32),
+                ("start_seconds", ctypes.c_uint64),
+                ("start_microseconds", ctypes.c_uint64),
+            ]
+
+        process_info = ProcBsdInfo()
+        libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+        proc_pidinfo = libproc.proc_pidinfo
+        proc_pidinfo.argtypes = [
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_uint64,
+            ctypes.c_void_p,
+            ctypes.c_int,
+        ]
+        proc_pidinfo.restype = ctypes.c_int
+        size = ctypes.sizeof(process_info)
+        if proc_pidinfo(pid, 3, 0, ctypes.byref(process_info), size) != size:
+            raise OSError("unable to read process start time")
+        if process_info.pid != pid or process_info.start_seconds == 0:
+            raise OSError("invalid process start time")
+        raw_identity = (
+            f"darwin:{process_info.start_seconds}:{process_info.start_microseconds}"
+        )
+    elif proc_stat.exists():
+        stat_text = proc_stat.read_text(encoding="ascii")
+        _, separator, tail = stat_text.rpartition(")")
+        fields = tail.split()
+        if not separator or len(fields) < 20:
+            raise OSError("invalid process metadata")
+        boot_id = pathlib.Path("/proc/sys/kernel/random/boot_id").read_text(
+            encoding="ascii"
+        ).strip()
+        raw_identity = f"linux:{boot_id}:{fields[19]}"
+    else:
+        start = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "lstart="],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        ).stdout.strip()
+        if not start:
+            raise OSError("missing process start time")
+        raw_identity = f"{sys.platform}:{start}"
+    return hashlib.sha256(raw_identity.encode("ascii")).hexdigest()
+
+
 def main(arguments: list[str]) -> int:
+    if len(arguments) == 2 and arguments[0] == "identity":
+        try:
+            sys.stdout.write(process_birth_identity(arguments[1]))
+            return 0
+        except (OSError, UnicodeError, subprocess.SubprocessError):
+            return 74
     if len(arguments) < 3 or arguments[0] not in {"read", "create", "remove"}:
         return 64
     command, directory_path, entry, *values = arguments

@@ -6,6 +6,7 @@
 REFERENCE_PORT_STRIDE=100
 REFERENCE_LOCK_OWNER="${REFERENCE_LOCK_OWNER:-}"
 REFERENCE_LOCK_PID="${REFERENCE_LOCK_PID:-}"
+REFERENCE_LOCK_BIRTH="${REFERENCE_LOCK_BIRTH:-}"
 REFERENCE_OWNED_LOCK_PATHS=()
 REFERENCE_PORT_PLAN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -242,6 +243,16 @@ reference_prepare_locking() {
     echo "Invalid reference lock owner token" >&2
     return 64
   fi
+  if [[ -z "$REFERENCE_LOCK_BIRTH" ]]; then
+    if ! REFERENCE_LOCK_BIRTH="$(reference_process_birth_identity "$REFERENCE_LOCK_PID")"; then
+      echo "Unable to determine reference lock process birth identity: $REFERENCE_LOCK_PID" >&2
+      return 73
+    fi
+  fi
+  if [[ ! "$REFERENCE_LOCK_BIRTH" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "Invalid reference lock process birth identity" >&2
+    return 64
+  fi
   REFERENCE_OWNED_LOCK_PATHS=()
 }
 
@@ -251,10 +262,14 @@ reference_pid_is_active() {
   ps -p "$pid" -o pid= 2>/dev/null | grep -q '[0-9]'
 }
 
+reference_process_birth_identity() {
+  python3 "$REFERENCE_PORT_PLAN_DIR/lock_metadata.py" identity "$1"
+}
+
 reference_record_owned_lock() {
   local lock_path="$1" owner_file owner_record
   owner_file="$lock_path/owner"
-  owner_record="$REFERENCE_LOCK_PID:$REFERENCE_LOCK_OWNER"
+  owner_record="$REFERENCE_LOCK_PID:$REFERENCE_LOCK_BIRTH:$REFERENCE_LOCK_OWNER"
   if ! chmod 700 "$lock_path" \
     || [[ -e "$owner_file" || -L "$owner_file" ]] \
     || ! python3 "$REFERENCE_PORT_PLAN_DIR/lock_metadata.py" create "$lock_path" owner "$owner_record"; then
@@ -299,7 +314,8 @@ reference_remove_stale_tombstone() {
 
 reference_acquire_named_lock() {
   local lock_name="$1" description="$2" lock_path owner_file legacy_pid_file
-  local owner_record owner_record_after_move owner_pid owner_metadata_file metadata_name tombstone stale_lock attempt
+  local owner_record owner_record_after_move owner_pid owner_birth owner_token owner_rest actual_birth
+  local owner_metadata_file metadata_name tombstone stale_lock attempt stale_reason
   lock_path="$REFERENCE_LOCK_ROOT/moduvera-reference-$lock_name.lock"
   owner_file="$lock_path/owner"
   legacy_pid_file="$lock_path/pid"
@@ -327,6 +343,7 @@ reference_acquire_named_lock() {
       return 73
     fi
 
+    owner_birth=""
     if [[ -L "$owner_file" || -L "$legacy_pid_file" ]]; then
       echo "$description lock has unsafe symlink ownership metadata; refusing to reclaim: $lock_path" >&2
       return 73
@@ -338,9 +355,25 @@ reference_acquire_named_lock() {
         return 73
       fi
       owner_pid="${owner_record%%:*}"
-      if [[ ! "$owner_record" =~ ^[1-9][0-9]*:.+ || "$owner_pid" == "$owner_record" ]]; then
+      owner_rest="${owner_record#*:}"
+      if [[ "$owner_pid" == "$owner_record" || -z "$owner_rest" ]]; then
         echo "$description lock has invalid ownership metadata; refusing to reclaim: $lock_path" >&2
         return 73
+      fi
+      if [[ "$owner_rest" == *:* ]]; then
+        owner_birth="${owner_rest%%:*}"
+        owner_token="${owner_rest#*:}"
+        if [[ ! "$owner_birth" =~ ^[0-9a-f]{64}$ || ! "$owner_token" =~ ^[A-Za-z0-9._-]+$ ]]; then
+          echo "$description lock has invalid ownership metadata; refusing to reclaim: $lock_path" >&2
+          return 73
+        fi
+      else
+        owner_birth=""
+        owner_token="$owner_rest"
+        if [[ ! "$owner_token" =~ ^[A-Za-z0-9._-]+$ ]]; then
+          echo "$description lock has invalid ownership metadata; refusing to reclaim: $lock_path" >&2
+          return 73
+        fi
       fi
     elif [[ -f "$legacy_pid_file" ]]; then
       owner_metadata_file="$legacy_pid_file"
@@ -361,9 +394,21 @@ reference_acquire_named_lock() {
       echo "$description lock has invalid ownership metadata; refusing to reclaim: $lock_path" >&2
       return 73
     fi
+    stale_reason="dead pid $owner_pid"
     if reference_pid_is_active "$owner_pid"; then
-      echo "$description lock is active (pid=$owner_pid): $lock_path" >&2
-      return 73
+      if [[ -z "${owner_birth:-}" ]]; then
+        echo "$description lock is active or legacy-owned (pid=$owner_pid): $lock_path" >&2
+        return 73
+      fi
+      if ! actual_birth="$(reference_process_birth_identity "$owner_pid")"; then
+        echo "$description lock has an active PID whose birth identity cannot be verified: $lock_path" >&2
+        return 73
+      fi
+      if [[ "$actual_birth" == "$owner_birth" ]]; then
+        echo "$description lock is active (pid=$owner_pid): $lock_path" >&2
+        return 73
+      fi
+      stale_reason="birth identity does not match live pid $owner_pid"
     fi
 
     tombstone="$lock_path.stale.$REFERENCE_LOCK_OWNER.$attempt"
@@ -384,7 +429,7 @@ reference_acquire_named_lock() {
         rmdir "$tombstone" 2>/dev/null || true
         return 73
       fi
-      echo "Reclaiming stale $description lock owned by dead pid $owner_pid: $lock_path" >&2
+      echo "Reclaiming stale $description lock ($stale_reason): $lock_path" >&2
       reference_remove_stale_tombstone \
         "$stale_lock" "$tombstone" "$metadata_name" "$owner_record" || return 73
     else
@@ -426,7 +471,7 @@ reference_acquire_run_locks() {
 reference_release_run_locks() {
   local i lock_path owner_file expected_owner actual_owner release_status=0
   [[ -n "${REFERENCE_LOCK_OWNER:-}" ]] || return 0
-  expected_owner="${REFERENCE_LOCK_PID:-}:${REFERENCE_LOCK_OWNER:-}"
+  expected_owner="${REFERENCE_LOCK_PID:-}:${REFERENCE_LOCK_BIRTH:-}:${REFERENCE_LOCK_OWNER:-}"
   for ((i = ${#REFERENCE_OWNED_LOCK_PATHS[@]} - 1; i >= 0; i--)); do
     lock_path="${REFERENCE_OWNED_LOCK_PATHS[$i]}"
     owner_file="$lock_path/owner"
