@@ -28,9 +28,14 @@ class TenantPersistenceSchemaGateTest {
     private static final Pattern ALTER_TABLE =
             Pattern.compile("(?is)\\bALTER\\s+TABLE\\b.*?;");
     private static final Pattern ALTER_TABLE_TENANT_COLUMN = Pattern.compile(
-            "(?is)\\b(?:ALTER(?:\\s+COLUMN)?|MODIFY(?:\\s+COLUMN)?|ADD(?:\\s+COLUMN)?)\\s+"
+            "(?is)\\bALTER(?:\\s+COLUMN)?\\s+"
                     + TENANT_IDENTIFIER
-                    + "\\s+(?:TYPE\\s+)?([a-z][a-z0-9_]*)(?:\\s*\\(\\s*(\\d+)\\s*\\))?");
+                    + "\\s+(?:TYPE|SET\\s+DATA\\s+TYPE)\\s+"
+                    + "([a-z][a-z0-9_]*)(?:\\s*\\(\\s*(\\d+)\\s*\\))?");
+    private static final Pattern ADD_OR_MODIFY_TABLE_TENANT_COLUMN = Pattern.compile(
+            "(?is)\\b(?:MODIFY(?:\\s+COLUMN)?|ADD(?:\\s+COLUMN)?)\\s+"
+                    + TENANT_IDENTIFIER
+                    + "\\s+([a-z][a-z0-9_]*)(?:\\s*\\(\\s*(\\d+)\\s*\\))?");
     private static final Pattern CHANGE_TABLE_TENANT_COLUMN = Pattern.compile(
             "(?is)\\bCHANGE(?:\\s+COLUMN)?\\s+"
                     + SQL_IDENTIFIER
@@ -104,6 +109,7 @@ class TenantPersistenceSchemaGateTest {
 
         for (String mutation : List.of(
                 "ALTER" + " TABLE mutation ALTER tenant_id TYPE BIGINT;",
+                "ALTER" + " TABLE mutation ALTER tenant_id SET DATA TYPE TEXT;",
                 "ALTER" + " TABLE mutation ALTER COLUMN \"tenant_id\" TYPE TEXT;",
                 "ALTER" + " TABLE mutation CHANGE COLUMN legacy_tenant tenant_id BIGINT;",
                 "ALTER" + " TABLE mutation CHANGE `legacy_tenant` `tenant_id` VARCHAR(128);")) {
@@ -142,6 +148,8 @@ class TenantPersistenceSchemaGateTest {
                 SELECT id, tenant_id FROM tenant_record;
                 INSERT INTO tenant_record (tenant_id, value) VALUES ('tenant_id TEXT', 'x');
                 CREATE INDEX tenant_lookup ON tenant_record (tenant_id);
+                ALTER TABLE tenant_record ALTER COLUMN tenant_id SET NOT NULL;
+                ALTER TABLE tenant_record ALTER COLUMN tenant_id DROP DEFAULT;
                 """;
         List<String> violations = new ArrayList<>();
         int[] definitions = {0};
@@ -178,6 +186,12 @@ class TenantPersistenceSchemaGateTest {
         inspectStatements(
                 ALTER_TABLE.matcher(inspectable),
                 ALTER_TABLE_TENANT_COLUMN,
+                relative,
+                violations,
+                definitionConsumer);
+        inspectStatements(
+                ALTER_TABLE.matcher(inspectable),
+                ADD_OR_MODIFY_TABLE_TENANT_COLUMN,
                 relative,
                 violations,
                 definitionConsumer);
