@@ -1,0 +1,8 @@
+**
+!apps/
+!apps/*/
+!apps/*/target/
+!apps/*/target/*.jar
+apps/*/target/*-sources.jar
+apps/*/target/*-javadoc.jar
+apps/*/target/*-tests.jar

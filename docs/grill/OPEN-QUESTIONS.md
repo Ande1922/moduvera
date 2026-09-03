@@ -49,7 +49,7 @@ These are not a new Grill frontier. The V0.1 Demo should make them concrete, ret
 - Device simulators in the scaffold; protocol-specific simulators belong to later business integration work.
 - Image thumbnails, compression, cropping, and format conversion.
 - Cosign configuration and deployment-time image signature verification.
-- Dockerfiles, image publication, production/single-host Compose guidance, Kubernetes, Helm, deployment pipelines, and rolling-release settings until the deployment design is confirmed. The implemented Compose file is a disposable local acceptance dependency harness only.
+- Image publication, production/single-host Compose guidance, Kubernetes, Helm, deployment pipelines, and rolling-release settings until the deployment design is confirmed. The shared Runnable App Dockerfile is only an image-construction baseline, and the implemented Compose file remains a disposable local acceptance dependency harness.
 - Mandatory mutation-test gates; PIT starts as an optional targeted profile.
 - Advanced search such as pinyin, full text, similarity, and specialized indexes.
 

@@ -10,7 +10,7 @@ The first vertical slice is an implementation sequence, not the final product bo
 
 The non-deployment scaffold is complete only when all of the following exist and pass their relevant verification:
 
-1. a pinned JDK 26/Maven/Spring Boot build with dependency convergence, reproducible JAR inputs, and generated SBOMs;
+1. a pinned JDK 26/Maven/Spring Boot build with dependency convergence, reproducible JAR inputs, generated SBOMs, and one shared non-root Runnable App image-construction baseline;
 2. one framework-free platform kernel with explicit packages for identity, tenant context, identifiers, paging, authorization and errors where genuine cross-module reuse exists;
 3. one ordinary-service Web Starter with native HTTP success semantics and RFC 9457 error mapping;
 4. internal authentication, resource-server support, tenant membership and use-case RBAC;
@@ -23,14 +23,17 @@ The non-deployment scaffold is complete only when all of the following exist and
 
 ## Explicitly outside this delivery
 
-- Dockerfiles and container image publication;
+- container image publication and registry policy;
 - Docker Compose as a production or single-host deployment reference;
 - Kubernetes manifests, Helm charts and production platform integration;
 - deployment pipelines, release promotion and rollout/rollback automation;
 - deployment-time health/readiness policy, graceful replacement and capacity topology;
 - deployment-side secret injection, image signing/verification and middleware lifecycle ownership.
 
-The code may expose standard runtime health information and accept external configuration, but it must not encode an unconfirmed deployment topology.
+The repository-owned Dockerfile may package an already-built executable JAR
+and the image may expose standard runtime health information and accept
+external configuration. Neither that construction contract nor its disposable
+smoke environment encodes an unconfirmed deployment topology.
 
 ## Capability groups
 

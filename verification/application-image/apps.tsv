@@ -1,0 +1,7 @@
+# app directory	container port
+gateway-app	8080
+identity-app	8081
+catalog-app	8082
+order-app	8083
+inventory-app	8084
+app-monolith	8083
