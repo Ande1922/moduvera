@@ -71,6 +71,8 @@ explanation, and its forward scenario together.
       "intent": "A named caller uses the provider-owned protocol-neutral API through an in-process Application implementation.",
       "participant_roles": ["caller"],
       "provider_adapter": "forbidden",
+      "required_roles": ["provider-api", "synchronous-api", "architecture-verification"],
+      "forbidden_roles": ["provider-adapter", "message-verification"],
       "artifact_roles": [
         "provider-api",
         "synchronous-api",
@@ -83,6 +85,8 @@ explanation, and its forward scenario together.
       "intent": "A named remote caller has a supported direct call and the provider owns its declared inbound adapter.",
       "participant_roles": ["caller"],
       "provider_adapter": "required",
+      "required_roles": ["provider-api", "synchronous-api", "provider-adapter", "architecture-verification"],
+      "forbidden_roles": ["message-verification"],
       "artifact_roles": [
         "provider-api",
         "synchronous-api",
@@ -96,6 +100,8 @@ explanation, and its forward scenario together.
       "intent": "A named HTTP caller reaches one Application use case through a provider-owned HTTP inbound adapter.",
       "participant_roles": ["caller"],
       "provider_adapter": "required",
+      "required_roles": ["provider-adapter", "architecture-verification"],
+      "forbidden_roles": ["synchronous-api", "message-verification"],
       "artifact_roles": [
         "service",
         "provider-adapter",
@@ -107,6 +113,8 @@ explanation, and its forward scenario together.
       "intent": "A named producer sends a provider-owned versioned command to a named consumer adapter; asynchronous-only support publishes no synchronous Service API.",
       "participant_roles": ["producer", "consumer"],
       "provider_adapter": "required",
+      "required_roles": ["provider-api", "provider-adapter", "message-verification", "architecture-verification"],
+      "forbidden_roles": ["synchronous-api"],
       "artifact_roles": [
         "provider-api",
         "service",
@@ -120,6 +128,8 @@ explanation, and its forward scenario together.
       "intent": "The provider publishes a versioned event through its outbound adapter for named consumers; event support alone publishes no synchronous Service API.",
       "participant_roles": ["producer", "consumer"],
       "provider_adapter": "required",
+      "required_roles": ["provider-api", "provider-adapter", "message-verification", "architecture-verification"],
+      "forbidden_roles": ["synchronous-api"],
       "artifact_roles": [
         "provider-api",
         "service",
@@ -133,6 +143,8 @@ explanation, and its forward scenario together.
       "intent": "A named internal caller uses a protocol-neutral Application seam without an external API module or transport adapter.",
       "participant_roles": ["caller"],
       "provider_adapter": "forbidden",
+      "required_roles": ["service", "assembly", "architecture-verification"],
+      "forbidden_roles": ["provider-api", "synchronous-api", "provider-adapter", "message-verification"],
       "artifact_roles": [
         "service",
         "assembly",

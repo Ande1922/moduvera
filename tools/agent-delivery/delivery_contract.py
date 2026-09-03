@@ -185,6 +185,9 @@ class BusinessServiceDescription:
 @dataclass(frozen=True)
 class PlannedArtifact:
     target: str
+    roles: tuple[str, ...]
+    durable_states: tuple[str, ...]
+    acceptance_topologies: tuple[str, ...]
     consumers: tuple[str, ...]
     acceptance_consumers: tuple[str, ...]
     use_cases: tuple[str, ...]
@@ -457,7 +460,14 @@ def load_business_service_contract(recipe: Path) -> BusinessServiceContract:
     scenario_raw = _schema_named_object(raw["scenarios"], "scenarios")
     scenarios: dict[str, dict[str, Any]] = {}
     role_contexts: dict[str, list[set[str]]] = {}
-    scenario_keys = {"intent", "participant_roles", "provider_adapter", "artifact_roles"}
+    scenario_keys = {
+        "intent",
+        "participant_roles",
+        "provider_adapter",
+        "required_roles",
+        "forbidden_roles",
+        "artifact_roles",
+    }
     for name, value in scenario_raw.items():
         scenario = _schema_object(value, f"scenarios.{name}", scenario_keys)
         intent = _schema_string(scenario["intent"], f"scenarios.{name}.intent")
@@ -472,9 +482,35 @@ def load_business_service_contract(recipe: Path) -> BusinessServiceContract:
         artifact_roles = _schema_string_list(
             scenario["artifact_roles"], f"scenarios.{name}.artifact_roles"
         )
+        required_roles = _schema_string_list(
+            scenario["required_roles"], f"scenarios.{name}.required_roles"
+        )
+        forbidden_roles = _schema_string_list(
+            scenario["forbidden_roles"], f"scenarios.{name}.forbidden_roles"
+        )
         if not set(artifact_roles).issubset(artifact_templates):
             raise _schema_error(
                 f"scenarios.{name}.artifact_roles", "unknown artifact role"
+            )
+        if not set(required_roles).issubset(artifact_templates):
+            raise _schema_error(
+                f"scenarios.{name}.required_roles", "unknown artifact role"
+            )
+        if not set(forbidden_roles).issubset(artifact_templates):
+            raise _schema_error(
+                f"scenarios.{name}.forbidden_roles", "unknown artifact role"
+            )
+        if not set(required_roles).issubset(artifact_roles):
+            raise _schema_error(
+                f"scenarios.{name}.artifact_roles", "required artifact role is missing"
+            )
+        if set(forbidden_roles).intersection(artifact_roles):
+            raise _schema_error(
+                f"scenarios.{name}.artifact_roles", "forbidden artifact role is present"
+            )
+        if set(required_roles).intersection(forbidden_roles):
+            raise _schema_error(
+                f"scenarios.{name}", "artifact role cannot be required and forbidden"
             )
         for role in artifact_roles:
             role_contexts.setdefault(role, []).append(
@@ -484,6 +520,8 @@ def load_business_service_contract(recipe: Path) -> BusinessServiceContract:
             "intent": intent,
             "participant_roles": participant_roles,
             "provider_adapter": adapter_policy,
+            "required_roles": required_roles,
+            "forbidden_roles": forbidden_roles,
             "artifact_roles": artifact_roles,
         }
 
@@ -679,17 +717,30 @@ def business_service_plan(
         use_case: str,
         promise: str,
         acceptance_consumers: tuple[str, ...] = (),
+        *,
+        role: str | None = None,
+        durable_state: str | None = None,
+        acceptance_topology: str | None = None,
     ) -> None:
         _label(target, "planned artifact target")
         entry = artifacts_by_target.setdefault(
             target,
             {
+                "roles": set(),
+                "durable_states": set(),
+                "acceptance_topologies": set(),
                 "consumers": set(),
                 "acceptance_consumers": set(),
                 "use_cases": set(),
                 "promises": set(),
             },
         )
+        if role is not None:
+            entry["roles"].add(role)
+        if durable_state is not None:
+            entry["durable_states"].add(durable_state)
+        if acceptance_topology is not None:
+            entry["acceptance_topologies"].add(acceptance_topology)
         entry["consumers"].update(consumers)
         entry["acceptance_consumers"].update(acceptance_consumers)
         entry["use_cases"].add(use_case)
@@ -735,7 +786,7 @@ def business_service_plan(
         }
         for role in scenario["artifact_roles"]:
             target = contract.artifact_templates[role].format(**values)
-            trace(target, consumers, promise.use_case, key)
+            trace(target, consumers, promise.use_case, key, role=role)
 
     state_names = tuple(state.name for state in description.durable_state)
     _string_tuple(state_names, "durable state names")
@@ -760,7 +811,14 @@ def business_service_plan(
                 service=name, state=state.name
             )
             for promise in related:
-                trace(target, consumers, state.use_case, promise.key)
+                trace(
+                    target,
+                    consumers,
+                    state.use_case,
+                    promise.key,
+                    role=role,
+                    durable_state=state.name,
+                )
 
     for app in description.apps:
         assigned = {promise.key for promise in description.support_promises if promise.app == app.name}
@@ -779,11 +837,15 @@ def business_service_plan(
                 promise.use_case,
                 promise_key,
                 (acceptance.name,),
+                acceptance_topology=acceptance.topology,
             )
 
     artifacts = tuple(
         PlannedArtifact(
             target,
+            tuple(sorted(trace_data["roles"])),
+            tuple(sorted(trace_data["durable_states"])),
+            tuple(sorted(trace_data["acceptance_topologies"])),
             tuple(sorted(trace_data["consumers"])),
             tuple(sorted(trace_data["acceptance_consumers"])),
             tuple(sorted(trace_data["use_cases"])),
@@ -1104,96 +1166,70 @@ def representative_forward_failures(root: Path) -> list[str]:
     except (DeliveryContractError, ValueError, KeyError) as error:
         failures.append(f"representative business-service shape failed: {error}")
         return failures
-    service_targets = {artifact.target for artifact in service_plan.artifacts}
-    expected_service_targets = {
-        "services/returns/returns-api",
-        "services/returns/returns-service",
-        "returns HTTP inbound adapter",
-        "returns HTTP provider adapter",
-        "returns message inbound adapter",
-        "returns message outbound adapter",
-        "returns persistence outbound adapter for return-ledger",
-        "returns service-owned migration for return-ledger",
-        "real-database verification for return-ledger",
-        "returns-app assembly",
-        "fulfillment-app assembly",
-        "reference-product acceptance entry for Shopper",
-        "returns-app acceptance entry for Returns Operators",
-        "consumer contract acceptance for Fulfillment Partners",
-        "repository message-contract verification for warehouse-command",
-        "repository message-contract verification for accepted-event",
-        "repository architecture rules for fulfillment-local",
-        "repository architecture rules for support-remote",
-        "repository architecture rules for shopper-http",
-        "repository architecture rules for warehouse-command",
-        "repository architecture rules for policy-internal",
-        "repository architecture rules for accepted-event",
-    }
-    if not expected_service_targets.issubset(service_targets):
-        failures.append("representative business-service plan is incomplete")
-    if "returns synchronous Service API" not in service_targets:
-        failures.append("direct support does not publish a synchronous Service API")
     if service_plan.shape_card != representative_business_service_description():
         failures.append("representative normalized shape card lost input content")
-    async_only = business_service_plan(
-        replace(
-            representative_business_service_description(),
-            use_cases=("Decide Return",),
-            dependencies=(),
-            support_promises=(
-                representative_business_service_description().support_promises[3],
-            ),
-            apps=(AppSupport(
-                "fulfillment-app",
-                "multi-service",
-                ("warehouse-command",),
-                "fulfillment App composition test",
-            ),),
-            acceptance_consumers=(AcceptanceConsumer(
-                "Fulfillment Partners",
-                "consumer-contract",
-                "fulfillment-app",
-                ("warehouse-command",),
-                "partner message contract scenario",
-            ),),
-            durable_state=(),
-        ),
-        contract,
-    )
-    if "reconciliation synchronous Service API" in {
-        artifact.target for artifact in async_only.artifacts
-    } or any("synchronous Service API" in target for target in {
-        artifact.target for artifact in async_only.artifacts
-    }):
-        failures.append("asynchronous-only support created a synchronous Service API")
-    internal_promise = representative_business_service_description().support_promises[4]
-    internal_only = business_service_plan(
-        replace(
-            representative_business_service_description(),
-            use_cases=("Decide Return",),
-            dependencies=(),
-            support_promises=(internal_promise,),
-            apps=(AppSupport(
-                "returns-app", "standalone", ("policy-internal",),
-                "returns App startup test",
-            ),),
-            acceptance_consumers=(AcceptanceConsumer(
-                "Returns Operators", "declared-app", "returns-app",
-                ("policy-internal",), "returns App acceptance scenario",
-            ),),
-            durable_state=(),
-        ),
-        contract,
-    )
-    internal_targets = {artifact.target for artifact in internal_only.artifacts}
-    if any(target.endswith("-api") for target in internal_targets):
-        failures.append("internal-only support created an unconsumed API module")
-    if any("adapter" in target.lower() for target in internal_targets):
-        failures.append("internal-only support created an unconsumed Adapter")
+
+    scenario_roles = {
+        role
+        for scenario in contract.scenarios.values()
+        for role in scenario["artifact_roles"]
+    }
+    for promise in service_plan.shape_card.support_promises:
+        actual_roles = {
+            role
+            for artifact in service_plan.artifacts
+            if promise.key in artifact.support_promises
+            for role in artifact.roles
+            if role in scenario_roles
+        }
+        expected_roles = set(contract.scenarios[promise.kind]["artifact_roles"])
+        if actual_roles != expected_roles:
+            failures.append(
+                f"support promise {promise.key} does not realize its declared artifact roles"
+            )
+
+    for state in service_plan.shape_card.durable_state:
+        actual_roles = {
+            role
+            for artifact in service_plan.artifacts
+            if state.name in artifact.durable_states
+            for role in artifact.roles
+        }
+        if actual_roles != set(contract.state_artifact_roles):
+            failures.append(
+                f"durable state {state.name} does not realize its declared artifact roles"
+            )
+
+    for acceptance in service_plan.shape_card.acceptance_consumers:
+        matching = tuple(
+            artifact
+            for artifact in service_plan.artifacts
+            if acceptance.name in artifact.acceptance_consumers
+        )
+        accepted_promises = {
+            promise
+            for artifact in matching
+            for promise in artifact.support_promises
+        }
+        topologies = {
+            topology
+            for artifact in matching
+            for topology in artifact.acceptance_topologies
+        }
+        if accepted_promises != set(acceptance.support_promises):
+            failures.append(
+                f"acceptance consumer {acceptance.name} lost its support-promise trace"
+            )
+        if topologies != {acceptance.topology}:
+            failures.append(
+                f"acceptance consumer {acceptance.name} lost its declared topology"
+            )
+
     if any(
         not artifact.consumers
         or not artifact.use_cases
         or not artifact.support_promises
+        or not (artifact.roles or artifact.acceptance_topologies)
         for artifact in service_plan.artifacts
     ):
         failures.append("business-service plan contains an unexplained artifact")

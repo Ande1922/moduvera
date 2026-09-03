@@ -217,66 +217,69 @@ class DeliveryForwardTest(unittest.TestCase):
             "implement-frontier",
             implementation_route(plan.implementation_shape).skill,
         )
-        targets = {artifact.target for artifact in plan.artifacts}
-        self.assertIn("services/returns/returns-api", targets)
-        self.assertIn("services/returns/returns-service", targets)
-        self.assertIn("returns HTTP inbound adapter", targets)
-        self.assertIn("returns HTTP provider adapter", targets)
-        self.assertIn("returns message inbound adapter", targets)
-        self.assertIn("returns message outbound adapter", targets)
-        self.assertIn("returns persistence outbound adapter for return-ledger", targets)
-        self.assertIn("returns service-owned migration for return-ledger", targets)
-        self.assertIn("real-database verification for return-ledger", targets)
-        self.assertIn("returns-app assembly", targets)
-        self.assertIn("fulfillment-app assembly", targets)
-        self.assertIn("reference-product acceptance entry for Shopper", targets)
-        self.assertIn("returns-app acceptance entry for Returns Operators", targets)
-        self.assertIn("consumer contract acceptance for Fulfillment Partners", targets)
-        self.assertIn(
-            "repository message-contract verification for warehouse-command", targets
-        )
-        self.assertIn(
-            "repository message-contract verification for accepted-event", targets
-        )
         for promise in description.support_promises:
-            self.assertIn(
-                f"repository architecture rules for {promise.key}", targets
+            actual_roles = {
+                role
+                for artifact in plan.artifacts
+                if promise.key in artifact.support_promises
+                for role in artifact.roles
+                if role in {
+                    scenario_role
+                    for scenario in contract.scenarios.values()
+                    for scenario_role in scenario["artifact_roles"]
+                }
+            }
+            self.assertEqual(
+                set(contract.scenarios[promise.kind]["artifact_roles"]),
+                actual_roles,
+            )
+        for state in description.durable_state:
+            self.assertEqual(
+                set(contract.state_artifact_roles),
+                {
+                    role
+                    for artifact in plan.artifacts
+                    if state.name in artifact.durable_states
+                    for role in artifact.roles
+                },
             )
         for artifact in plan.artifacts:
             self.assertTrue(artifact.consumers)
             self.assertTrue(artifact.use_cases)
             self.assertTrue(artifact.support_promises)
-        artifacts = {artifact.target: artifact for artifact in plan.artifacts}
+            self.assertTrue(artifact.roles or artifact.acceptance_topologies)
+        artifacts = {
+            consumer: artifact
+            for artifact in plan.artifacts
+            for consumer in artifact.acceptance_consumers
+        }
         self.assertEqual(
             ("Shopper",),
-            artifacts[
-                "reference-product acceptance entry for Shopper"
-            ].acceptance_consumers,
+            artifacts["Shopper"].acceptance_consumers,
         )
+        self.assertEqual(("reference-product",), artifacts["Shopper"].acceptance_topologies)
         self.assertEqual(
             ("Returns Operators",),
-            artifacts[
-                "returns-app acceptance entry for Returns Operators"
-            ].acceptance_consumers,
+            artifacts["Returns Operators"].acceptance_consumers,
         )
+        self.assertEqual(("declared-app",), artifacts["Returns Operators"].acceptance_topologies)
         self.assertEqual(
             ("Customer Support", "Fulfillment", "Returns Policy"),
-            artifacts[
-                "returns-app acceptance entry for Returns Operators"
-            ].consumers,
+            artifacts["Returns Operators"].consumers,
         )
         self.assertEqual(
             ("Fulfillment Partners",),
-            artifacts[
-                "consumer contract acceptance for Fulfillment Partners"
-            ].acceptance_consumers,
+            artifacts["Fulfillment Partners"].acceptance_consumers,
+        )
+        self.assertEqual(
+            ("consumer-contract",),
+            artifacts["Fulfillment Partners"].acceptance_topologies,
         )
         self.assertEqual(
             ("Finance", "Returns", "Warehouse"),
-            artifacts[
-                "consumer contract acceptance for Fulfillment Partners"
-            ].consumers,
+            artifacts["Fulfillment Partners"].consumers,
         )
+        targets = {artifact.target for artifact in plan.artifacts}
         self.assertEqual(
             targets,
             {target for ticket in plan.tickets for target in ticket.artifacts},
@@ -308,12 +311,13 @@ class DeliveryForwardTest(unittest.TestCase):
             durable_state=(),
         ), contract)
 
-        targets = {artifact.target for artifact in plan.artifacts}
-        self.assertIn("services/returns/returns-api", targets)
-        self.assertNotIn("returns synchronous Service API", targets)
-        self.assertIn("returns message inbound adapter", targets)
-        self.assertFalse(any("persistence" in target for target in targets))
-        self.assertFalse(any("migration" in target for target in targets))
+        roles = {role for artifact in plan.artifacts for role in artifact.roles}
+        self.assertEqual(
+            set(contract.scenarios[command.kind]["artifact_roles"]),
+            roles,
+        )
+        self.assertNotIn("synchronous-api", roles)
+        self.assertFalse(set(contract.state_artifact_roles).intersection(roles))
 
     def test_internal_only_and_declared_app_acceptance_omit_external_surfaces(self) -> None:
         contract = load_business_service_contract(
@@ -337,13 +341,22 @@ class DeliveryForwardTest(unittest.TestCase):
             durable_state=(),
         ), contract)
 
-        targets = {artifact.target for artifact in plan.artifacts}
-        self.assertNotIn("services/returns/returns-api", targets)
-        self.assertNotIn("returns synchronous Service API", targets)
-        self.assertFalse(any("adapter" in target.lower() for target in targets))
-        self.assertFalse(any("reference-product" in target for target in targets))
-        self.assertIn("returns-app acceptance entry for Returns Operators", targets)
-        self.assertIn("services/returns/returns-service", targets)
+        roles = {role for artifact in plan.artifacts for role in artifact.roles}
+        self.assertEqual(
+            set(contract.scenarios[internal.kind]["artifact_roles"]),
+            roles,
+        )
+        self.assertTrue(
+            set(contract.scenarios[internal.kind]["forbidden_roles"]).isdisjoint(roles)
+        )
+        self.assertEqual(
+            {"declared-app"},
+            {
+                topology
+                for artifact in plan.artifacts
+                for topology in artifact.acceptance_topologies
+            },
+        )
 
     def test_business_service_plan_rejects_incomplete_or_unsafe_shapes(self) -> None:
         contract = load_business_service_contract(
@@ -578,6 +591,18 @@ Stop after reporting the selected delivery stage.
                 failures = representative_forward_failures(root)
 
                 self.assertTrue(failures, name)
+
+    def test_forward_validation_accepts_artifact_template_evolution(self) -> None:
+        temporary, root = self.isolated_checkout()
+        self.addCleanup(temporary.cleanup)
+        self.mutate_shape_contract(
+            root,
+            lambda payload: payload["artifact_templates"].update(
+                {"assembly": "{app} runtime assembly"}
+            ),
+        )
+
+        self.assertEqual([], representative_forward_failures(root))
 
     def test_malformed_shape_contracts_have_bounded_diagnostics(self) -> None:
         cases = (
