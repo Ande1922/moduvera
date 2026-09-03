@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 
 CORE_PATH = Path(__file__).resolve().parents[1] / "quality_gate.py"
@@ -123,20 +124,27 @@ class QualityGatePolicyTest(unittest.TestCase):
 
     def test_common_credential_key_forms_are_scanned_and_redacted(self) -> None:
         value = "credential-" + "v@lue:1234567890!"
+        keys = (
+            "client_secret",
+            "client-secret",
+            "access_token",
+            "access-token",
+            "refresh_token",
+            "refresh-token",
+        )
+        double_quote = '"'
+        single_quote = "'"
         assignments = (
-            f'"client_secret": "{value}"',
-            f"'client-secret'='{value}'",
-            f'"access_token":"{value}"',
-            f"'access-token': '{value}'",
-            f'"refresh_token": "{value}"',
-            f"refresh-token={value}",
+            f"{double_quote}{keys[0]}{double_quote}: {double_quote}{value}{double_quote}",
+            f"{single_quote}{keys[1]}{single_quote}={single_quote}{value}{single_quote}",
+            f"{double_quote}{keys[2]}{double_quote}:{double_quote}{value}{double_quote}",
+            f"{single_quote}{keys[3]}{single_quote}: {single_quote}{value}{single_quote}",
+            f"{double_quote}{keys[4]}{double_quote}: {double_quote}{value}{double_quote}",
+            f"{keys[5]}={value}",
         )
         for assignment in assignments:
             self.assertIsNotNone(quality_gate.CREDENTIAL_ASSIGNMENT.search(assignment))
             self.assertNotIn(value, quality_gate.redact(assignment))
-        template_assignment = '"client_secret": "{value}"'
-        self.assertIsNone(quality_gate.CREDENTIAL_ASSIGNMENT.search(template_assignment))
-        self.assertEqual(template_assignment, quality_gate.redact(template_assignment))
         self.fixture.write("notes.md", "\n".join(assignments) + "\n")
         head = self.fixture.commit("credentials")
         with self.assertRaises(quality_gate.GateError) as caught:
@@ -158,6 +166,61 @@ class QualityGatePolicyTest(unittest.TestCase):
         self.assertNotIn(begin, result)
         self.assertNotIn(payload, result)
         self.assertNotIn(end, result)
+
+    def test_escaped_multiline_json_credential_is_detected_and_redacted(self) -> None:
+        key = "client_" + "secret"
+        exposed_value = "live-escaped-" + r'quote\"-value-123456'
+        content = f'"{key}":\n  "{exposed_value}"'
+        match = quality_gate.CREDENTIAL_ASSIGNMENT.search(content)
+        self.assertIsNotNone(match)
+        assert match is not None
+        self.assertTrue(quality_gate.is_sensitive_credential_assignment(match))
+        self.assertNotIn(exposed_value, quality_gate.redact(content))
+        self.fixture.write("config.json", "{\n" + content + "\n}\n")
+        head = self.fixture.commit("multiline escaped credential")
+        with self.assertRaises(quality_gate.GateError):
+            quality_gate.check_sensitive_content(self.fixture.root, self.base, head)
+
+    def test_placeholders_and_code_expressions_avoid_false_positives(self) -> None:
+        secret_key = "client_" + "secret"
+        access_key = "access_" + "token"
+        refresh_key = "refresh_" + "token"
+        safe_content = "\n".join(
+            (
+                f"{secret_key} = request.token()",
+                f"{access_key} = Optional.empty()",
+                f"{refresh_key} = null",
+                f"{secret_key} = ${{DB_PASSWORD}}",
+            )
+        )
+        self.assertFalse(quality_gate._hunk_has_sensitive_content(safe_content))
+        self.fixture.write(
+            "src/TestConfig.java",
+            "class TestConfig {\n"
+            f"  Object a = {safe_content.splitlines()[0].split(' = ', 1)[1]};\n"
+            f"  Object b = {safe_content.splitlines()[1].split(' = ', 1)[1]};\n"
+            f"  Object c = {safe_content.splitlines()[2].split(' = ', 1)[1]};\n"
+            "}\n",
+        )
+        self.fixture.write("config/application.yml", safe_content.splitlines()[3] + "\n")
+        safe_head = self.fixture.commit("safe code and environment placeholder")
+        quality_gate.check_sensitive_content(self.fixture.root, self.base, safe_head)
+        unsafe_values = (
+            "test-prod-secret",
+            "example-live-value",
+            "${DB_PASSWORD:-hardcoded-value}",
+        )
+        for exposed_value in unsafe_values:
+            assignment = f"{secret_key}={exposed_value}"
+            self.assertTrue(quality_gate._hunk_has_sensitive_content(assignment))
+            self.assertNotIn(exposed_value, quality_gate.redact(assignment))
+        self.fixture.write(
+            "config/application.yml",
+            "\n".join(f"{secret_key}={value}" for value in unsafe_values) + "\n",
+        )
+        unsafe_head = self.fixture.commit("unsafe config values")
+        with self.assertRaises(quality_gate.GateError):
+            quality_gate.check_sensitive_content(self.fixture.root, safe_head, unsafe_head)
 
     def test_unresolvable_base_fails_closed(self) -> None:
         with self.assertRaises(quality_gate.GateError):
@@ -204,16 +267,20 @@ class QualityGateEvidenceTest(unittest.TestCase):
         pem_end = "-----END " + "PRIVATE KEY-----"
         pem_payload = "cHJpdmF0ZS1rZXktcGF5bG9hZA=="
         client_value = "client-value-1234567890"
+        credential_keys = (
+            "client_secret",
+            "client-secret",
+            "access_token",
+            "access-token",
+            "refresh_token",
+            "refresh-token",
+        )
         credential_assignments = tuple(
-            f'"{key}": "{client_value}"'
-            for key in (
-                "client_secret",
-                "client-secret",
-                "access_token",
-                "access-token",
-                "refresh_token",
-                "refresh-token",
-            )
+            f'"{key}": "{client_value}"' for key in credential_keys
+        )
+        escaped_terminal_value = "escaped-" + r'quote\"-live-value-123456'
+        credential_assignments += (
+            f'"{credential_keys[0]}":\n  "{escaped_terminal_value}"',
         )
         credential_arguments = " ".join(f"'{assignment}'" for assignment in credential_assignments)
         extension.write_text(
@@ -237,6 +304,7 @@ class QualityGateEvidenceTest(unittest.TestCase):
         self.assertNotIn(pem_end, result.stdout)
         self.assertIn("[REDACTED_PRIVATE_KEY_BLOCK]", result.stdout)
         self.assertNotIn(client_value, result.stdout)
+        self.assertNotIn(escaped_terminal_value, result.stdout)
         self.assertIn('"client_secret": "[REDACTED]"', result.stdout)
         self.assertIn('"access-token": "[REDACTED]"', result.stdout)
         self.assertIn('"refresh-token": "[REDACTED]"', result.stdout)
@@ -346,6 +414,41 @@ class QualityGateEvidenceTest(unittest.TestCase):
         result = self.run_gate("normal", "--base", self.base, "--head", self.base)
         self.assertNotEqual(0, result.returncode)
         self.assertIn("committed extension must be a regular 100755 file", result.stdout)
+
+    def test_assume_unchanged_modified_maven_wrapper_is_rejected_before_execution(self) -> None:
+        self.install_gate()
+        marker = self.fixture.root / "hidden-maven-wrapper-ran"
+        mvnw = self.fixture.root / "mvnw"
+        mvnw.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+        mvnw.chmod(0o755)
+        self.base = self.fixture.commit("install gate and Maven wrapper")
+        self.fixture.git("update-index", "--assume-unchanged", "mvnw")
+        mvnw.write_text(f"#!/usr/bin/env bash\ntouch '{marker}'\n", encoding="utf-8")
+        mvnw.chmod(0o755)
+        self.addCleanup(
+            self.fixture.git, "update-index", "--no-assume-unchanged", "mvnw"
+        )
+        result = self.run_gate("normal", "--base", self.base, "--head", self.base)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("assume-unchanged or skip-worktree", result.stdout)
+        self.assertFalse(marker.exists())
+
+    def test_skip_worktree_modified_extension_is_rejected_before_execution(self) -> None:
+        self.install_gate()
+        marker = self.fixture.root / "hidden-extension-ran"
+        extension = self.fixture.root / "tools/quality/checks.d/common/10-hidden"
+        extension.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+        extension.chmod(0o755)
+        self.base = self.fixture.commit("install gate and extension")
+        relative = extension.relative_to(self.fixture.root).as_posix()
+        self.fixture.git("update-index", "--skip-worktree", relative)
+        extension.write_text(f"#!/usr/bin/env bash\ntouch '{marker}'\n", encoding="utf-8")
+        extension.chmod(0o755)
+        self.addCleanup(self.fixture.git, "update-index", "--no-skip-worktree", relative)
+        result = self.run_gate("normal", "--base", self.base, "--head", self.base)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("assume-unchanged or skip-worktree", result.stdout)
+        self.assertFalse(marker.exists())
 
     def test_only_twenty_completed_runs_are_retained(self) -> None:
         root = self.fixture.root / ".quality-gate/runs"
@@ -510,6 +613,28 @@ class QualityGateEvidenceTest(unittest.TestCase):
             with self.assertRaises(ProcessLookupError):
                 os.kill(child_pid, 0)
 
+    def test_signal_immediately_after_launch_reaps_child_and_completes_evidence(self) -> None:
+        self.install_gate()
+        extension = self.fixture.root / "tools/quality/checks.d/common/10-signal-at-launch"
+        extension.write_text(
+            "#!/usr/bin/env bash\n"
+            "echo $$ > \"$QUALITY_GATE_RUN_DIR/launch.pid\"\n"
+            "kill -TERM \"$PPID\"\n"
+            "trap '' TERM\n"
+            "exec sleep 60\n",
+            encoding="utf-8",
+        )
+        extension.chmod(0o755)
+        self.base = self.fixture.commit("install launch-signal extension")
+        result = self.run_gate("normal", "--base", self.base, "--head", self.base)
+        self.assertEqual(128 + signal.SIGTERM, result.returncode, result.stdout + result.stderr)
+        self.assertIn("status: INTERRUPTED", result.stdout)
+        run_dir = self.latest_run()
+        self.assertTrue((run_dir / "completed").is_file())
+        child_pid = int((run_dir / "launch.pid").read_text().strip())
+        with self.assertRaises(ProcessLookupError):
+            os.kill(child_pid, 0)
+
 
 class EvidencePathSafetyTest(unittest.TestCase):
     def test_symlinked_evidence_components_never_mutate_external_target(self) -> None:
@@ -547,19 +672,61 @@ class EvidencePathSafetyTest(unittest.TestCase):
                     }
                     self.assertEqual(before, after)
 
+    def test_private_permissions_use_descriptors_without_path_chmod(self) -> None:
+        fixture = RepositoryFixture()
+        self.addCleanup(fixture.close)
+        fixture.write("README.md", "# Fixture\n")
+        fixture.commit("base")
+        with mock.patch.object(
+            quality_gate.os,
+            "chmod",
+            side_effect=AssertionError("path chmod must not be used"),
+        ):
+            evidence = quality_gate.Evidence(fixture.root)
+            evidence.complete("status: PASS\n")
+        self.assertEqual(0o700, stat.S_IMODE(evidence.root.stat().st_mode))
+        self.assertEqual(0o700, stat.S_IMODE(evidence.runs.stat().st_mode))
+        self.assertEqual(0o700, stat.S_IMODE(evidence.run_dir.stat().st_mode))
+        self.assertEqual(0o600, stat.S_IMODE(evidence.log_path.stat().st_mode))
+        self.assertEqual(0o600, stat.S_IMODE(evidence.summary_path.stat().st_mode))
+
 
 class BoundedTailTest(unittest.TestCase):
-    def test_tail_reads_only_bounded_suffix(self) -> None:
+    def test_tail_streams_full_log_into_bounded_redacted_suffix(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "large.log"
             prefix = "not-in-tail\n" * (quality_gate.MAX_TAIL_BYTES * 3 // 12)
             suffix = "".join(f"tail-{index}\n" for index in range(30))
             path.write_text(prefix + suffix, encoding="utf-8")
-            tail = quality_gate.bounded_tail(path)
+            tail = quality_gate.redacted_tail(path)
         self.assertEqual(quality_gate.MAX_FAILURE_LINES, len(tail))
         self.assertEqual("tail-10", tail[0])
         self.assertEqual("tail-29", tail[-1])
         self.assertNotIn("not-in-tail", tail)
+
+    def test_oversized_pem_and_credential_never_enter_retained_tail(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "sensitive.log"
+            begin = "-----BEGIN " + "PRIVATE KEY-----"
+            end = "-----END " + "PRIVATE KEY-----"
+            pem_payload = "pem-sensitive-payload-" * quality_gate.MAX_TAIL_BYTES
+            credential_key = "client_" + "secret"
+            credential_value = "credential-sensitive-value-" * quality_gate.MAX_TAIL_BYTES
+            multiline_gap = "\n" * (quality_gate.MAX_FAILURE_LINES + 5)
+            path.write_text(
+                f"{begin}\n{pem_payload}\n{end}\n"
+                f'"{credential_key}":{multiline_gap} "{credential_value}"\nfailed\n',
+                encoding="utf-8",
+            )
+            tail = quality_gate.redacted_tail(path)
+        retained = "\n".join(tail)
+        self.assertNotIn("pem-sensitive-payload", retained)
+        self.assertNotIn("credential-sensitive-value", retained)
+        self.assertNotIn(begin, retained)
+        self.assertNotIn(end, retained)
+        self.assertIn("[REDACTED_PRIVATE_KEY_BLOCK]", retained)
+        self.assertIn("[REDACTED]", retained)
+        self.assertLessEqual(len(tail), quality_gate.MAX_FAILURE_LINES)
 
 
 if __name__ == "__main__":

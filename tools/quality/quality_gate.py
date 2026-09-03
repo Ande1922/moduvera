@@ -8,6 +8,8 @@ deterministic check implementations so the gate can test its own policy.
 from __future__ import annotations
 
 import argparse
+import codecs
+from collections import deque
 import datetime as dt
 import os
 from pathlib import Path, PurePosixPath
@@ -25,6 +27,9 @@ import urllib.parse
 MAX_COMPLETED_RUNS = 20
 MAX_FAILURE_LINES = 20
 MAX_TAIL_BYTES = 64 * 1024
+MAX_REDACTED_LINE_CHARS = 4096
+MAX_STREAM_BUFFER_CHARS = 2 * MAX_REDACTED_LINE_CHARS
+STREAM_PATTERN_OVERLAP = 256
 MAX_SUMMARY_BYTES = 8192
 PROCESS_GROUP_TERM_SECONDS = 2.0
 PROCESS_GROUP_KILL_SECONDS = 5.0
@@ -38,9 +43,8 @@ CREDENTIAL_KEY = (
 CREDENTIAL_ASSIGNMENT = re.compile(
     rf"(?i)(?P<prefix>(?P<key_quote>['\"]?)\b{CREDENTIAL_KEY}\b"
     rf"(?P=key_quote)\s*[:=]\s*)"
-    r"(?!['\"]?(?:\$\{|\{[A-Za-z_][A-Za-z0-9_]*\}|<|\[REDACTED\]|"
-    r"REDACTED\b|CHANGEME\b|example\b|dummy\b|test\b))"
-    r"(?P<value>\"[^\"\r\n]+\"|'[^'\r\n]+'|[^\s,;}\]]+)"
+    r"(?P<value>\$\{[^}\r\n]+\}|\"(?:\\.|[^\"\\\r\n])+\"|"
+    r"'(?:\\.|[^'\\\r\n])+'|[^\s,;}\]]+)"
 )
 SECRET_PATTERNS = (
     PRIVATE_KEY_BEGIN,
@@ -59,6 +63,40 @@ def _redact_credential(match: re.Match[str]) -> str:
     else:
         replacement = "[REDACTED]"
     return match.group("prefix") + replacement
+
+
+EXACT_PLACEHOLDER = re.compile(
+    r"^(?:\$\{[A-Za-z_][A-Za-z0-9_]*\}|<[A-Za-z_][A-Za-z0-9_-]*>|"
+    r"\[?REDACTED\]?|CHANGEME|example|dummy|test)$",
+    re.IGNORECASE,
+)
+CODE_EXPRESSION = re.compile(
+    r"^(?:null|true|false|Optional\.empty\(\)|"
+    r"[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)+\([^\r\n]*\))$"
+)
+
+
+def _credential_value(match: re.Match[str]) -> tuple[str, bool]:
+    raw = match.group("value")
+    quoted = len(raw) >= 2 and raw[0] in {'"', "'"} and raw[-1] == raw[0]
+    if quoted:
+        return raw[1:-1], True
+    return raw, False
+
+
+def is_sensitive_credential_assignment(match: re.Match[str]) -> bool:
+    value, quoted = _credential_value(match)
+    if EXACT_PLACEHOLDER.fullmatch(value):
+        return False
+    if CODE_EXPRESSION.fullmatch(value):
+        return False
+    if quoted:
+        return True
+    if value.startswith("${") and not EXACT_PLACEHOLDER.fullmatch(value):
+        return True
+    if len(value) >= 12:
+        return True
+    return bool(re.search(r"[A-Za-z]", value) and re.search(r"\d", value) and len(value) >= 8)
 
 
 REDACTIONS = (
@@ -227,18 +265,39 @@ def check_skill_structure(repo: Path, head: str) -> None:
     print(f"checked {len(roots)} project Skill directorie(s)")
 
 
-def added_lines(repo: Path, base: str, head: str) -> list[str]:
+def added_hunks(repo: Path, base: str, head: str) -> list[str]:
     result = git(repo, "diff", "--unified=0", "--no-color", base, head, check=False)
     if result.returncode != 0:
         raise GateError(result.stderr.strip() or "cannot inspect changed content")
-    return [line[1:] for line in result.stdout.splitlines() if line.startswith("+") and not line.startswith("+++")]
+    hunks: list[str] = []
+    added: list[str] = []
+    for line in result.stdout.splitlines():
+        if line.startswith("@@"):
+            if added:
+                hunks.append("\n".join(added))
+                added = []
+        elif line.startswith("+") and not line.startswith("+++"):
+            added.append(line[1:])
+    if added:
+        hunks.append("\n".join(added))
+    return hunks
+
+
+def _hunk_has_sensitive_content(content: str) -> bool:
+    for pattern in SECRET_PATTERNS:
+        if pattern is CREDENTIAL_ASSIGNMENT:
+            if any(is_sensitive_credential_assignment(match) for match in pattern.finditer(content)):
+                return True
+        elif pattern.search(content):
+            return True
+    return False
 
 
 def check_sensitive_content(repo: Path, base: str, head: str) -> None:
     findings: list[str] = []
-    for number, line in enumerate(added_lines(repo, base, head), 1):
-        if any(pattern.search(line) for pattern in SECRET_PATTERNS):
-            findings.append(f"added line {number}: possible credential or private key")
+    for number, content in enumerate(added_hunks(repo, base, head), 1):
+        if _hunk_has_sensitive_content(content):
+            findings.append(f"added hunk {number}: possible credential or private key")
     if findings:
         raise GateError("\n".join(findings))
     print("checked added content for high-confidence credential patterns")
@@ -284,6 +343,49 @@ def ensure_pinned_checkout(repo: Path, head: str) -> None:
         if len(entries) > 20:
             bounded += f", ... ({len(entries) - 20} more)"
         raise GateError(f"checkout must be clean and contain no untracked files: {bounded}")
+    flags_result = git(repo, "ls-files", "-v", "-z", check=False)
+    if flags_result.returncode != 0:
+        raise GateError(flags_result.stderr.strip() or "cannot inspect tracked index flags")
+    flagged: list[str] = []
+    for record in flags_result.stdout.split("\0"):
+        if not record:
+            continue
+        tag, path = record[0], record[2:]
+        if tag.islower() or tag == "S":
+            flagged.append(f"{tag} {path}")
+    if flagged:
+        bounded = ", ".join(flagged[:20])
+        if len(flagged) > 20:
+            bounded += f", ... ({len(flagged) - 20} more)"
+        raise GateError(f"assume-unchanged or skip-worktree index flags are forbidden: {bounded}")
+
+
+def ensure_pinned_executable_inputs(repo: Path, head: str, command: list[str]) -> None:
+    repository = repo.resolve(strict=True)
+    checked: set[Path] = set()
+    for argument in command:
+        candidate = Path(argument)
+        candidate = candidate if candidate.is_absolute() else repo / candidate
+        try:
+            resolved = candidate.resolve(strict=True)
+        except (FileNotFoundError, OSError):
+            continue
+        if resolved in checked or not resolved.is_file() or not resolved.is_relative_to(repository):
+            continue
+        checked.add(resolved)
+        relative = resolved.relative_to(repository).as_posix()
+        listing = git(repo, "ls-tree", head, "--", relative, check=False)
+        if listing.returncode != 0 or not listing.stdout.strip():
+            raise GateError(f"executable input is not committed at recorded head: {relative}")
+        metadata = listing.stdout.split("\t", 1)[0]
+        mode, object_type, object_id = metadata.split(" ", 2)
+        state = resolved.lstat()
+        working_mode = "100755" if state.st_mode & 0o111 else "100644"
+        if mode != "100755" or object_type != "blob" or working_mode != mode:
+            raise GateError(f"executable input mode does not match pinned 100755 blob: {relative}")
+        digest = git(repo, "hash-object", relative, check=False)
+        if digest.returncode != 0 or digest.stdout.strip() != object_id:
+            raise GateError(f"executable input content does not match recorded head: {relative}")
 
 
 def _lstat(path: Path) -> os.stat_result | None:
@@ -304,7 +406,14 @@ def _ensure_directory(path: Path, parent: Path) -> None:
         raise GateError(f"evidence path must be a real directory: {path}")
     if path.resolve(strict=True).parent != parent.resolve(strict=True):
         raise GateError(f"evidence directory escapes its validated parent: {path}")
-    os.chmod(path, 0o700, follow_symlinks=False)
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise GateError(f"evidence descriptor is not a directory: {path}")
+        os.fchmod(descriptor, 0o700)
+    finally:
+        os.close(descriptor)
 
 
 def _validate_regular(path: Path, parent: Path) -> os.stat_result:
@@ -315,6 +424,22 @@ def _validate_regular(path: Path, parent: Path) -> os.stat_result:
         raise GateError(f"evidence path must be a real regular file: {path}")
     if path.resolve(strict=True).parent != parent.resolve(strict=True):
         raise GateError(f"evidence file escapes its validated parent: {path}")
+    parent_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    parent_descriptor = os.open(parent, parent_flags)
+    try:
+        descriptor = os.open(
+            path.name,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=parent_descriptor,
+        )
+    finally:
+        os.close(parent_descriptor)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise GateError(f"evidence descriptor is not a regular file: {path}")
+        os.fchmod(descriptor, 0o600)
+    finally:
+        os.close(descriptor)
     return state
 
 
@@ -333,6 +458,7 @@ def _open_new_private(path: Path, parent: Path):
     if not stat.S_ISREG(state.st_mode):
         os.close(descriptor)
         raise GateError(f"new evidence path is not a regular file: {path}")
+    os.fchmod(descriptor, 0o600)
     return os.fdopen(descriptor, "w", encoding="utf-8")
 
 
@@ -353,6 +479,7 @@ def _open_existing_private(path: Path, parent: Path, mode: str):
     if not stat.S_ISREG(state.st_mode):
         os.close(descriptor)
         raise GateError(f"evidence path is not a regular file: {path}")
+    os.fchmod(descriptor, 0o600)
     if mode == "rb":
         return os.fdopen(descriptor, "rb")
     return os.fdopen(descriptor, "a", encoding="utf-8")
@@ -445,13 +572,142 @@ class GateInterrupted(GateError):
         self.signum = signum
 
 
-def bounded_tail(path: Path, max_lines: int = MAX_FAILURE_LINES) -> list[str]:
+PENDING_CREDENTIAL_KEY = re.compile(
+    rf"(?i)(?P<key_quote>['\"]?)\b{CREDENTIAL_KEY}\b(?P=key_quote)\s*[:=]\s*$"
+)
+CREDENTIAL_PREFIX = re.compile(
+    rf"(?i)['\"]?\b{CREDENTIAL_KEY}\b['\"]?\s*[:=]"
+)
+
+
+class StreamingRedactor:
+    def __init__(self, max_lines: int = MAX_FAILURE_LINES) -> None:
+        self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        self.buffer = ""
+        self.pending_credential = ""
+        self.inside_private_key = False
+        self.oversized_preview: str | None = None
+        self.discarding_sensitive_line = False
+        self.lines: deque[str] = deque(maxlen=max_lines)
+
+    def feed(self, content: bytes) -> None:
+        self.buffer += self.decoder.decode(content)
+        self._drain()
+
+    def finish(self) -> list[str]:
+        self.buffer += self.decoder.decode(b"", final=True)
+        self._drain(final=True)
+        if self.pending_credential:
+            self._append_redacted(self.pending_credential)
+            self.pending_credential = ""
+        return list(self.lines)
+
+    def _drain(self, final: bool = False) -> None:
+        while self.buffer:
+            if self.inside_private_key:
+                ending = PRIVATE_KEY_END.search(self.buffer)
+                if ending is None:
+                    if len(self.buffer) > 256:
+                        self.buffer = self.buffer[-256:]
+                    return
+                self.buffer = self.buffer[ending.end() :]
+                self.inside_private_key = False
+                continue
+
+            beginning = PRIVATE_KEY_BEGIN.search(self.buffer)
+            newline = self.buffer.find("\n")
+            if beginning is not None and (newline < 0 or beginning.start() <= newline):
+                prefix = self.buffer[: beginning.start()]
+                if prefix or self.oversized_preview is not None:
+                    self._finish_oversized_line(prefix)
+                self._append_line("[REDACTED_PRIVATE_KEY_BLOCK]")
+                self.buffer = self.buffer[beginning.end() :]
+                self.inside_private_key = PRIVATE_KEY_END.search(self.buffer) is None
+                if not self.inside_private_key:
+                    ending = PRIVATE_KEY_END.search(self.buffer)
+                    assert ending is not None
+                    self.buffer = self.buffer[ending.end() :]
+                continue
+
+            if newline < 0:
+                if final:
+                    self._finish_oversized_line(self.buffer)
+                    self.buffer = ""
+                elif len(self.buffer) > MAX_STREAM_BUFFER_CHARS:
+                    self._consume_oversized_fragment()
+                return
+            line = self.buffer[: newline + 1]
+            self.buffer = self.buffer[newline + 1 :]
+            self._finish_oversized_line(line)
+
+    def _consume_oversized_fragment(self) -> None:
+        split_at = len(self.buffer) - STREAM_PATTERN_OVERLAP
+        fragment = self.buffer[:split_at]
+        self.buffer = self.buffer[split_at:]
+        if (
+            self.pending_credential
+            or self.discarding_sensitive_line
+            or CREDENTIAL_PREFIX.search(fragment)
+        ):
+            self.pending_credential = ""
+            self.discarding_sensitive_line = True
+            self.oversized_preview = "[REDACTED]"
+            return
+        if self.oversized_preview is None:
+            self.oversized_preview = ""
+        remaining = MAX_REDACTED_LINE_CHARS - len(self.oversized_preview)
+        if remaining > 0:
+            self.oversized_preview += redact(fragment)[:remaining]
+
+    def _finish_oversized_line(self, line: str) -> None:
+        if self.oversized_preview is None:
+            self._process_line(line)
+            return
+        if CREDENTIAL_PREFIX.search(line):
+            self.discarding_sensitive_line = True
+            self.oversized_preview = "[REDACTED]"
+        if not self.discarding_sensitive_line:
+            remaining = MAX_REDACTED_LINE_CHARS - len(self.oversized_preview)
+            if remaining > 0:
+                self.oversized_preview += redact(line)[:remaining]
+        self._append_line(self.oversized_preview)
+        self.oversized_preview = None
+        self.discarding_sensitive_line = False
+
+    def _process_line(self, line: str) -> None:
+        if self.pending_credential:
+            combined = self.pending_credential + line
+            if CREDENTIAL_ASSIGNMENT.search(combined):
+                self._append_redacted(combined)
+                self.pending_credential = ""
+                return
+            if line.strip() == "":
+                if len(combined) <= MAX_STREAM_BUFFER_CHARS:
+                    self.pending_credential = combined
+                return
+            self._append_redacted(self.pending_credential)
+            self.pending_credential = ""
+        if PENDING_CREDENTIAL_KEY.search(line.rstrip("\r\n")):
+            self.pending_credential = line
+            return
+        self._append_redacted(line)
+
+    def _append_redacted(self, text: str) -> None:
+        for line in redact(text).splitlines():
+            self._append_line(line)
+
+    def _append_line(self, line: str) -> None:
+        if len(line) > MAX_REDACTED_LINE_CHARS:
+            line = line[:MAX_REDACTED_LINE_CHARS] + " [line truncated]"
+        self.lines.append(line)
+
+
+def redacted_tail(path: Path, max_lines: int = MAX_FAILURE_LINES) -> list[str]:
+    redactor = StreamingRedactor(max_lines)
     with _open_existing_private(path, path.parent, "rb") as stream:
-        stream.seek(0, os.SEEK_END)
-        size = stream.tell()
-        stream.seek(max(0, size - MAX_TAIL_BYTES))
-        content = stream.read(MAX_TAIL_BYTES)
-    return content.decode("utf-8", "replace").splitlines()[-max_lines:]
+        while content := stream.read(8192):
+            redactor.feed(content)
+    return redactor.finish()
 
 
 def _process_group_exists(process_group: int) -> bool:
@@ -514,34 +770,43 @@ class Runner:
         with _open_existing_private(self.evidence.log_path, self.evidence.run_dir, "a") as log:
             log.write(f"\n=== {name} ===\n$ {shlex.join(command)}\n")
             log.flush()
-            process = subprocess.Popen(
-                command,
-                cwd=self.repo,
-                env=env,
-                text=True,
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-            )
-            process_group = os.getpgid(process.pid)
             try:
+                previous_mask = signal.pthread_sigmask(
+                    signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM}
+                )
+                try:
+                    process = subprocess.Popen(
+                        command,
+                        cwd=self.repo,
+                        env=env,
+                        text=True,
+                        stdout=log,
+                        stderr=subprocess.STDOUT,
+                        start_new_session=True,
+                    )
+                    process_group = os.getpgid(process.pid)
+                finally:
+                    signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
                 return_code = process.wait()
             except GateInterrupted as interrupted:
-                _terminate_process_group(process, process_group, interrupted.signum)
+                if process is not None and process_group is not None:
+                    _terminate_process_group(process, process_group, interrupted.signum)
                 self.results.append(
-                    (name, 128 + interrupted.signum, bounded_tail(self.evidence.log_path))
+                    (name, 128 + interrupted.signum, redacted_tail(self.evidence.log_path))
                 )
                 raise
             except BaseException:
-                _terminate_process_group(process, process_group)
+                if process is not None and process_group is not None:
+                    _terminate_process_group(process, process_group)
                 raise
+            assert process_group is not None
             if _process_group_exists(process_group):
                 log.write(f"step left process group {process_group} running; terminating it\n")
                 log.flush()
                 _terminate_process_group(process, process_group)
                 if return_code == 0:
                     return_code = 1
-        excerpt = bounded_tail(self.evidence.log_path) if return_code else []
+        excerpt = redacted_tail(self.evidence.log_path) if return_code else []
         self.results.append((name, return_code, excerpt))
         return return_code == 0
 
@@ -555,6 +820,7 @@ def run_pinned_step(
     env: dict[str, str] | None = None,
 ) -> bool:
     ensure_pinned_checkout(repo, head)
+    ensure_pinned_executable_inputs(repo, head, command)
     try:
         return runner.step(name, command, env)
     finally:
