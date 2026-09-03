@@ -129,11 +129,6 @@ public final class ModuveraArchitectureRules {
                                     .equals("io.github.ande1922.moduvera.migration.DatabaseMigrator")
                             || javaClass.getName()
                                     .equals("io.github.ande1922.moduvera.migration.MigrationPlan"));
-    private static final DescribedPredicate<JavaClass> DEPRECATED_BUSINESS_CONFIGURATION_FACADE =
-            DescribedPredicate.describe(
-                    "a deprecated Business Service configuration facade",
-                    javaClass -> javaClass.getName()
-                            .equals("io.github.ande1922.moduvera.reference.catalog.CatalogModuleConfiguration"));
     private static final DescribedPredicate<JavaClass> IMPLEMENTS_INBOUND_MESSAGE_HANDLER =
             DescribedPredicate.describe(
                     "implement InboundMessageHandler",
@@ -147,7 +142,7 @@ public final class ModuveraArchitectureRules {
                     .and(IMPLEMENTS_INBOUND_MESSAGE_HANDLER)
                     .as("Business Service messaging classes that implement InboundMessageHandler");
     private static final ArchCondition<JavaClass> HAVE_EXPLICIT_BUSINESS_OWNER =
-            new ArchCondition<>("belong to an explicit Business Module, API, migration slice or compatibility facade") {
+            new ArchCondition<>("belong to an explicit Business Module, API or migration slice") {
                 @Override
                 public void check(JavaClass item, ConditionEvents events) {
                     boolean owned = hasExplicitBusinessOwner(item);
@@ -155,7 +150,7 @@ public final class ModuveraArchitectureRules {
                             item,
                             owned,
                             item.getName()
-                                    + " must belong to an explicit Business Module, API, migration slice or compatibility facade"));
+                                    + " must belong to an explicit Business Module, API or migration slice"));
                 }
             };
     private static final ArchCondition<JavaClass> IMPLEMENT_COMMAND_OR_EVENT_HANDLER =
@@ -383,13 +378,6 @@ public final class ModuveraArchitectureRules {
             .dependOnClassesThat(APP_ASSEMBLY_MIGRATION_EXECUTOR)
             .as("App Assemblies select migration definitions and policy but must not construct migration executors or plans");
 
-    public static final ArchRule APP_ASSEMBLIES_DO_NOT_SELECT_DEPRECATED_BUSINESS_FACADES = noClasses()
-            .that()
-            .resideInAnyPackage(APP_ASSEMBLY_PACKAGES)
-            .should()
-            .dependOnClassesThat(DEPRECATED_BUSINESS_CONFIGURATION_FACADE)
-            .as("Current App Assemblies must select explicit Module and Adapter slices instead of deprecated service-level facades");
-
     public static final ArchRule BUSINESS_HTTP_CONTROLLERS_BELONG_TO_PROVIDER_INBOUND = noClasses()
             .that()
             .resideInAnyPackage(BUSINESS_SERVICE_PACKAGES)
@@ -558,8 +546,7 @@ public final class ModuveraArchitectureRules {
 
     private static boolean hasExplicitBusinessOwner(JavaClass javaClass) {
         String className = javaClass.getName();
-        return className.equals("io.github.ande1922.moduvera.reference.catalog.CatalogModuleConfiguration")
-                || startsWithPackage(className, "io.github.ande1922.moduvera.reference.catalog.api")
+        return startsWithPackage(className, "io.github.ande1922.moduvera.reference.catalog.api")
                 || startsWithPackage(className, "io.github.ande1922.moduvera.reference.catalog.catalog")
                 || startsWithPackage(className, "io.github.ande1922.moduvera.reference.catalog.migration")
                 || className.equals("io.github.ande1922.moduvera.reference.inventory.InventoryModuleConfiguration")
