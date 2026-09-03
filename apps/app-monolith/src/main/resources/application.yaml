@@ -4,7 +4,7 @@ spring:
   datasource:
     url: ${BUSINESS_DATABASE_URL:jdbc:postgresql://localhost:5432/business}
     username: ${BUSINESS_DATABASE_USERNAME:business}
-    password: ${BUSINESS_DATABASE_PASSWORD:business}
+    password: ${BUSINESS_DATABASE_PASSWORD}
   flyway:
     enabled: false
   cloud:

@@ -4,7 +4,7 @@ spring:
   datasource:
     url: ${ORDER_DATABASE_URL:jdbc:postgresql://localhost:5432/order}
     username: ${ORDER_DATABASE_USERNAME:order}
-    password: ${ORDER_DATABASE_PASSWORD:order}
+    password: ${ORDER_DATABASE_PASSWORD}
   flyway:
     enabled: false
   http:

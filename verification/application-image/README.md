@@ -25,6 +25,11 @@ the protocol handshake over an independently mapped host port. It also starts
 `app-monolith` without a server-port override and verifies that the process is
 actually listening through its declared `8083` mapping.
 
+Credential settings may use a direct environment reference such as
+`${DATABASE_PASSWORD}`. A literal fallback embedded in that reference is image
+content and is rejected by the inspection policy, as are declared text files
+whose encoding cannot be inspected safely.
+
 `MODUVERA_IMAGE_REPOSITORY` and `MODUVERA_IMAGE_TAG` select local image names.
 Set `MODUVERA_IMAGE_SKIP_PACKAGE=1` only when the executable JARs are already
 current, or `MODUVERA_IMAGE_SKIP_SMOKE=1` for the build-and-inspect portion.

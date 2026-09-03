@@ -4,7 +4,7 @@ spring:
   datasource:
     url: ${INVENTORY_DATABASE_URL:jdbc:postgresql://localhost:5432/inventory}
     username: ${INVENTORY_DATABASE_USERNAME:inventory}
-    password: ${INVENTORY_DATABASE_PASSWORD:inventory}
+    password: ${INVENTORY_DATABASE_PASSWORD}
   flyway:
     enabled: false
   cloud:

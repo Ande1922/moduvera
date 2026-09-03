@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import codecs
 from pathlib import PurePosixPath
 import re
 import tarfile
@@ -29,8 +30,9 @@ TEXT_SUFFIXES = {
 KEYSTORE_SUFFIXES = {".jks", ".key", ".keystore", ".p12", ".pfx"}
 PRIVATE_KEY = re.compile(br"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----")
 CREDENTIAL_ASSIGNMENT = re.compile(
-    r"(?i)\b(?:password|passwd|token|secret|api[_-]?key|client[_-]?secret|"
-    r"access[_-]?token|refresh[_-]?token)\b\s*[:=]\s*"
+    r"(?i)(?<![\w-])(?P<key_quote>['\"]?)(?:password|passwd|token|secret|"
+    r"api[_-]?key|client[_-]?secret|access[_-]?token|refresh[_-]?token)"
+    r"(?P=key_quote)(?![\w-])\s*[:=]\s*"
     r"(?P<value>\$\{[^}\r\n]+\}|\"(?:\\.|[^\"\\])+\"|"
     r"'(?:\\.|[^'\\])+'|[^\s,;}\]]+)"
 )
@@ -40,7 +42,8 @@ YAML_BLOCK_CREDENTIAL = re.compile(
     r"[|>](?:[1-9][+-]?|[+-][1-9]?)?\s*(?:#.*)?$"
 )
 PLACEHOLDER = re.compile(
-    r"^(?:\$\{[^}\r\n]+\}|<[^>\r\n]+>|\[?REDACTED\]?|CHANGEME|example|dummy|test)$",
+    r"^(?:\$\{[A-Z_][A-Z0-9_]*\}|<[^>\r\n]+>|\[?REDACTED\]?|"
+    r"CHANGEME|example|dummy|test)$",
     re.IGNORECASE,
 )
 
@@ -81,23 +84,46 @@ def _is_sensitive_assignment(match: re.Match[str]) -> bool:
     )
 
 
+def _decode_text(content: bytes, is_declared_text: bool) -> str | None:
+    if content.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        try:
+            text = content.decode("utf-16")
+        except UnicodeDecodeError as error:
+            if is_declared_text:
+                raise ImagePolicyError("image contains an unscannable text artifact") from error
+            return None
+        if "\0" in text:
+            if is_declared_text:
+                raise ImagePolicyError("image contains an unscannable text artifact")
+            return None
+        return text
+    if b"\0" in content:
+        if is_declared_text:
+            raise ImagePolicyError("image contains an unscannable text artifact")
+        return None
+    try:
+        return content.decode("utf-8")
+    except UnicodeDecodeError as error:
+        if is_declared_text:
+            raise ImagePolicyError("image contains an unscannable text artifact") from error
+        return None
+
+
 def _scan_content(member: tarfile.TarInfo, content: bytes) -> None:
     if PRIVATE_KEY.search(content):
         raise ImagePolicyError("image contains private key material")
-    is_declared_text = PurePosixPath(member.name).suffix.lower() in TEXT_SUFFIXES
+    suffix = PurePosixPath(member.name).suffix.lower()
+    is_declared_text = suffix in TEXT_SUFFIXES
     if len(content) > MAX_TEXT_FILE_BYTES:
         if is_declared_text:
             raise ImagePolicyError("image contains an oversized unscannable text artifact")
         return
-    if b"\0" in content:
-        return
-    try:
-        text = content.decode("utf-8")
-    except UnicodeDecodeError:
+    text = _decode_text(content, is_declared_text)
+    if text is None:
         return
     if any(_is_sensitive_assignment(match) for match in CREDENTIAL_ASSIGNMENT.finditer(text)):
         raise ImagePolicyError("image contains a high-confidence credential assignment")
-    if PurePosixPath(member.name).suffix.lower() in {".yaml", ".yml"}:
+    if suffix in {".yaml", ".yml"}:
         lines = text.splitlines()
         for index, line in enumerate(lines):
             header = YAML_BLOCK_CREDENTIAL.match(line)
