@@ -26,14 +26,17 @@ import io.github.ande1922.moduvera.message.outbox.OutboxPublishReport;
 import io.github.ande1922.moduvera.message.outbox.OutboxWorker;
 import io.github.ande1922.moduvera.message.outbox.PublicationObserver;
 import io.github.ande1922.moduvera.message.publication.DurablePublicationTransactionException;
+import io.github.ande1922.moduvera.migration.DatabaseComponent;
+import io.github.ande1922.moduvera.migration.DatabaseMigrator;
+import io.github.ande1922.moduvera.migration.MigrationPlan;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
-import java.sql.Connection;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
@@ -43,12 +46,10 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
-import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
-import org.springframework.jdbc.datasource.init.ScriptUtils;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -73,14 +74,13 @@ class JdbcMessagingStoreIT {
     private AtomicInteger wakeSignals;
 
     @BeforeAll
-    void setUp() throws Exception {
+    void setUp() {
         dataSource = postgresDataSource();
-        try (Connection connection = dataSource.getConnection()) {
-            ScriptUtils.executeSqlScript(
-                    connection,
-                    new ClassPathResource(
-                            "db/moduvera-messaging/postgresql/V1__create_moduvera_messaging.sql"));
-        }
+        new DatabaseMigrator(dataSource)
+                .migrate(new MigrationPlan(
+                        new DatabaseComponent("messaging"),
+                        List.of("classpath:db/moduvera-messaging/postgresql"),
+                        true));
         jdbc = new JdbcTemplate(dataSource);
         jdbc.execute("CREATE TABLE test_business_record (id VARCHAR(128) PRIMARY KEY)");
         var named = new NamedParameterJdbcTemplate(dataSource);
@@ -100,7 +100,7 @@ class JdbcMessagingStoreIT {
                 Clock.fixed(Instant.parse("2026-08-30T00:00:00Z"), ZoneOffset.UTC));
         jdbc.execute("""
                 CREATE TABLE test_inbox_business_record (
-                    tenant_id VARCHAR(128) NOT NULL,
+                    tenant_id VARCHAR(64) NOT NULL,
                     consumer_id VARCHAR(128) NOT NULL,
                     message_id VARCHAR(128) NOT NULL,
                     PRIMARY KEY (tenant_id, consumer_id, message_id)

@@ -28,6 +28,8 @@ import java.time.Instant;
 import java.util.Currency;
 import java.util.List;
 import java.util.Map;
+import org.flywaydb.core.Flyway;
+import org.flywaydb.core.api.MigrationVersion;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -109,6 +111,76 @@ class CatalogApplicationIT {
         jdbc.update("DELETE FROM catalog_product");
         insert("tenant-a", 100L, "Keyboard", new BigDecimal("399.00"));
         insert("tenant-b", 200L, "Private Product", new BigDecimal("10.00"));
+    }
+
+    @Test
+    void migrationUsesCanonicalTenantPersistenceLength() {
+        assertThat(jdbc.queryForObject(
+                        """
+                        SELECT character_maximum_length
+                          FROM information_schema.columns
+                         WHERE table_schema = 'public'
+                           AND table_name = 'catalog_product'
+                           AND column_name = 'tenant_id'
+                        """,
+                        Integer.class))
+                .isEqualTo(64);
+    }
+
+    @Test
+    void migrationRejectsOverlongHistoricalTenantBeforeChangingDataOrColumn() {
+        String schema = "catalog_tenant_upgrade_test";
+        String overlongTenant = "t".repeat(65);
+        DataSource upgradeDataSource = new DriverManagerDataSource(
+                POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
+        JdbcTemplate upgradeJdbc = new JdbcTemplate(upgradeDataSource);
+        upgradeJdbc.execute("CREATE SCHEMA " + schema);
+        try {
+            Flyway.configure()
+                    .dataSource(upgradeDataSource)
+                    .locations("classpath:db/migration/catalog")
+                    .schemas(schema)
+                    .defaultSchema(schema)
+                    .target(MigrationVersion.fromVersion("1"))
+                    .load()
+                    .migrate();
+            upgradeJdbc.update(
+                    """
+                    INSERT INTO catalog_tenant_upgrade_test.catalog_product (
+                        tenant_id, product_id, name, unit_price, currency, version,
+                        created_at, created_by, updated_at, updated_by)
+                    VALUES (?, 1, 'Legacy', 1.00, 'CNY', 0,
+                        CURRENT_TIMESTAMP, 'test', CURRENT_TIMESTAMP, 'test')
+                    """,
+                    overlongTenant);
+
+            assertThatThrownBy(() -> Flyway.configure()
+                            .dataSource(upgradeDataSource)
+                            .locations("classpath:db/migration/catalog")
+                            .schemas(schema)
+                            .defaultSchema(schema)
+                            .load()
+                            .migrate())
+                    .hasStackTraceContaining(
+                            "catalog tenant_id exceeds 64 characters; refusing to narrow persistence contract");
+            assertThat(upgradeJdbc.queryForObject(
+                            "SELECT tenant_id FROM catalog_tenant_upgrade_test.catalog_product WHERE product_id = 1",
+                            String.class))
+                    .isEqualTo(overlongTenant);
+            assertThat(upgradeJdbc.queryForObject(
+                            """
+                            SELECT character_maximum_length
+                              FROM information_schema.columns
+                             WHERE table_schema = ?
+                               AND table_name = 'catalog_product'
+                               AND column_name = 'tenant_id'
+                            """,
+                            Integer.class,
+                            schema))
+                    .isEqualTo(128);
+        } finally {
+            upgradeJdbc.execute("DROP SCHEMA " + schema + " CASCADE");
+        }
     }
 
     @Test

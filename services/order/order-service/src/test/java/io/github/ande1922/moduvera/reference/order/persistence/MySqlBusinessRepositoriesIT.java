@@ -103,6 +103,11 @@ class MySqlBusinessRepositoriesIT {
         migrate(migrator, "catalog", "classpath:db/migration/catalog-mysql");
         migrate(migrator, "order", "classpath:db/migration/order-mysql");
         migrate(migrator, "inventory", "classpath:db/migration/inventory-mysql");
+        assertTenantColumnLength("catalog_product");
+        assertTenantColumnLength("order_header");
+        assertTenantColumnLength("order_line");
+        assertTenantColumnLength("inventory_stock");
+        assertTenantColumnLength("inventory_reservation_result");
     }
 
     @BeforeEach
@@ -246,6 +251,20 @@ class MySqlBusinessRepositoriesIT {
                                 new MigrationPlan(new DatabaseComponent(component), List.of(location), false))
                         .validationSuccessful)
                 .isTrue();
+    }
+
+    private void assertTenantColumnLength(String table) {
+        assertThat(jdbc.queryForObject(
+                        """
+                        SELECT character_maximum_length
+                          FROM information_schema.columns
+                         WHERE table_schema = database()
+                           AND table_name = ?
+                           AND column_name = 'tenant_id'
+                        """,
+                        Integer.class,
+                        table))
+                .isEqualTo(64);
     }
 
     private void seedStock(String tenant, long product, int available) {
