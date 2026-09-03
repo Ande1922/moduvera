@@ -14,22 +14,38 @@ POLL_SECONDS = 0.05
 TERM_GRACE_SECONDS = 0.5
 
 
-def stop_process_group(process: subprocess.Popen[bytes]) -> None:
-    if process.poll() is not None:
-        return
+def process_group_exists(process_group: int) -> bool:
     try:
-        os.killpg(process.pid, signal.SIGTERM)
+        os.killpg(process_group, 0)
+        return True
     except ProcessLookupError:
-        pass
-    deadline = time.monotonic() + TERM_GRACE_SECONDS
-    while process.poll() is None and time.monotonic() < deadline:
-        time.sleep(POLL_SECONDS)
-    if process.poll() is None:
+        return False
+    except PermissionError:
+        return True
+
+
+def stop_process_group(process: subprocess.Popen[bytes]) -> None:
+    process_group = process.pid
+    if process_group_exists(process_group):
         try:
-            os.killpg(process.pid, signal.SIGKILL)
+            os.killpg(process_group, signal.SIGTERM)
         except ProcessLookupError:
             pass
-    process.wait()
+    deadline = time.monotonic() + TERM_GRACE_SECONDS
+    while process_group_exists(process_group) and time.monotonic() < deadline:
+        time.sleep(POLL_SECONDS)
+    if process_group_exists(process_group):
+        try:
+            os.killpg(process_group, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    try:
+        process.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        print(
+            f"Unable to reap command leader pid {process.pid} after escalation",
+            file=sys.stderr,
+        )
 
 
 def main(arguments: list[str]) -> int:

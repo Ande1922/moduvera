@@ -37,6 +37,13 @@ if [[ " $* " == *" down "* ]]; then
       trap '' INT TERM
       while true; do sleep 1; done
     fi
+    if [[ "${STUB_CLEANUP_MODE:-}" == "compose-leader-exits" ]]; then
+      echo "$$" >> "$STUB_STATE_DIR/docker-leader-exits-pids"
+      (trap '' INT TERM; while true; do sleep 1; done) &
+      echo "$!" >> "$STUB_STATE_DIR/docker-leader-exits-pids"
+      trap 'exit 0' TERM
+      while true; do sleep 1; done
+    fi
     if [[ "${STUB_CLEANUP_MODE:-}" == "lock-failure" ]]; then
       for lock_path in "$REFERENCE_LOCK_ROOT"/moduvera-reference-*.lock; do
         [[ -d "$lock_path" ]] || continue
@@ -154,6 +161,36 @@ while IFS= read -r pid; do
     fail "hung compose process $pid survived watchdog escalation"
   fi
 done < "$TEST_DIR/compose-hang/state/docker-pids"
+
+run_case compose-leader-exits compose-leader-exits 0
+[[ "$(<"$TEST_DIR/compose-leader-exits/status")" == "70" ]] \
+  || fail "compose descendant escape returned $(<"$TEST_DIR/compose-leader-exits/status") instead of 70"
+(( $(<"$TEST_DIR/compose-leader-exits/elapsed") < 6 )) \
+  || fail "compose descendant escape exceeded its bounded wall-clock deadline"
+grep -F "Reference cleanup detail: compose down exceeded the 2s wall-clock deadline" \
+  "$TEST_DIR/compose-leader-exits/err" >/dev/null \
+  || fail "compose descendant escape timeout evidence is missing"
+[[ -z "$(find "$TEST_DIR/compose-leader-exits/locks" -mindepth 1 -maxdepth 1 -print -quit)" ]] \
+  || fail "compose descendant escape did not release owned locks"
+LEADER_EXIT_RUN_DIR="$($REAL_PYTHON - "$TEST_DIR/compose-leader-exits/manifest.json" <<'PY'
+import json
+import pathlib
+import sys
+
+print(json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))["resources"]["tempDirectory"])
+PY
+)"
+[[ ! -e "$LEADER_EXIT_RUN_DIR" ]] \
+  || fail "compose descendant escape leaked temporary run directory"
+while IFS= read -r pid; do
+  for _ in {1..40}; do
+    if ! kill -0 "$pid" 2>/dev/null; then break; fi
+    sleep 0.05
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    fail "compose process $pid survived after its group leader exited on TERM"
+  fi
+done < "$TEST_DIR/compose-leader-exits/state/docker-leader-exits-pids"
 
 run_case lock-failure lock-failure 0
 [[ "$(<"$TEST_DIR/lock-failure/status")" == "70" ]] \

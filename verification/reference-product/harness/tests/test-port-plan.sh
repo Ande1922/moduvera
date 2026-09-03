@@ -106,6 +106,29 @@ expect_failure "Invalid RUN_SLOT '999999999999999999999999'; derived ports excee
 LOCK_ROOT="$TEST_DIR/locks"
 mkdir "$LOCK_ROOT"
 
+python3 - "$TEST_DIR/time-wait-port" <<'PY'
+import pathlib
+import socket
+import sys
+
+listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+listener.bind(("127.0.0.1", 0))
+listener.listen()
+port = listener.getsockname()[1]
+client = socket.create_connection(("127.0.0.1", port))
+connection, _ = listener.accept()
+connection.shutdown(socket.SHUT_WR)
+connection.close()
+client.recv(1)
+client.close()
+listener.close()
+pathlib.Path(sys.argv[1]).write_text(str(port), encoding="ascii")
+PY
+TIME_WAIT_PORT="$(<"$TEST_DIR/time-wait-port")"
+python3 "$HARNESS_DIR/preflight_ports.py" "time-wait=$TIME_WAIT_PORT" \
+  || fail "SO_REUSEADDR-compatible TIME_WAIT port was reported unavailable"
+
 python3 - "$TEST_DIR/occupied-port" <<'PY' &
 import pathlib
 import socket
@@ -113,6 +136,7 @@ import sys
 import time
 
 listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 listener.bind(("0.0.0.0", 0))
 listener.listen()
 pathlib.Path(sys.argv[1]).write_text(str(listener.getsockname()[1]), encoding="ascii")

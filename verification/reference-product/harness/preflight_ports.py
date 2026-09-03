@@ -18,6 +18,11 @@ def reserve_wildcard(
         reservation = socket.socket(family, socket.SOCK_STREAM)
     except OSError:
         return False
+    try:
+        reservation.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    except OSError:
+        reservation.close()
+        return False
     if family == socket.AF_INET6:
         try:
             reservation.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
@@ -26,6 +31,7 @@ def reserve_wildcard(
             return False
     try:
         reservation.bind((address, port))
+        reservation.listen(1)
     except OSError as failure:
         reservation.close()
         print(
