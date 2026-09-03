@@ -14,6 +14,7 @@ import contextlib
 import ctypes
 import datetime as dt
 import fcntl
+import json
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -25,7 +26,7 @@ import subprocess
 import sys
 import threading
 import time
-from typing import NamedTuple
+from typing import Callable, NamedTuple
 import urllib.parse
 
 
@@ -917,6 +918,7 @@ class Evidence:
                         raise GateError(f"invalid evidence run component: {existing}")
                     _validate_run_tree(existing, self.runs)
                 self.attempt_sequence = self._allocate_attempt_sequence()
+                self._reclaim_stale_active_unlocked()
                 stamp = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%S.%fZ")
                 self.run_id = f"{stamp}-{os.getpid()}"
                 self.run_dir = self.runs / self.run_id
@@ -931,7 +933,20 @@ class Evidence:
                 ) as sequence_file:
                     sequence_file.write(f"{self.attempt_sequence}\n")
                 with _open_new_private(self.active_path, self.run_dir) as active_file:
-                    active_file.write(f"{os.getpid()}\n")
+                    owner = _process_identity(os.getpid())
+                    if owner is None:
+                        raise GateError("cannot determine evidence owner birth identity")
+                    active_file.write(
+                        json.dumps(
+                            {
+                                "attempt": self.attempt_sequence,
+                                "pid": owner.pid,
+                                "started": owner.started,
+                            },
+                            separators=(",", ":"),
+                        )
+                        + "\n"
+                    )
                 with _open_new_private(self.log_path, self.run_dir):
                     pass
                 self._update_latest()
@@ -975,13 +990,79 @@ class Evidence:
             if not RUN_ID.fullmatch(current):
                 raise GateError("invalid evidence latest run ID")
             current_run = self.runs / current
-            _validate_run_tree(current_run, self.runs)
-            current_sequence = _read_private_integer(
-                current_run / "attempt-sequence", current_run
-            )
-            if current_sequence >= self.attempt_sequence:
-                return
+            if _lstat(current_run) is not None:
+                _validate_run_tree(current_run, self.runs)
+                current_sequence = _read_private_integer(
+                    current_run / "attempt-sequence", current_run
+                )
+                if current_sequence >= self.attempt_sequence:
+                    return
         _replace_private_text(latest, self.root, f"{self.run_id}\n")
+
+    def _reclaim_stale_active_unlocked(self) -> None:
+        for run in list(self.runs.iterdir()):
+            active = run / "active"
+            if _lstat(active) is None:
+                if _lstat(run / "completed") is None:
+                    _validate_run_tree(run, self.runs)
+                    shutil.rmtree(run)
+                continue
+            _validate_run_tree(run, self.runs)
+            _validate_regular(active, run)
+            with _open_existing_private(active, run, "rb") as active_file:
+                text = active_file.read(1024).decode("utf-8", "replace").strip()
+            live = False
+            if text.isdecimal():
+                # Legacy pins had only a PID. Preserve any live PID because a
+                # missing birth identity cannot safely distinguish reuse.
+                legacy_pid = int(text)
+                if legacy_pid <= 0:
+                    raise GateError(f"invalid legacy active evidence owner: {run}")
+                try:
+                    os.kill(legacy_pid, 0)
+                    live = True
+                except PermissionError:
+                    live = True
+                except ProcessLookupError:
+                    live = False
+            else:
+                try:
+                    payload = json.loads(text)
+                    pid = int(payload["pid"])
+                    attempt = int(payload["attempt"])
+                    started_value = payload["started"]
+                    started = (
+                        tuple(int(value) for value in started_value)
+                        if isinstance(started_value, list)
+                        else str(started_value)
+                    )
+                except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+                    raise GateError(f"invalid active evidence owner: {run}") from error
+                sequence = _read_private_integer(run / "attempt-sequence", run)
+                if (
+                    pid <= 0
+                    or attempt != sequence
+                    or (isinstance(started, tuple) and len(started) != 2)
+                    or (isinstance(started, str) and not started)
+                ):
+                    raise GateError(f"active evidence owner does not match attempt: {run}")
+                current_owner = _process_identity(pid)
+                if current_owner is None:
+                    try:
+                        os.kill(pid, 0)
+                        live = True
+                    except PermissionError:
+                        live = True
+                    except ProcessLookupError:
+                        live = False
+                else:
+                    live = current_owner == ProcessIdentity(pid, started)
+            if live:
+                continue
+            _unlink_existing_private(active, run)
+            if _lstat(run / "completed") is None:
+                _validate_run_tree(run, self.runs)
+                shutil.rmtree(run)
 
     @staticmethod
     def _encode_summary(summary: str) -> bytes:
@@ -1009,10 +1090,18 @@ class Evidence:
         os.replace(temporary, self.summary_path)
         _validate_regular(self.summary_path, self.run_dir)
 
-    def release_active(self) -> None:
+    def release_active(
+        self,
+        before_release: Callable[[], None] | None = None,
+        after_prune: Callable[[], None] | None = None,
+    ) -> None:
         with _exclusive_private_lock(self.completion_lock, self.root):
+            if before_release is not None:
+                before_release()
             _unlink_existing_private(self.active_path, self.run_dir)
             self._prune_unlocked(protect_current=False)
+            if after_prune is not None:
+                after_prune()
 
     def prune(self, reserve: int = 0) -> None:
         with _exclusive_private_lock(self.completion_lock, self.root):
@@ -1023,6 +1112,7 @@ class Evidence:
     ) -> None:
         if reserve < 0 or reserve > MAX_COMPLETED_RUNS:
             raise GateError(f"invalid evidence retention reservation: {reserve}")
+        self._reclaim_stale_active_unlocked()
         completed: list[tuple[int, Path]] = []
         for path in sorted(self.runs.iterdir()):
             _validate_run_tree(path, self.runs)
@@ -2015,31 +2105,35 @@ def gate(arguments: list[str]) -> int:
         signal.pthread_sigmask(signal.SIG_BLOCK, set(watched_signals))
         consume_pending_watched_signals(signal_state, watched_signals)
         refresh_interrupted_summary()
-        for signum, handler in previous_handlers.items():
-            signal.signal(signum, handler)
-        consume_pending_watched_signals(signal_state, watched_signals)
-        refresh_interrupted_summary()
-        handlers_restored = True
-        with _open_existing_private(
-            evidence.summary_path, evidence.run_dir, "rb"
-        ) as summary_file:
-            terminal_summary = summary_file.read().decode("utf-8", "replace")
-        print(terminal_summary, end="", flush=True)
-        consume_pending_watched_signals(signal_state, watched_signals)
-        refresh_interrupted_summary()
-        evidence.release_active()
+
+        def final_signal_drain() -> None:
+            consume_pending_watched_signals(signal_state, watched_signals)
+            refresh_interrupted_summary()
+
+        def restore_handlers_after_prune() -> None:
+            final_signal_drain()
+            for signum, handler in previous_handlers.items():
+                signal.signal(signum, handler)
+            final_signal_drain()
+
+        # Keep the gate handlers installed and both watched signals blocked
+        # while the active pin is removed and retention is enforced. The
+        # callbacks run under the evidence lock, so a signal pending during
+        # prune is reflected before any caller disposition is restored.
+        evidence.release_active(final_signal_drain, restore_handlers_after_prune)
         active_released = True
+        handlers_restored = True
+        print(render_summary(), end="", flush=True)
     finally:
         if not handlers_restored:
             signal.pthread_sigmask(signal.SIG_BLOCK, set(watched_signals))
             consume_pending_watched_signals(signal_state, watched_signals)
             refresh_interrupted_summary()
-            for signum, handler in previous_handlers.items():
-                signal.signal(signum, handler)
-            consume_pending_watched_signals(signal_state, watched_signals)
-            refresh_interrupted_summary()
         if not active_released:
             evidence.release_active()
+        if not handlers_restored:
+            for signum, handler in previous_handlers.items():
+                signal.signal(signum, handler)
         signal.pthread_sigmask(signal.SIG_SETMASK, previous_signal_mask)
     if interrupted_signum:
         return 128 + interrupted_signum

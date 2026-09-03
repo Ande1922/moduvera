@@ -794,6 +794,85 @@ class QualityGateEvidenceTest(unittest.TestCase):
         ]
         self.assertEqual(quality_gate.MAX_COMPLETED_RUNS, len(retained))
 
+    def test_crashed_completed_pins_are_reclaimed_and_retention_stays_bounded(self) -> None:
+        worker = (
+            "import importlib.util,os,sys; from pathlib import Path; "
+            "spec=importlib.util.spec_from_file_location('crash_gate',sys.argv[1]); "
+            "module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module); "
+            "evidence=module.Evidence(Path(sys.argv[2])); "
+            "evidence.complete('status: PASS\\n'); "
+            "Path(sys.argv[3]).write_text(evidence.run_id); os._exit(0)"
+        )
+        crashed_ids: list[str] = []
+        for index in range(25):
+            result_path = self.fixture.root / f"crashed-{index}"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    worker,
+                    str(CORE_PATH),
+                    str(self.fixture.root),
+                    str(result_path),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=10,
+            )
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            crashed_ids.append(result_path.read_text())
+        sweeper = quality_gate.Evidence(self.fixture.root)
+        completed = [
+            path
+            for path in sweeper.runs.iterdir()
+            if (path / "completed").is_file()
+        ]
+        self.assertLessEqual(len(completed), quality_gate.MAX_COMPLETED_RUNS)
+        self.assertTrue(all(not (path / "active").exists() for path in completed))
+        self.assertNotIn(crashed_ids[0], {path.name for path in completed})
+        sweeper.release_active()
+
+    def test_crashed_partial_run_is_removed_without_reclaiming_live_owner(self) -> None:
+        result_path = self.fixture.root / "partial-run"
+        worker = (
+            "import importlib.util,os,sys; from pathlib import Path; "
+            "spec=importlib.util.spec_from_file_location('partial_gate',sys.argv[1]); "
+            "module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module); "
+            "original=module._open_new_private; marker=Path(sys.argv[3]); "
+            "\ndef crash_before_active(path,parent):"
+            "\n if path.name == 'active':"
+            "\n  marker.write_text(path.parent.name)"
+            "\n  os._exit(0)"
+            "\n return original(path,parent)"
+            "\nmodule._open_new_private=crash_before_active"
+            "\nmodule.Evidence(Path(sys.argv[2]))"
+        )
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                worker,
+                str(CORE_PATH),
+                str(self.fixture.root),
+                str(result_path),
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=10,
+        )
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        partial = self.fixture.root / ".quality-gate/runs" / result_path.read_text()
+        self.assertTrue((partial / "attempt-sequence").is_file())
+        self.assertFalse((partial / "active").exists())
+        live = quality_gate.Evidence(self.fixture.root)
+        self.assertFalse(partial.exists())
+        observer = quality_gate.Evidence(self.fixture.root)
+        self.assertTrue(live.active_path.is_file())
+        observer.release_active()
+        live.release_active()
+
     def test_run_validation_and_pruning_do_not_recreate_a_pruned_orphan(self) -> None:
         runs = self.fixture.root / ".quality-gate/runs"
         runs.mkdir(parents=True)
@@ -839,6 +918,7 @@ class QualityGateEvidenceTest(unittest.TestCase):
         validation_paused = self.fixture.root / "validation-paused"
         validation_release = self.fixture.root / "validation-release"
         validator_done = self.fixture.root / "validator-done"
+        validator_finish = self.fixture.root / "validator-finish"
         worker_a = (
             "import importlib.util,sys,time; from pathlib import Path; "
             "spec=importlib.util.spec_from_file_location('validator_gate',sys.argv[1]); "
@@ -853,6 +933,8 @@ class QualityGateEvidenceTest(unittest.TestCase):
             "\nmodule._validate_run_tree=wrapped"
             "\nevidence=module.Evidence(Path(sys.argv[2]))"
             "\nPath(sys.argv[6]).write_text(evidence.run_id)"
+            "\nfinish=Path(sys.argv[7])"
+            "\nwhile not finish.exists(): time.sleep(0.005)"
         )
         validator = subprocess.Popen(
             [
@@ -865,6 +947,7 @@ class QualityGateEvidenceTest(unittest.TestCase):
                 str(validation_paused),
                 str(validation_release),
                 str(validator_done),
+                str(validator_finish),
             ],
             text=True,
             stdout=subprocess.PIPE,
@@ -881,15 +964,20 @@ class QualityGateEvidenceTest(unittest.TestCase):
         self.assertTrue(b_entering.is_file(), "pruner did not enter completion")
         time.sleep(0.2)
         validation_release.write_text("continue\n", encoding="utf-8")
-        validator_stdout, validator_stderr = validator.communicate(timeout=10)
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and not validator_done.is_file():
+            time.sleep(0.01)
+        self.assertTrue(validator_done.is_file(), "validator did not create its run")
         pruner_stdout, pruner_stderr = pruner.communicate(timeout=10)
-        self.assertEqual(0, validator.returncode, validator_stdout + validator_stderr)
         self.assertEqual(0, pruner.returncode, pruner_stdout + pruner_stderr)
         self.assertFalse(target.exists(), "pruned run must not reappear as an orphan")
         validator_run = runs / validator_done.read_text()
         pruner_run = runs / b_ready.read_text()
         self.assertTrue((validator_run / "full.log").is_file())
         self.assertTrue((pruner_run / "completed").is_file())
+        validator_finish.write_text("finish\n", encoding="utf-8")
+        validator_stdout, validator_stderr = validator.communicate(timeout=10)
+        self.assertEqual(0, validator.returncode, validator_stdout + validator_stderr)
 
     def test_prune_failure_cannot_publish_pass_or_completed_marker(self) -> None:
         root = self.fixture.root / ".quality-gate/runs"
@@ -1453,17 +1541,17 @@ class QualityGateEvidenceTest(unittest.TestCase):
         core = self.fixture.root / "tools/quality/quality_gate.py"
         source = core.read_text(encoding="utf-8")
         needle = (
-            "        for signum, handler in previous_handlers.items():\n"
-            "            signal.signal(signum, handler)\n"
-            "        consume_pending_watched_signals(signal_state, watched_signals)\n"
+            "            for signum, handler in previous_handlers.items():\n"
+            "                signal.signal(signum, handler)\n"
+            "            final_signal_drain()\n"
         )
         instrumented = (
-            "        for restore_index, (signum, handler) in enumerate(previous_handlers.items()):\n"
-            "            signal.signal(signum, handler)\n"
-            "            if restore_index == 0:\n"
-            '                (evidence.run_dir / "handler-restore-gap").write_text("ready\\n")\n'
-            "                time.sleep(0.5)\n"
-            "        consume_pending_watched_signals(signal_state, watched_signals)\n"
+            "            for restore_index, (signum, handler) in enumerate(previous_handlers.items()):\n"
+            "                signal.signal(signum, handler)\n"
+            "                if restore_index == 0:\n"
+            '                    (evidence.run_dir / "handler-restore-gap").write_text("ready\\n")\n'
+            "                    time.sleep(0.5)\n"
+            "            final_signal_drain()\n"
         )
         self.assertIn(needle, source)
         core.write_text(source.replace(needle, instrumented, 1), encoding="utf-8")
@@ -1503,6 +1591,64 @@ class QualityGateEvidenceTest(unittest.TestCase):
         summary = (run_dir / "summary.txt").read_text()
         self.assertIn("status: INTERRUPTED", summary)
         self.assertNotIn("status: PASS", summary)
+
+    def test_signal_during_release_prune_is_drained_before_terminal_pass(self) -> None:
+        self.install_gate()
+        core = self.fixture.root / "tools/quality/quality_gate.py"
+        source = core.read_text(encoding="utf-8")
+        needle = (
+            "            _unlink_existing_private(self.active_path, self.run_dir)\n"
+            "            self._prune_unlocked(protect_current=False)\n"
+        )
+        instrumented = (
+            "            _unlink_existing_private(self.active_path, self.run_dir)\n"
+            "            for fixture_index in range(5):\n"
+            "                fixture_run = self.runs / f'19990101T000000.{fixture_index:06d}Z-1'\n"
+            "                fixture_run.mkdir(mode=0o700)\n"
+            "                (fixture_run / 'attempt-sequence').write_text('0\\n')\n"
+            "                (fixture_run / 'completed').write_text('complete\\n')\n"
+            '            (self.run_dir / "release-prune-gap").write_text("ready\\n")\n'
+            "            time.sleep(0.5)\n"
+            "            self._prune_unlocked(protect_current=False)\n"
+        )
+        self.assertIn(needle, source)
+        core.write_text(source.replace(needle, instrumented, 1), encoding="utf-8")
+        self.base = self.fixture.commit("instrument release prune signal window")
+        self.fixture.write("guide.md", "# Guide\n")
+        head = self.fixture.commit("docs")
+        process = subprocess.Popen(
+            [
+                str(self.fixture.root / "tools/quality/quality-gate.sh"),
+                "auto",
+                "--base",
+                self.base,
+                "--head",
+                head,
+            ],
+            cwd=self.fixture.root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        run_dir: Path | None = None
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            latest = self.fixture.root / ".quality-gate/latest"
+            if latest.is_file():
+                candidate = self.fixture.root / ".quality-gate/runs" / latest.read_text().strip()
+                if (candidate / "release-prune-gap").is_file():
+                    run_dir = candidate
+                    break
+            time.sleep(0.01)
+        self.assertIsNotNone(run_dir, "did not enter release prune window")
+        assert run_dir is not None
+        os.kill(process.pid, signal.SIGTERM)
+        stdout, stderr = process.communicate(timeout=10)
+        self.assertEqual(128 + signal.SIGTERM, process.returncode, stdout + stderr)
+        self.assertNotIn("status: PASS", stdout)
+        self.assertIn("status: INTERRUPTED", stdout)
+        self.assertIn("status: INTERRUPTED", (run_dir / "summary.txt").read_text())
+        self.assertFalse((run_dir / "active").exists())
 
 
 class EvidencePathSafetyTest(unittest.TestCase):

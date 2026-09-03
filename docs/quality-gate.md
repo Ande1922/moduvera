@@ -69,10 +69,16 @@ cross-process lock serializes existing-run validation, run creation, retention
 reservation, summary and completion publication, monotonic sequence allocation,
 and conditional `latest` update. Concurrent creation therefore cannot race
 pruning into recreating an incomplete orphan, and concurrent completions share
-the same 20-run limit. Each invocation retains a private active marker from run
-creation through handler restoration and terminal-summary output. Pruning skips
-active runs; final release removes the marker and enforces retention atomically,
-so late signal updates and output never access a concurrently deleted run.
+the same 20-run limit. Each invocation retains a private active marker containing
+its attempt sequence plus the owner PID and operating-system process birth
+identity. A matching live owner is never reclaimed, and PID reuse is detected
+by the birth mismatch. Before creation and pruning, a dead or birth-mismatched
+completed owner is unpinned, while incomplete stale runs—including a crash
+before active-marker publication—are removed under the same lock. Final
+release drains pending watched signals before unpinning, enforces retention,
+then drains again under the lock before restoring caller handlers. Thus a signal
+during release/pruning becomes authoritative INTERRUPTED evidence rather than a
+terminal PASS, while crashed invocations cannot grow retention without bound.
 The terminal prints only the bounded redacted summary; inspect `full.log`
 locally when more detail is required. The complete log is streamed through a
 stateful redactor before only the final redacted lines are retained. Credential
