@@ -5,10 +5,11 @@ description: Implement one bounded Moduvera change or one ticket in the current 
 
 # Implement
 
-Own one implementation loop. When the request contains dependency-linked
-tickets, frontier waves, isolated writers, independent reviewer agents, or
-dependency-ordered integration, stop before editing and route the run to
-[`implement-frontier`](../implement-frontier/SKILL.md).
+Own one implementation loop. Route to
+[`implement-frontier`](../implement-frontier/SKILL.md) only when implementation
+must coordinate multiple tickets, dependency edges or ready waves, isolated
+ticket writers, or dependency-ordered integration. A single ticket stays here
+even when independent Standards and Spec reviews will run afterward.
 
 ## Process
 

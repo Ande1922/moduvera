@@ -10,10 +10,11 @@ Use the checklist in the authoritative
 and the evidence invariants in
 [delivery standards](../../../docs/agents/delivery-standards.md#review-and-gate-evidence).
 
-Resolve the delivered base/head, inspect both review-axis dispositions, verify
-the recorded gate evidence belongs to the same head and still exists, account
-for every ticket criterion and required check, determine applicable Scenario
-gates from the changed contracts, and confirm checkout state.
+Resolve the delivered base/head, require both review axes to be completed
+against that exact comparison, verify the recorded gate evidence belongs to
+the same base/head and still exists, account for every ticket criterion and
+required check, determine applicable Scenario gates from the changed
+contracts, and confirm the checkout is clean.
 
 ## Completion
 

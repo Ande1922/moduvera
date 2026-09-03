@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 import re
 
@@ -17,6 +17,14 @@ REQUIRED_SKILLS = (
     "tdd",
     "quality-gate",
     "final-acceptance",
+)
+
+DECLARED_DEPENDENCY_ROOTS = (
+    "AGENTS.md",
+    ".agents",
+    "docs",
+    "tools/agent-delivery",
+    "tools/quality",
 )
 
 EXPECTED_ROUTES = {
@@ -45,25 +53,107 @@ class DeliveryContractError(RuntimeError):
 @dataclass(frozen=True)
 class AcceptanceInput:
     gate_exit: int
+    gate_base: str
     gate_head: str
+    delivered_base: str
     delivered_head: str
+    reviewed_base: str
+    reviewed_head: str
+    standards_review_complete: bool
+    spec_review_complete: bool
     unresolved_findings: int
     missing_criteria: int
     missing_scenarios: int
     evidence_exists: bool
+    checkout_clean: bool
+
+
+@dataclass(frozen=True)
+class ImplementationShape:
+    ticket_count: int
+    dependency_edges: int = 0
+    isolated_writers: bool = False
+    later_independent_reviews: bool = False
+
+
+@dataclass(frozen=True)
+class ImplementationRoute:
+    skill: str
+    stop_after: str
+
+
+def implementation_route(shape: ImplementationShape) -> ImplementationRoute:
+    if shape.ticket_count < 1 or shape.dependency_edges < 0:
+        raise ValueError("implementation shape requires tickets and non-negative edges")
+    frontier = (
+        shape.ticket_count > 1
+        or shape.dependency_edges > 0
+        or shape.isolated_writers
+    )
+    if frontier:
+        return ImplementationRoute("implement-frontier", "frontier-evidence")
+    return ImplementationRoute("implement", "implementation-evidence")
 
 
 def final_acceptance_status(evidence: AcceptanceInput) -> str:
     complete = (
         evidence.gate_exit == 0
+        and bool(evidence.gate_base)
         and bool(evidence.gate_head)
+        and bool(evidence.delivered_base)
+        and bool(evidence.delivered_head)
+        and evidence.gate_base == evidence.delivered_base
         and evidence.gate_head == evidence.delivered_head
+        and bool(evidence.reviewed_base)
+        and bool(evidence.reviewed_head)
+        and evidence.reviewed_base == evidence.delivered_base
+        and evidence.reviewed_head == evidence.delivered_head
+        and evidence.standards_review_complete
+        and evidence.spec_review_complete
         and evidence.unresolved_findings == 0
         and evidence.missing_criteria == 0
         and evidence.missing_scenarios == 0
         and evidence.evidence_exists
+        and evidence.checkout_clean
     )
     return "PASS" if complete else "FAIL"
+
+
+def representative_forward_failures(root: Path) -> list[str]:
+    failures: list[str] = []
+    routes = parse_routes(root / "docs/agents/delivery-workflow.md")
+    route = implementation_route(ImplementationShape(
+        ticket_count=1,
+        later_independent_reviews=True,
+    ))
+    if route != ImplementationRoute("implement", "implementation-evidence"):
+        failures.append(f"single-ticket forward route is invalid: {route}")
+    if routes.get("one-ticket") != route.skill:
+        failures.append("executable single-ticket route differs from workflow")
+
+    accepted = AcceptanceInput(
+        gate_exit=0,
+        gate_base="base",
+        gate_head="head",
+        delivered_base="base",
+        delivered_head="head",
+        reviewed_base="base",
+        reviewed_head="head",
+        standards_review_complete=True,
+        spec_review_complete=True,
+        unresolved_findings=0,
+        missing_criteria=0,
+        missing_scenarios=0,
+        evidence_exists=True,
+        checkout_clean=True,
+    )
+    if final_acceptance_status(accepted) != "PASS":
+        failures.append("complete representative evidence did not reach PASS")
+    if final_acceptance_status(
+        replace(accepted, standards_review_complete=False)
+    ) != "FAIL":
+        failures.append("forward run did not stop for an incomplete review axis")
+    return failures
 
 
 def parse_routes(workflow: Path) -> dict[str, str]:
@@ -140,17 +230,18 @@ def validate_repository(root: Path) -> list[str]:
         if skills_root.is_dir()
         else set()
     )
-    if actual_skills != set(REQUIRED_SKILLS):
+    missing_skills = set(REQUIRED_SKILLS) - actual_skills
+    if missing_skills:
         failures.append(
-            "project Skill set differs: "
-            f"expected={sorted(REQUIRED_SKILLS)} actual={sorted(actual_skills)}"
+            "required project Skills are missing: "
+            f"required={sorted(REQUIRED_SKILLS)} missing={sorted(missing_skills)}"
         )
 
     for path in skills_root.rglob("*") if skills_root.is_dir() else ():
         if path.is_symlink():
             failures.append(f"symbolic link is forbidden in project Skills: {path}")
 
-    for name in REQUIRED_SKILLS:
+    for name in sorted(actual_skills):
         skill = skills_root / name / "SKILL.md"
         if not skill.is_file() or skill.is_symlink():
             failures.append(f"missing regular project Skill: {skill}")
@@ -166,6 +257,13 @@ def validate_repository(root: Path) -> list[str]:
             failures.append(f"{skill}: frontmatter description is required")
         if "## Completion" not in skill.read_text(encoding="utf-8"):
             failures.append(f"{skill}: explicit Completion boundary is required")
+
+    for relative in DECLARED_DEPENDENCY_ROOTS:
+        dependency = root / relative
+        if not dependency.exists():
+            failures.append(f"missing declared delivery dependency: {dependency}")
+        elif dependency.is_symlink():
+            failures.append(f"declared delivery dependency must not be a symlink: {dependency}")
 
     routes = parse_routes(workflow)
     if routes != EXPECTED_ROUTES:
@@ -202,7 +300,11 @@ def validate_repository(root: Path) -> list[str]:
         _check_links(root, markdown, failures)
 
     for executable in (
+        root / "tools/agent-delivery/validate.py",
         root / "tools/agent-delivery/test/run-tests.sh",
+        root / "tools/quality/quality-gate.sh",
+        root / "tools/quality/quality_gate.py",
+        root / "tools/quality/test/run-tests.sh",
         root / "tools/quality/checks.d/common/10-agent-delivery",
     ):
         if not executable.is_file() or executable.is_symlink():

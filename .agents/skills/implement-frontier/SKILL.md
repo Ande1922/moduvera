@@ -5,9 +5,11 @@ description: Coordinate several dependency-linked Moduvera tickets as authorized
 
 # Implement Frontier
 
-Use this outer workflow for several tickets with blockers, ready-frontier
-waves, one worktree per writer, independent review contexts, or ordered local
-integration. Use [`implement`](../implement/SKILL.md) for one bounded change.
+Use this outer workflow when implementation must coordinate multiple tickets,
+blocker edges or ready-frontier waves, isolated ticket writers, or ordered
+local integration. Use [`implement`](../implement/SKILL.md) for one bounded
+change; later independent review is the separate `code-review` stage, not a
+frontier trigger.
 
 ## Roles
 

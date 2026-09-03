@@ -27,17 +27,20 @@ reviewed diff is the post-cleanup diff.
 
 ## Review and gate evidence
 
-Pin Standards and Spec review to one resolved comparison commit. Keep the axes
-independent and resolve every accepted finding before the quality gate. The
+Pin Standards and Spec review to the same resolved base and head. Record that
+each axis completed, keep their findings independent, and resolve every
+accepted finding before the quality gate. The
 repository gate owns change classification and runs from a clean checkout:
 call `tools/quality/quality-gate.sh`; do not reproduce its path rules in a
 Skill or hook.
 
-A gate result applies only to its recorded base, head, ref, profile, and
-checkout state. Any later source, test, configuration, documentation, or mode
-change invalidates that evidence and requires the affected review plus gate to
-run again. A nonzero gate, missing evidence, unresolved accepted finding, or
-unrun applicable Scenario gate is not PASS.
+A gate result applies only to its recorded base, head, ref, profile, and clean
+checkout state. Final PASS additionally requires both completed review axes to
+name the same base/head. Any later source, test, configuration, documentation,
+or mode change invalidates that evidence and requires the affected review plus
+gate to run again. A nonzero gate, missing or mismatched review evidence,
+unresolved accepted finding, dirty checkout, or unrun applicable Scenario gate
+is not PASS.
 
 ## Authorization boundary
 

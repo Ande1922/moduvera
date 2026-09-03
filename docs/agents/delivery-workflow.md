@@ -26,12 +26,14 @@ The `Shape key` column is stable input for the repository forward test.
 | `review-clean` | [`quality-gate`](../../.agents/skills/quality-gate/SKILL.md) | The repository gate exits and its exact evidence is reported. |
 | `gate-pass` | [`final-acceptance`](../../.agents/skills/final-acceptance/SKILL.md) | Evidence is current and every applicable acceptance obligation is accounted for. |
 
-Choose `implement` for one bounded change or ticket in the current checkout.
-Choose `implement-frontier` only for several dependency-linked tickets,
-ready-frontier waves, isolated ticket writers, independent dual-axis review,
-or dependency-ordered integration. They share the same implementation and
-test invariants; the frontier Skill adds scheduling rather than a second change
-loop.
+Choose `implement` for exactly one bounded change or ticket in the current
+checkout. A later independent Standards/Spec review remains the separate
+`code-review` stage and does not turn single-ticket implementation into a
+frontier run. Choose `implement-frontier` only when implementation itself must
+coordinate multiple tickets, dependency edges or ready waves, isolated ticket
+writers, or dependency-ordered integration. They share the same implementation
+and test invariants; the frontier Skill adds scheduling rather than a second
+change loop.
 
 ## Full delivery chain
 
@@ -62,12 +64,13 @@ capability is a stop with a truthful status, never an inferred pass.
 Final acceptance requires all of the following:
 
 - the delivered head and comparison base match the reviewed and gated commits;
-- both review axes have no unresolved accepted finding;
+- both review axes completed against that exact base/head and have no
+  unresolved accepted finding;
 - the latest applicable gate exited zero and its evidence still exists;
 - all ticket acceptance criteria and required tests are evidenced;
 - every applicable Scenario gate passed; and
-- the checkout is clean, unless the agreed deliverable is an explicitly
-  uncommitted diff whose evidence identifies that state.
+- the checkout is clean. An explicitly uncommitted diff may be reported as a
+  stage artifact, but cannot receive final PASS evidence.
 
 Final acceptance reports commit/evidence identifiers and remaining risks. It
 does not commit, update trackers, integrate, push, clean worktrees, publish, or

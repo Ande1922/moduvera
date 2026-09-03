@@ -365,6 +365,21 @@ class QualityGateEvidenceTest(unittest.TestCase):
         runner.chmod(0o755)
         gate = target / "quality-gate.sh"
         gate.chmod(0o755)
+        # Core gate fixtures exercise gate orchestration, not the repository-owned
+        # delivery workflow. Install an explicit fixture dependency so the real
+        # common extension can remain fail-closed when its validator is absent.
+        delivery_validator = self.fixture.root / "tools/agent-delivery/validate.py"
+        delivery_validator.parent.mkdir(parents=True, exist_ok=True)
+        delivery_validator.write_text(
+            "#!/usr/bin/env python3\n"
+            "print('fixture agent delivery validation: PASS')\n",
+            encoding="utf-8",
+        )
+        delivery_validator.chmod(0o755)
+        delivery_tests = self.fixture.root / "tools/agent-delivery/test/run-tests.sh"
+        delivery_tests.parent.mkdir(parents=True, exist_ok=True)
+        delivery_tests.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+        delivery_tests.chmod(0o755)
         self.fixture.write(".gitignore", ".quality-gate/\n.maven-args\n")
 
     def latest_run(self) -> Path:

@@ -3,10 +3,11 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
-from unittest import mock
+from dataclasses import replace
 
 
 TOOLS = Path(__file__).resolve().parents[1]
@@ -15,8 +16,12 @@ sys.path.insert(0, str(TOOLS))
 
 from delivery_contract import (  # noqa: E402
     AcceptanceInput,
+    DECLARED_DEPENDENCY_ROOTS,
     EXPECTED_ROUTES,
+    ImplementationRoute,
+    ImplementationShape,
     final_acceptance_status,
+    implementation_route,
     parse_routes,
     validate_repository,
 )
@@ -27,28 +32,77 @@ class DeliveryForwardTest(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         root = Path(temporary.name) / "checkout"
         root.mkdir()
-        shutil.copy2(REPO / "AGENTS.md", root / "AGENTS.md")
-        shutil.copytree(REPO / ".agents", root / ".agents", symlinks=True)
-        shutil.copytree(REPO / "docs", root / "docs")
-        shutil.copytree(REPO / "tools/agent-delivery", root / "tools/agent-delivery")
-        (root / "tools/quality/checks.d/common").mkdir(parents=True)
-        shutil.copy2(
-            REPO / "tools/quality/checks.d/common/10-agent-delivery",
-            root / "tools/quality/checks.d/common/10-agent-delivery",
-        )
+        for relative in DECLARED_DEPENDENCY_ROOTS:
+            source = REPO / relative
+            target = root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if source.is_dir():
+                shutil.copytree(
+                    source,
+                    target,
+                    symlinks=True,
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+                )
+            else:
+                shutil.copy2(source, target)
         return temporary, root
+
+    @staticmethod
+    def isolated_environment(home: Path) -> dict[str, str]:
+        return {
+            "HOME": str(home),
+            "CODEX_HOME": str(home / "no-personal-skills"),
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "LANG": os.environ.get("LANG", "C.UTF-8"),
+        }
+
+    @staticmethod
+    def passing_acceptance() -> AcceptanceInput:
+        return AcceptanceInput(
+            gate_exit=0,
+            gate_base="base",
+            gate_head="head",
+            delivered_base="base",
+            delivered_head="head",
+            reviewed_base="base",
+            reviewed_head="head",
+            standards_review_complete=True,
+            spec_review_complete=True,
+            unresolved_findings=0,
+            missing_criteria=0,
+            missing_scenarios=0,
+            evidence_exists=True,
+            checkout_clean=True,
+        )
 
     def test_isolated_checkout_needs_no_personal_skill_directory(self) -> None:
         temporary, root = self.isolated_checkout()
         self.addCleanup(temporary.cleanup)
         isolated_home = Path(temporary.name) / "empty-home"
         isolated_home.mkdir()
-        with mock.patch.dict(
-            os.environ,
-            {"HOME": str(isolated_home), "CODEX_HOME": str(isolated_home / "none")},
-            clear=True,
-        ):
-            self.assertEqual([], validate_repository(root))
+        environment = self.isolated_environment(isolated_home)
+
+        validation = subprocess.run(
+            [sys.executable, str(root / "tools/agent-delivery/validate.py"), "--repo", str(root)],
+            cwd=root,
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(0, validation.returncode, validation.stderr)
+        self.assertIn("representative forward evidence", validation.stdout)
+
+        gate_help = subprocess.run(
+            [str(root / "tools/quality/quality-gate.sh"), "--help"],
+            cwd=root,
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(0, gate_help.returncode, gate_help.stderr)
+        self.assertIn("Run the repository quality gate", gate_help.stdout)
 
     def test_forward_route_selects_one_implementation_path(self) -> None:
         routes = parse_routes(REPO / "docs/agents/delivery-workflow.md")
@@ -57,16 +111,51 @@ class DeliveryForwardTest(unittest.TestCase):
         self.assertEqual("implement-frontier", routes["ticket-dag"])
         self.assertNotEqual(routes["one-ticket"], routes["ticket-dag"])
 
+        single_with_reviews = implementation_route(ImplementationShape(
+            ticket_count=1,
+            later_independent_reviews=True,
+        ))
+        self.assertEqual(
+            ImplementationRoute("implement", "implementation-evidence"),
+            single_with_reviews,
+        )
+        self.assertEqual(
+            "implement-frontier",
+            implementation_route(ImplementationShape(ticket_count=2)).skill,
+        )
+        self.assertEqual(
+            "implement-frontier",
+            implementation_route(ImplementationShape(
+                ticket_count=1,
+                dependency_edges=1,
+            )).skill,
+        )
+        self.assertEqual(
+            "implement-frontier",
+            implementation_route(ImplementationShape(
+                ticket_count=1,
+                isolated_writers=True,
+            )).skill,
+        )
+
     def test_failed_or_stale_evidence_cannot_report_pass(self) -> None:
-        passing = AcceptanceInput(0, "head", "head", 0, 0, 0, True)
+        passing = self.passing_acceptance()
         self.assertEqual("PASS", final_acceptance_status(passing))
         for changed in (
-            AcceptanceInput(1, "head", "head", 0, 0, 0, True),
-            AcceptanceInput(0, "old", "head", 0, 0, 0, True),
-            AcceptanceInput(0, "head", "head", 1, 0, 0, True),
-            AcceptanceInput(0, "head", "head", 0, 1, 0, True),
-            AcceptanceInput(0, "head", "head", 0, 0, 1, True),
-            AcceptanceInput(0, "head", "head", 0, 0, 0, False),
+            replace(passing, gate_exit=1),
+            replace(passing, gate_base="old"),
+            replace(passing, gate_head="old"),
+            replace(passing, reviewed_base="old"),
+            replace(passing, reviewed_head="old"),
+            replace(passing, reviewed_base=""),
+            replace(passing, reviewed_head=""),
+            replace(passing, standards_review_complete=False),
+            replace(passing, spec_review_complete=False),
+            replace(passing, unresolved_findings=1),
+            replace(passing, missing_criteria=1),
+            replace(passing, missing_scenarios=1),
+            replace(passing, evidence_exists=False),
+            replace(passing, checkout_clean=False),
         ):
             self.assertEqual("FAIL", final_acceptance_status(changed))
 
@@ -95,7 +184,53 @@ class DeliveryForwardTest(unittest.TestCase):
         shutil.rmtree(root / ".agents/skills")
         failures = validate_repository(root)
         self.assertTrue(failures)
-        self.assertTrue(any("project Skill set differs" in item for item in failures))
+        self.assertTrue(any("required project Skills are missing" in item for item in failures))
+
+    def test_future_project_skill_is_allowed_and_structurally_validated(self) -> None:
+        temporary, root = self.isolated_checkout()
+        self.addCleanup(temporary.cleanup)
+        extra = root / ".agents/skills/add-business-service/SKILL.md"
+        extra.parent.mkdir()
+        extra.write_text(
+            """---
+name: add-business-service
+description: Route a new business-service request into the repository delivery workflow.
+---
+
+# Add Business Service
+
+Use the repository delivery workflow.
+
+## Completion
+
+Stop after reporting the selected delivery stage.
+""",
+            encoding="utf-8",
+        )
+        self.assertEqual([], validate_repository(root))
+
+        extra.write_text(extra.read_text().replace(
+            "name: add-business-service",
+            "name: wrong-name",
+        ))
+        failures = validate_repository(root)
+        self.assertTrue(any("frontmatter name must be add-business-service" in item
+                            for item in failures))
+
+    def test_quality_extension_fails_when_delivery_validator_is_missing(self) -> None:
+        temporary, root = self.isolated_checkout()
+        self.addCleanup(temporary.cleanup)
+        (root / "tools/agent-delivery/validate.py").unlink()
+        result = subprocess.run(
+            [str(root / "tools/quality/checks.d/common/10-agent-delivery")],
+            cwd=root,
+            env=self.isolated_environment(Path(temporary.name) / "empty-home"),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("validation is required", result.stderr)
 
 
 if __name__ == "__main__":
