@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+for required in \
+  QUALITY_GATE_BASE \
+  QUALITY_GATE_HEAD \
+  QUALITY_GATE_PROFILE \
+  QUALITY_GATE_RUN_DIR \
+  QUALITY_GATE_MAVEN_PROVENANCE \
+  QUALITY_GATE_MAVEN_MANIFEST \
+  QUALITY_GATE_SUMMARY_PATH; do
+  if [[ -z "${!required:-}" ]]; then
+    printf 'changed-code evidence requires %s\n' "$required" >&2
+    exit 1
+  fi
+done
+
+if [[ "$QUALITY_GATE_PROFILE" != "normal" ]]; then
+  printf 'changed-code evidence requires the normal profile\n' >&2
+  exit 1
+fi
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+REPOSITORY_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/../../../.." && pwd)"
+
+exec python3 "$REPOSITORY_ROOT/tools/quality/changed_code.py" \
+  --repo "$REPOSITORY_ROOT" \
+  --base "$QUALITY_GATE_BASE" \
+  --head "$QUALITY_GATE_HEAD" \
+  --provenance "$QUALITY_GATE_MAVEN_PROVENANCE" \
+  --manifest "$QUALITY_GATE_MAVEN_MANIFEST" \
+  --run-dir "$QUALITY_GATE_RUN_DIR" \
+  --details "$QUALITY_GATE_RUN_DIR/changed-code.json" \
+  --summary "$QUALITY_GATE_SUMMARY_PATH"

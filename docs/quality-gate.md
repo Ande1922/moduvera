@@ -51,6 +51,48 @@ Extensions receive `QUALITY_GATE_BASE`, `QUALITY_GATE_HEAD`,
 must be deterministic and return non-zero on failure. The orchestrator runs
 them in bytewise filename order and preserves their complete output.
 
+After the exact Normal Maven command passes, the gate atomically publishes a
+private `maven-artifacts.json` followed by `maven-provenance.json`, exposed as
+`QUALITY_GATE_MAVEN_MANIFEST` and `QUALITY_GATE_MAVEN_PROVENANCE`. The manifest
+immediately binds every changed production source, relevant JaCoCo XML, and
+compiled module class file by digest, size, mtime, device, and inode; provenance
+binds the manifest digest plus the resolved base/head, command, profile, ref,
+result, and nanosecond build window. A Normal extension may write
+a short UTF-8 result to the unique `QUALITY_GATE_SUMMARY_PATH`; the orchestrator
+accepts only a private regular file, enforces byte and line bounds, rejects
+terminal control/format characters (including DEL, C1, and bidi controls),
+applies credential redaction again, and embeds it in the main terminal summary.
+Per-extension and aggregate byte/line budgets prevent multiple successful
+extensions from crowding status and failure information out of the terminal
+summary. Complete extension detail belongs in a separate private run artifact,
+not in this bounded channel.
+
+`tools/quality/checks.d/normal/40-changed-code` consumes that provenance and
+reports changed-code metrics after the clean build. It maps added head-side
+lines from the fixed `base..head` diff to each Maven module's current JaCoCo
+XML, then maps executable lines to compiled method descriptors using current
+`javap` line tables. Full private `changed-code.json` records source, report,
+and class hashes and modification times, line counters, method descriptors,
+complexity, exclusions, and the exact revisions. Deleted source, non-production
+Java, non-executable production lines, and documentation/build changes are
+excluded with explicit reasons. A changed executable line that cannot map to a
+current JaCoCo method is not an exclusion: it fails closed, as do missing,
+stale, malformed, or revision-mismatched evidence.
+Every analysis file is opened no-follow and read from one verified descriptor;
+the descriptor identity is checked before and after reading. XML is parsed from
+those captured bytes, and `javap` runs against a private copy of the captured
+class bytes. A content rewrite with restored mtime, inode replacement, symlink,
+or other post-build mutation therefore cannot alter official metrics.
+
+Changed-line coverage is the fraction of changed executable lines with at
+least one covered instruction. For each changed method, the report uses JaCoCo
+line coverage and complexity to calculate
+`complexity² × (1 − line coverage)³ + complexity`. Coverage and CRAP values are
+report-only during calibration; no numeric threshold is enforced. Evidence
+existence, provenance, completeness, and scorability remain blocking. The
+repeatable calibration cases and expected values are recorded in
+[changed-code calibration](quality-gate-changed-code-calibration.md).
+
 Evidence is written beneath the Git-ignored `.quality-gate/runs/<run-id>/`.
 Directories are mode `0700`; the full log and bounded, redacted summary are
 mode `0600`. Symlinked evidence components are rejected before use.
