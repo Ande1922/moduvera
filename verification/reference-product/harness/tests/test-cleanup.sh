@@ -36,6 +36,7 @@ if [[ " $* " == *" down "* ]]; then
         break
       done
     fi
+    : > "$STUB_STATE_DIR/compose-down-finished"
   fi
 fi
 exit 0
@@ -57,12 +58,21 @@ SH
 
 cat > "$STUB_BIN/java" <<'SH'
 #!/usr/bin/env bash
+if [[ "${STUB_JAVA_MODE:-fast}" == "slow" ]]; then
+  echo "$$" >> "$STUB_STATE_DIR/java-pids"
+  trap '' INT TERM
+  while true; do sleep 1; done
+fi
 exit 0
 SH
 
 cat > "$STUB_BIN/python3" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ "${1:-}" == *"/preflight_ports.py" ]]; then
+  : > "$STUB_STATE_DIR/preflight-mocked"
+  exit 0
+fi
 if [[ "${1:-}" == *"/blackbox.py" ]]; then
   exit 0
 fi
@@ -71,25 +81,30 @@ SH
 chmod +x "$STUB_BIN"/*
 
 run_case() {
-  local name="$1" cleanup_mode="$2" primary_failure="$3"
-  local case_dir="$TEST_DIR/$name" status
+  local name="$1" cleanup_mode="$2" primary_failure="$3" java_mode="${4:-fast}"
+  local case_dir="$TEST_DIR/$name" status start_seconds
   mkdir "$case_dir" "$case_dir/locks" "$case_dir/state"
+  start_seconds=$SECONDS
   set +e
   PATH="$STUB_BIN:$PATH" REAL_PYTHON="$REAL_PYTHON" JAVA_HOME="$case_dir/no-java" \
     STUB_STATE_DIR="$case_dir/state" STUB_CLEANUP_MODE="$cleanup_mode" \
-    STUB_PRIMARY_FAILURE="$primary_failure" RUN_SLOT=50 \
+    STUB_PRIMARY_FAILURE="$primary_failure" STUB_JAVA_MODE="$java_mode" RUN_SLOT=50 \
     REFERENCE_PREFLIGHT_ONLY=0 REFERENCE_KEEP_RUNNING=0 \
+    REFERENCE_APP_STOP_TIMEOUT_SECONDS=1 REFERENCE_COMPOSE_DOWN_TIMEOUT_SECONDS=2 \
     REFERENCE_LOCK_ROOT="$case_dir/locks" REFERENCE_PORT_MANIFEST="$case_dir/manifest.json" \
     "$HARNESS_DIR/run-topology.sh" microservices >"$case_dir/out" 2>"$case_dir/err"
   status=$?
   set -e
   printf '%s\n' "$status" > "$case_dir/status"
+  printf '%s\n' "$((SECONDS - start_seconds))" > "$case_dir/elapsed"
 }
 
 run_case success "" 0
 [[ "$(<"$TEST_DIR/success/status")" == "0" ]] || fail "successful cleanup changed the run status"
 [[ -z "$(find "$TEST_DIR/success/locks" -mindepth 1 -maxdepth 1 -print -quit)" ]] \
   || fail "successful cleanup left run locks"
+[[ -f "$TEST_DIR/success/state/preflight-mocked" ]] \
+  || fail "cleanup fixture did not use its isolated preflight mock"
 
 run_case compose-failure compose-failure 0
 [[ "$(<"$TEST_DIR/compose-failure/status")" == "70" ]] \
@@ -113,5 +128,18 @@ grep -F "injected public-contract failure" "$TEST_DIR/primary-preserved/err" >/d
 grep -F "Reference cleanup failure: docker compose down failed" \
   "$TEST_DIR/primary-preserved/err" >/dev/null \
   || fail "secondary cleanup failure evidence is missing"
+
+run_case slow-jvm-cleanup "" 0 slow
+[[ "$(<"$TEST_DIR/slow-jvm-cleanup/status")" == "0" ]] \
+  || fail "slow JVM cleanup did not complete successfully"
+(( $(<"$TEST_DIR/slow-jvm-cleanup/elapsed") < 6 )) \
+  || fail "slow JVMs were stopped sequentially instead of under one shared deadline"
+[[ -f "$TEST_DIR/slow-jvm-cleanup/state/compose-down-finished" ]] \
+  || fail "slow JVM cleanup did not reach docker compose down"
+while IFS= read -r pid; do
+  if kill -0 "$pid" 2>/dev/null; then
+    fail "slow JVM process $pid survived cleanup"
+  fi
+done < "$TEST_DIR/slow-jvm-cleanup/state/java-pids"
 
 echo "Reference cleanup tests: PASS"

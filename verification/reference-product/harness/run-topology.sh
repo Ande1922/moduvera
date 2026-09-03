@@ -25,6 +25,8 @@ COMPOSE_PROJECT="${REFERENCE_COMPOSE_PROJECT:-moduvera-reference-$RUN_ID}"
 INVENTORY_RESERVE_TOPIC="inventory-reserve-$RUN_ID"
 INVENTORY_RESULT_TOPIC="inventory-result-$RUN_ID"
 HEALTH_TIMEOUT_SECONDS="${REFERENCE_HEALTH_TIMEOUT_SECONDS:-180}"
+APP_STOP_TIMEOUT_SECONDS="${REFERENCE_APP_STOP_TIMEOUT_SECONDS:-5}"
+COMPOSE_DOWN_TIMEOUT_SECONDS="${REFERENCE_COMPOSE_DOWN_TIMEOUT_SECONDS:-10}"
 REFERENCE_JAVA_TOOL_OPTIONS="${REFERENCE_JAVA_TOOL_OPTIONS:--Xms64m -Xmx256m}"
 RUN_DIR="$(mktemp -d "${TMPDIR:-/tmp}/moduvera-reference.XXXXXX")"
 PORT_MANIFEST="${REFERENCE_PORT_MANIFEST:-$RUN_DIR/port-manifest.json}"
@@ -38,6 +40,16 @@ FAILED=1
 COMPOSE_STARTED=0
 JAVA_BIN="${JAVA_HOME:-}/bin/java"
 if [[ ! -x "$JAVA_BIN" ]]; then JAVA_BIN="$(command -v java || true)"; fi
+for timeout_specification in \
+  "REFERENCE_APP_STOP_TIMEOUT_SECONDS=$APP_STOP_TIMEOUT_SECONDS" \
+  "REFERENCE_COMPOSE_DOWN_TIMEOUT_SECONDS=$COMPOSE_DOWN_TIMEOUT_SECONDS"; do
+  timeout_name="${timeout_specification%%=*}"
+  timeout_value="${timeout_specification#*=}"
+  if [[ ! "$timeout_value" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Invalid $timeout_name '$timeout_value'; expected a positive integer number of seconds" >&2
+    exit 64
+  fi
+done
 
 compose() { docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE" "$@"; }
 
@@ -60,27 +72,42 @@ diagnostics() {
   compose exec -T kafka kafka-consumer-groups --bootstrap-server localhost:29092 --list >&2 || true
 }
 
-stop_app() {
-  local app="$1"
-  if [[ -f "$RUN_DIR/$app.pid" ]]; then
-    local pid
-    pid="$(<"$RUN_DIR/$app.pid")"
-    if kill -0 "$pid" 2>/dev/null; then
-      kill "$pid" 2>/dev/null || true
-      for _ in {1..20}; do kill -0 "$pid" 2>/dev/null || break; sleep 0.25; done
-      kill -9 "$pid" 2>/dev/null || true
+stop_apps() {
+  local app pid deadline active
+  local pids=()
+  for app in "$@"; do
+    if [[ -f "$RUN_DIR/$app.pid" ]]; then
+      pid="$(<"$RUN_DIR/$app.pid")"
+      if [[ "$pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$pid" 2>/dev/null; then
+        pids+=("$pid")
+      fi
     fi
-  fi
+  done
+  [[ -n "${pids[*]-}" ]] || return 0
+  for pid in "${pids[@]}"; do kill -TERM "$pid" 2>/dev/null || true; done
+  deadline=$((SECONDS + APP_STOP_TIMEOUT_SECONDS))
+  while (( SECONDS < deadline )); do
+    active=0
+    for pid in "${pids[@]}"; do
+      if kill -0 "$pid" 2>/dev/null; then active=$((active + 1)); fi
+    done
+    (( active == 0 )) && break
+    sleep 0.1
+  done
+  for pid in "${pids[@]}"; do
+    if kill -0 "$pid" 2>/dev/null; then kill -KILL "$pid" 2>/dev/null || true; fi
+  done
+  for pid in "${pids[@]}"; do wait "$pid" 2>/dev/null || true; done
 }
 
 cleanup() {
   local primary_status=$? cleanup_status=0
   trap - EXIT INT TERM
   set +e
-  for app in gateway monolith inventory order catalog identity; do stop_app "$app"; done
+  stop_apps gateway monolith inventory order catalog identity
   if [[ $FAILED -ne 0 && $primary_status -ne 0 && $COMPOSE_STARTED -eq 1 ]]; then diagnostics; fi
   if [[ $COMPOSE_STARTED -eq 1 ]]; then
-    if ! compose down -v --remove-orphans >/dev/null 2>&1; then
+    if ! compose down --timeout "$COMPOSE_DOWN_TIMEOUT_SECONDS" -v --remove-orphans >/dev/null 2>&1; then
       echo "Reference cleanup failure: docker compose down failed for $COMPOSE_PROJECT" >&2
       cleanup_status=70
     fi
@@ -210,7 +237,7 @@ start_monolith() {
 }
 
 start_business_apps() { local app; for app in "${BUSINESS_APPS[@]}"; do "start_$app"; done; }
-stop_business_apps() { local app; for app in "${BUSINESS_APPS[@]}"; do stop_app "$app"; done; }
+stop_business_apps() { stop_apps "${BUSINESS_APPS[@]}"; }
 
 cd "$PROJECT_ROOT"
 reference_write_port_manifest "$TOPOLOGY" "$PORT_MANIFEST"
@@ -227,7 +254,7 @@ for executable in docker curl uv; do
 done
 [[ -n "$JAVA_BIN" ]] || { echo "Required executable is unavailable: java" >&2; exit 127; }
 
-compose down -v --remove-orphans >/dev/null 2>&1
+compose down --timeout "$COMPOSE_DOWN_TIMEOUT_SECONDS" -v --remove-orphans >/dev/null 2>&1
 COMPOSE_STARTED=1
 compose up -d postgres zookeeper kafka
 wait_postgres

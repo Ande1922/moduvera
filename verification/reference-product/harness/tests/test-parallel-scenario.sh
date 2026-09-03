@@ -159,6 +159,32 @@ echo "Reference product verification: PASS (topology=$topology; public contract 
 SH
 chmod +x "$STUB_RUNNER"
 
+STUB_VALIDATOR="$TEST_DIR/stub-validator.py"
+cat > "$STUB_VALIDATOR" <<'PY'
+#!/usr/bin/env python3
+import os
+import pathlib
+import signal
+import sys
+import time
+
+if os.environ.get("STUB_VALIDATOR_MODE") != "hang":
+    os.execv(sys.executable, [sys.executable, os.environ["REAL_VALIDATOR"], *sys.argv[1:]])
+
+state = pathlib.Path(os.environ["STUB_STATE_DIR"])
+signal.signal(signal.SIGINT, signal.SIG_IGN)
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+(state / "validator.wrapper-pid").write_text(str(os.getpid()), encoding="ascii")
+descendant = os.fork()
+if descendant == 0:
+    while True:
+        time.sleep(1)
+(state / "validator.descendant-pid").write_text(str(descendant), encoding="ascii")
+while True:
+    time.sleep(1)
+PY
+chmod +x "$STUB_VALIDATOR"
+
 run_supervisor() {
   local name="$1" mode="$2" expected_status="$3" evidence_kind="$4"
   local case_dir="$TEST_DIR/$name" status
@@ -250,6 +276,95 @@ run_signal_case() {
 
 run_signal_case signal-term TERM 15 143
 run_signal_case signal-int INT 2 130
+
+run_validator_signal_case() {
+  local name="$1" signal_name="$2" signal_number="$3" expected_status="$4"
+  local signal_dir="$TEST_DIR/$name" start_seconds signal_status pid_file pid
+  mkdir "$signal_dir" "$signal_dir/state"
+  start_seconds=$SECONDS
+  STUB_STATE_DIR="$signal_dir/state" STUB_RUNNER_MODE=success STUB_VALIDATOR_MODE=hang \
+    REAL_VALIDATOR="$HARNESS_DIR/validate-parallel-scenario.py" \
+    REFERENCE_PARALLEL_TERM_TIMEOUT_SECONDS=0.2 \
+    REFERENCE_PARALLEL_VALIDATOR_TIMEOUT_SECONDS=30 \
+    REFERENCE_PARALLEL_EVIDENCE_DIR="$signal_dir/evidence" \
+    python3 "$HARNESS_DIR/parallel_supervisor.py" \
+      --runner "$STUB_RUNNER" --validator "$STUB_VALIDATOR" \
+      20 21 >"$signal_dir/out" 2>"$signal_dir/err" &
+  SUPERVISOR_PID=$!
+  for _ in {1..150}; do
+    [[ -f "$signal_dir/state/validator.descendant-pid" ]] && break
+    sleep 0.02
+  done
+  [[ -f "$signal_dir/state/validator.descendant-pid" ]] \
+    || fail "$signal_name blocked-validator test did not start"
+  kill -s "$signal_name" "$SUPERVISOR_PID"
+  set +e
+  wait "$SUPERVISOR_PID"
+  signal_status=$?
+  set -e
+  SUPERVISOR_PID=""
+  [[ $signal_status -eq $expected_status ]] \
+    || fail "blocked validator $signal_name returned $signal_status instead of $expected_status"
+  (( SECONDS - start_seconds < 5 )) \
+    || fail "blocked validator $signal_name escalation exceeded its bounded timeout"
+  grep -F "interrupted by signal $signal_number" "$signal_dir/err" >/dev/null \
+    || fail "blocked validator $signal_name interruption was not diagnosed"
+  for pid_file in "$signal_dir/state"/validator.*-pid; do
+    pid="$(<"$pid_file")"
+    for _ in {1..40}; do kill -0 "$pid" 2>/dev/null || break; sleep 0.05; done
+    if kill -0 "$pid" 2>/dev/null; then
+      fail "blocked validator process $pid survived $signal_name escalation"
+    fi
+  done
+}
+
+run_validator_signal_case validator-term TERM 15 143
+run_validator_signal_case validator-int INT 2 130
+
+VALIDATOR_TIMEOUT_DIR="$TEST_DIR/validator-timeout"
+mkdir "$VALIDATOR_TIMEOUT_DIR" "$VALIDATOR_TIMEOUT_DIR/state"
+set +e
+STUB_STATE_DIR="$VALIDATOR_TIMEOUT_DIR/state" STUB_RUNNER_MODE=success STUB_VALIDATOR_MODE=hang \
+  REAL_VALIDATOR="$HARNESS_DIR/validate-parallel-scenario.py" \
+  REFERENCE_PARALLEL_TERM_TIMEOUT_SECONDS=0.2 \
+  REFERENCE_PARALLEL_VALIDATOR_TIMEOUT_SECONDS=0.2 \
+  REFERENCE_PARALLEL_EVIDENCE_DIR="$VALIDATOR_TIMEOUT_DIR/evidence" \
+  python3 "$HARNESS_DIR/parallel_supervisor.py" \
+    --runner "$STUB_RUNNER" --validator "$STUB_VALIDATOR" \
+    20 21 >"$VALIDATOR_TIMEOUT_DIR/out" 2>"$VALIDATOR_TIMEOUT_DIR/err"
+validator_timeout_status=$?
+set -e
+[[ $validator_timeout_status -eq 124 ]] \
+  || fail "blocked validator timeout returned $validator_timeout_status instead of 124"
+grep -F 'Parallel evidence validator exceeded 0.2 seconds' \
+  "$VALIDATOR_TIMEOUT_DIR/err" >/dev/null \
+  || fail "blocked validator timeout was not diagnosed"
+for pid_file in "$VALIDATOR_TIMEOUT_DIR/state"/validator.*-pid; do
+  pid="$(<"$pid_file")"
+  for _ in {1..40}; do kill -0 "$pid" 2>/dev/null || break; sleep 0.05; done
+  if kill -0 "$pid" 2>/dev/null; then
+    fail "timed-out validator process $pid survived escalation"
+  fi
+done
+
+for timeout_name in \
+  REFERENCE_PARALLEL_TERM_TIMEOUT_SECONDS \
+  REFERENCE_PARALLEL_VALIDATOR_TIMEOUT_SECONDS; do
+  for invalid_timeout in inf -inf nan -1; do
+    set +e
+    env "$timeout_name=$invalid_timeout" \
+      python3 "$HARNESS_DIR/parallel_supervisor.py" \
+        --runner "$STUB_RUNNER" --validator "$HARNESS_DIR/validate-parallel-scenario.py" \
+        20 21 >"$TEST_DIR/invalid-timeout.out" 2>"$TEST_DIR/invalid-timeout.err"
+    invalid_timeout_status=$?
+    set -e
+    [[ $invalid_timeout_status -ne 0 ]] \
+      || fail "$timeout_name accepted non-finite value $invalid_timeout"
+    grep -F "Invalid $timeout_name; expected a finite non-negative number" \
+      "$TEST_DIR/invalid-timeout.err" >/dev/null \
+      || fail "$timeout_name did not diagnose non-finite value $invalid_timeout"
+  done
+done
 
 if grep -F 'verify-parallel.sh' "$HARNESS_DIR/verify.sh" >/dev/null; then
   fail "ordinary verify.sh unexpectedly pays for the parallel scenario"

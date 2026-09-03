@@ -7,6 +7,7 @@ REFERENCE_PORT_STRIDE=100
 REFERENCE_LOCK_OWNER="${REFERENCE_LOCK_OWNER:-}"
 REFERENCE_LOCK_PID="${REFERENCE_LOCK_PID:-}"
 REFERENCE_OWNED_LOCK_PATHS=()
+REFERENCE_PORT_PLAN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 reference_fail() {
   echo "$*" >&2
@@ -251,10 +252,12 @@ reference_pid_is_active() {
 }
 
 reference_record_owned_lock() {
-  local lock_path="$1" owner_file
+  local lock_path="$1" owner_file owner_record
   owner_file="$lock_path/owner"
-  if ! chmod 700 "$lock_path" || ! (umask 077; printf '%s:%s\n' "$REFERENCE_LOCK_PID" "$REFERENCE_LOCK_OWNER" > "$owner_file"); then
-    rm -f "$owner_file"
+  owner_record="$REFERENCE_LOCK_PID:$REFERENCE_LOCK_OWNER"
+  if ! chmod 700 "$lock_path" \
+    || [[ -e "$owner_file" || -L "$owner_file" ]] \
+    || ! python3 "$REFERENCE_PORT_PLAN_DIR/lock_metadata.py" create "$lock_path" owner "$owner_record"; then
     rmdir "$lock_path" 2>/dev/null || true
     echo "Unable to record ownership for reference lock: $lock_path" >&2
     return 73
@@ -262,27 +265,59 @@ reference_record_owned_lock() {
   REFERENCE_OWNED_LOCK_PATHS+=("$lock_path")
 }
 
+reference_read_lock_metadata() {
+  python3 "$REFERENCE_PORT_PLAN_DIR/lock_metadata.py" read "$1" "$2"
+}
+
 reference_remove_stale_tombstone() {
-  local tombstone="$1"
-  rm -f "$tombstone/owner" "$tombstone/pid"
-  if ! rmdir "$tombstone" 2>/dev/null; then
+  local stale_lock="$1" tombstone="$2" metadata_name="$3" expected_record="$4" metadata_path
+  if [[ -L "$stale_lock" || ! -d "$stale_lock" ]]; then
+    echo "Reclaimed lock is an unsafe symlink or non-directory; preserving tombstone: $stale_lock" >&2
+    return 74
+  fi
+  for metadata_path in "$stale_lock/owner" "$stale_lock/pid"; do
+    if [[ -L "$metadata_path" ]]; then
+      echo "Reclaimed lock contains unsafe symlink metadata; preserving tombstone: $metadata_path" >&2
+      return 74
+    fi
+    if [[ "$(basename "$metadata_path")" == "$metadata_name" ]]; then
+      if ! python3 "$REFERENCE_PORT_PLAN_DIR/lock_metadata.py" \
+        remove "$stale_lock" "$metadata_name" "$expected_record"; then
+        echo "Reclaimed lock contains unsafe metadata; preserving tombstone: $metadata_path" >&2
+        return 74
+      fi
+    elif [[ -e "$metadata_path" ]]; then
+      echo "Reclaimed lock contains unexpected metadata; preserving tombstone: $metadata_path" >&2
+      return 74
+    fi
+  done
+  if ! rmdir "$stale_lock" 2>/dev/null || ! rmdir "$tombstone" 2>/dev/null; then
     echo "Reclaimed lock left a non-empty tombstone for manual inspection: $tombstone" >&2
+    return 74
   fi
 }
 
 reference_acquire_named_lock() {
   local lock_name="$1" description="$2" lock_path owner_file legacy_pid_file
-  local owner_record owner_pid owner_metadata_file tombstone attempt
+  local owner_record owner_record_after_move owner_pid owner_metadata_file metadata_name tombstone stale_lock attempt
   lock_path="$REFERENCE_LOCK_ROOT/moduvera-reference-$lock_name.lock"
   owner_file="$lock_path/owner"
   legacy_pid_file="$lock_path/pid"
 
   for attempt in 1 2 3; do
-    if mkdir "$lock_path" 2>/dev/null; then
+    if [[ -L "$lock_path" ]]; then
+      echo "$description lock path is an unsafe symlink; refusing to use: $lock_path" >&2
+      return 73
+    fi
+    if (umask 077; mkdir "$lock_path") 2>/dev/null; then
       reference_record_owned_lock "$lock_path"
       return
     fi
 
+    if [[ -L "$lock_path" ]]; then
+      echo "$description lock path is an unsafe symlink; refusing to use: $lock_path" >&2
+      return 73
+    fi
     if [[ ! -e "$lock_path" ]]; then
       echo "Unable to create $description lock in writable root $REFERENCE_LOCK_ROOT" >&2
       return 73
@@ -292,9 +327,16 @@ reference_acquire_named_lock() {
       return 73
     fi
 
+    if [[ -L "$owner_file" || -L "$legacy_pid_file" ]]; then
+      echo "$description lock has unsafe symlink ownership metadata; refusing to reclaim: $lock_path" >&2
+      return 73
+    fi
     if [[ -f "$owner_file" ]]; then
       owner_metadata_file="$owner_file"
-      owner_record="$(<"$owner_file")"
+      if ! owner_record="$(reference_read_lock_metadata "$lock_path" owner)"; then
+        echo "$description lock has unsafe ownership metadata; refusing to reclaim: $lock_path" >&2
+        return 73
+      fi
       owner_pid="${owner_record%%:*}"
       if [[ ! "$owner_record" =~ ^[1-9][0-9]*:.+ || "$owner_pid" == "$owner_record" ]]; then
         echo "$description lock has invalid ownership metadata; refusing to reclaim: $lock_path" >&2
@@ -302,7 +344,10 @@ reference_acquire_named_lock() {
       fi
     elif [[ -f "$legacy_pid_file" ]]; then
       owner_metadata_file="$legacy_pid_file"
-      owner_record="$(<"$legacy_pid_file")"
+      if ! owner_record="$(reference_read_lock_metadata "$lock_path" pid)"; then
+        echo "$description lock has unsafe legacy PID metadata; refusing to reclaim: $lock_path" >&2
+        return 73
+      fi
       owner_pid="$owner_record"
       if [[ ! "$owner_pid" =~ ^[1-9][0-9]*$ ]]; then
         echo "$description lock has invalid legacy PID metadata; refusing to reclaim: $lock_path" >&2
@@ -322,15 +367,28 @@ reference_acquire_named_lock() {
     fi
 
     tombstone="$lock_path.stale.$REFERENCE_LOCK_OWNER.$attempt"
-    if mv "$lock_path" "$tombstone" 2>/dev/null; then
-      owner_metadata_file="$tombstone/$(basename "$owner_metadata_file")"
-      if [[ ! -f "$owner_metadata_file" || "$(<"$owner_metadata_file")" != "$owner_record" ]]; then
+    if ! (umask 077; mkdir "$tombstone") 2>/dev/null; then
+      continue
+    fi
+    stale_lock="$tombstone/lock"
+    if mv "$lock_path" "$stale_lock" 2>/dev/null; then
+      metadata_name="$(basename "$owner_metadata_file")"
+      owner_metadata_file="$stale_lock/$metadata_name"
+      if [[ -L "$stale_lock" || ! -d "$stale_lock" || -L "$owner_metadata_file" ]] \
+        || ! owner_record_after_move="$(reference_read_lock_metadata "$stale_lock" "$metadata_name")" \
+        || [[ "$owner_record_after_move" != "$owner_record" ]]; then
         echo "$description lock ownership changed during stale-lock recovery; refusing to reclaim" >&2
-        mv "$tombstone" "$lock_path" 2>/dev/null || true
+        if [[ ! -e "$lock_path" && ! -L "$lock_path" ]]; then
+          mv "$stale_lock" "$lock_path" 2>/dev/null || true
+        fi
+        rmdir "$tombstone" 2>/dev/null || true
         return 73
       fi
       echo "Reclaiming stale $description lock owned by dead pid $owner_pid: $lock_path" >&2
-      reference_remove_stale_tombstone "$tombstone"
+      reference_remove_stale_tombstone \
+        "$stale_lock" "$tombstone" "$metadata_name" "$owner_record" || return 73
+    else
+      rmdir "$tombstone" 2>/dev/null || true
     fi
   done
 
@@ -366,14 +424,20 @@ reference_acquire_run_locks() {
 }
 
 reference_release_run_locks() {
-  local i lock_path owner_file expected_owner release_status=0
+  local i lock_path owner_file expected_owner actual_owner release_status=0
   [[ -n "${REFERENCE_LOCK_OWNER:-}" ]] || return 0
   expected_owner="${REFERENCE_LOCK_PID:-}:${REFERENCE_LOCK_OWNER:-}"
   for ((i = ${#REFERENCE_OWNED_LOCK_PATHS[@]} - 1; i >= 0; i--)); do
     lock_path="${REFERENCE_OWNED_LOCK_PATHS[$i]}"
     owner_file="$lock_path/owner"
-    if [[ -f "$owner_file" && "$(<"$owner_file")" == "$expected_owner" ]]; then
-      if ! rm -f "$owner_file"; then
+    if [[ -L "$lock_path" || -L "$owner_file" ]]; then
+      echo "Reference lock contains an unsafe symlink; refusing to release: $lock_path" >&2
+      release_status=74
+    elif [[ -f "$owner_file" ]] \
+      && actual_owner="$(reference_read_lock_metadata "$lock_path" owner)" \
+      && [[ "$actual_owner" == "$expected_owner" ]]; then
+      if ! python3 "$REFERENCE_PORT_PLAN_DIR/lock_metadata.py" \
+        remove "$lock_path" owner "$expected_owner"; then
         echo "Unable to remove reference lock ownership metadata: $owner_file" >&2
         release_status=74
       elif ! rmdir "$lock_path" 2>/dev/null; then

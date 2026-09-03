@@ -160,6 +160,32 @@ stop_lock_holder
 (
   # shellcheck source=../port-plan.sh
   source "$HARNESS_DIR/port-plan.sh"
+  RUN_SLOT=18
+  REFERENCE_LOCK_ROOT="$LOCK_ROOT"
+  reference_configure_port_plan microservices
+  reference_acquire_run_locks
+  trap reference_release_run_locks EXIT
+  sleep 30
+) &
+LOCK_HOLDER_PID=$!
+for _ in {1..40}; do [[ -d "$LOCK_ROOT/moduvera-reference-slot-18.lock" ]] && break; sleep 0.05; done
+[[ -d "$LOCK_ROOT/moduvera-reference-slot-18.lock" ]] || fail "unrelated-slot holder did not start"
+bash -c '
+  set -euo pipefail
+  source "$1"
+  RUN_SLOT=19
+  REFERENCE_LOCK_ROOT="$2"
+  reference_configure_port_plan business-core-monolith
+  reference_acquire_run_locks
+  reference_release_run_locks
+' bash "$HARNESS_DIR/port-plan.sh" "$LOCK_ROOT"
+[[ -d "$LOCK_ROOT/moduvera-reference-slot-18.lock" ]] \
+  || fail "verification of another slot disturbed the active unrelated slot"
+stop_lock_holder
+
+(
+  # shellcheck source=../port-plan.sh
+  source "$HARNESS_DIR/port-plan.sh"
   RUN_SLOT=8
   REFERENCE_GATEWAY_PORT=07777
   REFERENCE_LOCK_ROOT="$LOCK_ROOT"
@@ -252,6 +278,59 @@ expect_failure "Reference lock ownership changed; refusing to release" bash -c '
   || fail "ownership-safe cleanup removed a lock owned by another run"
 rm -f "$LOCK_ROOT/moduvera-reference-ownership-test.lock/owner"
 rmdir "$LOCK_ROOT/moduvera-reference-ownership-test.lock"
+
+SYMLINK_TARGET="$TEST_DIR/symlink-target"
+mkdir "$SYMLINK_TARGET"
+printf '%s\n' 'external-sentinel' > "$SYMLINK_TARGET/sentinel"
+ln -s "$SYMLINK_TARGET" "$LOCK_ROOT/moduvera-reference-planted.lock"
+expect_failure "lock path is an unsafe symlink; refusing to use" bash -c '
+  set -euo pipefail
+  source "$1"
+  REFERENCE_LOCK_ROOT="$2"
+  reference_prepare_locking
+  reference_acquire_named_lock planted "Planted"
+' bash "$HARNESS_DIR/port-plan.sh" "$LOCK_ROOT"
+[[ "$(<"$SYMLINK_TARGET/sentinel")" == "external-sentinel" ]] \
+  || fail "planted lock symlink modified its external target"
+rm "$LOCK_ROOT/moduvera-reference-planted.lock"
+
+OWNER_SYMLINK_LOCK="$LOCK_ROOT/moduvera-reference-owner-symlink.lock"
+mkdir "$OWNER_SYMLINK_LOCK"
+printf '%s\n' '999999:external-owner' > "$SYMLINK_TARGET/external-owner"
+ln -s "$SYMLINK_TARGET/external-owner" "$OWNER_SYMLINK_LOCK/owner"
+expect_failure "lock has unsafe symlink ownership metadata; refusing to reclaim" bash -c '
+  set -euo pipefail
+  source "$1"
+  REFERENCE_LOCK_ROOT="$2"
+  reference_prepare_locking
+  reference_acquire_named_lock owner-symlink "Owner symlink"
+' bash "$HARNESS_DIR/port-plan.sh" "$LOCK_ROOT"
+[[ "$(<"$SYMLINK_TARGET/external-owner")" == "999999:external-owner" ]] \
+  || fail "owner symlink modified its external target"
+[[ -L "$OWNER_SYMLINK_LOCK/owner" ]] || fail "unsafe owner symlink was deleted"
+rm "$OWNER_SYMLINK_LOCK/owner"
+rmdir "$OWNER_SYMLINK_LOCK"
+
+RACE_LOCK="$LOCK_ROOT/moduvera-reference-tombstone-race.lock"
+RACE_TOMBSTONE="$RACE_LOCK.stale.race-owner.1"
+mkdir "$RACE_LOCK"
+printf '%s\n' '999999:dead-owner' > "$RACE_LOCK/owner"
+ln -s "$SYMLINK_TARGET" "$RACE_TOMBSTONE"
+bash -c '
+  set -euo pipefail
+  source "$1"
+  REFERENCE_LOCK_ROOT="$2"
+  REFERENCE_LOCK_OWNER=race-owner
+  reference_prepare_locking
+  reference_acquire_named_lock tombstone-race "Tombstone race"
+  reference_release_run_locks
+' bash "$HARNESS_DIR/port-plan.sh" "$LOCK_ROOT" 2>"$TEST_DIR/tombstone-race.err"
+grep -F "Reclaiming stale Tombstone race lock owned by dead pid 999999" \
+  "$TEST_DIR/tombstone-race.err" >/dev/null || fail "tombstone race did not recover safely"
+[[ "$(<"$SYMLINK_TARGET/sentinel")" == "external-sentinel" ]] \
+  || fail "tombstone race modified its external target"
+[[ -L "$RACE_TOMBSTONE" ]] || fail "pre-existing tombstone symlink was clobbered"
+rm "$RACE_TOMBSTONE"
 
 LOCK_LINE="$(grep -n 'reference_acquire_run_locks' "$HARNESS_DIR/run-topology.sh" | cut -d: -f1)"
 PREFLIGHT_LINE="$(grep -n 'reference_preflight_ports' "$HARNESS_DIR/run-topology.sh" | tail -1 | cut -d: -f1)"
