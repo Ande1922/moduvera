@@ -10,6 +10,9 @@ if [[ ! -f "$CONFIG_FILE" ]]; then
   echo "Unknown topology '$TOPOLOGY'; expected microservices or business-core-monolith" >&2
   exit 64
 fi
+# shellcheck source=port-plan.sh
+source "$HARNESS_DIR/port-plan.sh"
+reference_configure_port_plan "$TOPOLOGY"
 # shellcheck source=/dev/null
 source "$CONFIG_FILE"
 
@@ -17,21 +20,15 @@ REFERENCE_PRODUCT_DIR="$PROJECT_ROOT/verification/reference-product"
 COMPOSE_DIR="$REFERENCE_PRODUCT_DIR/compose"
 ACCEPTANCE_DIR="$PROJECT_ROOT/verification/acceptance"
 COMPOSE_FILE="$COMPOSE_DIR/docker-compose.yml"
-RUN_ID="$(date +%s)-$$-$TOPOLOGY"
+RUN_ID="slot$RUN_SLOT-$(date +%s)-$$-$TOPOLOGY"
 COMPOSE_PROJECT="${REFERENCE_COMPOSE_PROJECT:-moduvera-reference-$RUN_ID}"
-KAFKA_PORT="${REFERENCE_KAFKA_PORT:-59092}"
-POSTGRES_PORT="${REFERENCE_POSTGRES_PORT:-55432}"
-GATEWAY_PORT="${REFERENCE_GATEWAY_PORT:-58080}"
-IDENTITY_PORT="${REFERENCE_IDENTITY_PORT:-58081}"
-CATALOG_PORT="${REFERENCE_CATALOG_PORT:-58082}"
-ORDER_PORT="${REFERENCE_ORDER_PORT:-58083}"
-INVENTORY_PORT="${REFERENCE_INVENTORY_PORT:-58084}"
-MONOLITH_PORT="${REFERENCE_MONOLITH_PORT:-58085}"
 HEALTH_TIMEOUT_SECONDS="${REFERENCE_HEALTH_TIMEOUT_SECONDS:-180}"
 REFERENCE_JAVA_TOOL_OPTIONS="${REFERENCE_JAVA_TOOL_OPTIONS:--Xms64m -Xmx256m}"
 RUN_DIR="$(mktemp -d "${TMPDIR:-/tmp}/moduvera-reference.XXXXXX")"
+PORT_MANIFEST="${REFERENCE_PORT_MANIFEST:-$RUN_DIR/port-manifest.json}"
 STATE_FILE="$RUN_DIR/recovery-order-id"
 FAILED=1
+COMPOSE_STARTED=0
 JAVA_BIN="${JAVA_HOME:-}/bin/java"
 if [[ ! -x "$JAVA_BIN" ]]; then JAVA_BIN="$(command -v java || true)"; fi
 
@@ -72,8 +69,11 @@ stop_app() {
 cleanup() {
   local exit_code=$?
   for app in gateway monolith inventory order catalog identity; do stop_app "$app"; done
-  if [[ $FAILED -ne 0 && $exit_code -ne 0 ]]; then diagnostics; fi
-  compose down -v --remove-orphans >/dev/null 2>&1 || true
+  if [[ $FAILED -ne 0 && $exit_code -ne 0 && $COMPOSE_STARTED -eq 1 ]]; then diagnostics; fi
+  if [[ $COMPOSE_STARTED -eq 1 ]]; then
+    compose down -v --remove-orphans >/dev/null 2>&1 || true
+  fi
+  reference_release_slot
   rm -rf "$RUN_DIR"
   exit "$exit_code"
 }
@@ -82,9 +82,13 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 start_app() {
-  local app="$1" jar="$2"
+  local app="$1" jar="$2" java_tool_options="$REFERENCE_JAVA_TOOL_OPTIONS" debug_port
   shift 2
-  env "JAVA_TOOL_OPTIONS=$REFERENCE_JAVA_TOOL_OPTIONS" "$@" \
+  if [[ "$REFERENCE_DEBUG" == "1" ]]; then
+    debug_port="$(reference_debug_port "$app")"
+    java_tool_options="$java_tool_options -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:$debug_port"
+  fi
+  env "JAVA_TOOL_OPTIONS=$java_tool_options" "$@" \
     "$JAVA_BIN" -jar "$PROJECT_ROOT/$jar" >"$RUN_DIR/$app.log" 2>&1 &
   echo $! >"$RUN_DIR/$app.pid"
 }
@@ -188,12 +192,22 @@ start_business_apps() { local app; for app in "${BUSINESS_APPS[@]}"; do "start_$
 stop_business_apps() { local app; for app in "${BUSINESS_APPS[@]}"; do stop_app "$app"; done; }
 
 cd "$PROJECT_ROOT"
-for executable in docker curl python3 uv; do
+reference_write_port_manifest "$TOPOLOGY" "$PORT_MANIFEST"
+reference_acquire_slot
+reference_preflight_ports "$HARNESS_DIR"
+echo "Reference port preflight: PASS"
+if [[ "${REFERENCE_PREFLIGHT_ONLY:-0}" == "1" ]]; then
+  FAILED=0
+  exit 0
+fi
+
+for executable in docker curl uv; do
   command -v "$executable" >/dev/null 2>&1 || { echo "Required executable is unavailable: $executable" >&2; exit 127; }
 done
 [[ -n "$JAVA_BIN" ]] || { echo "Required executable is unavailable: java" >&2; exit 127; }
 
 compose down -v --remove-orphans >/dev/null 2>&1 || true
+COMPOSE_STARTED=1
 compose up -d postgres zookeeper kafka
 wait_postgres
 wait_kafka
