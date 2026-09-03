@@ -8,6 +8,7 @@ import shutil
 import signal
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -315,6 +316,32 @@ class QualityGatePolicyTest(unittest.TestCase):
             quality_gate.check_sensitive_content(self.fixture.root, self.base, head)
         self.assertNotIn(payload, str(caught.exception))
         self.assertIn("config/application-", str(caught.exception))
+
+    def test_changed_compact_sequence_yaml_payload_uses_unchanged_header(self) -> None:
+        credential_key = "pass" + "word"
+        self.fixture.write(
+            "config/application.yml",
+            "spring:\n"
+            "  credentials:\n"
+            f"    - {credential_key}: >2-\n"
+            "        ${DB_PASSWORD}\n"
+            "      enabled: true\n",
+        )
+        before = self.fixture.commit("compact YAML placeholder")
+        exposed = "compact-sequence-live-" + "credential-1234567890"
+        self.fixture.write(
+            "config/application.yml",
+            "spring:\n"
+            "  credentials:\n"
+            f"    - {credential_key}: >2-\n"
+            f"        {exposed}\n"
+            "      enabled: true\n",
+        )
+        after = self.fixture.commit("replace compact YAML payload only")
+        with self.assertRaises(quality_gate.GateError) as caught:
+            quality_gate.check_sensitive_content(self.fixture.root, before, after)
+        self.assertIn("config/application.yml: added line 4", str(caught.exception))
+        self.assertNotIn(exposed, str(caught.exception))
 
     def test_unresolvable_base_fails_closed(self) -> None:
         with self.assertRaises(quality_gate.GateError):
@@ -759,6 +786,91 @@ class QualityGateEvidenceTest(unittest.TestCase):
             with self.assertRaises(ProcessLookupError):
                 os.kill(child_pid, 0)
 
+    def test_detached_setsid_descendant_is_killed_and_step_cannot_pass(self) -> None:
+        self.install_gate()
+        python = shlex.quote(sys.executable)
+        extension = self.fixture.root / "tools/quality/checks.d/common/10-detach"
+        extension.write_text(
+            "#!/usr/bin/env bash\n"
+            f"{python} -c 'import os,signal,sys,time; os.setsid(); "
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            "open(sys.argv[1], \"w\").write(str(os.getpid())); time.sleep(60)' "
+            '"$QUALITY_GATE_RUN_DIR/detached.pid" &\n'
+            'while [ ! -f "$QUALITY_GATE_RUN_DIR/detached.pid" ]; do sleep 0.01; done\n',
+            encoding="utf-8",
+        )
+        extension.chmod(0o755)
+        self.base = self.fixture.commit("install detached descendant extension")
+        self.fixture.write("guide.md", "# Guide\n")
+        head = self.fixture.commit("docs")
+        result = self.run_gate("auto", "--base", self.base, "--head", head)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("status: FAIL", result.stdout)
+        self.assertIn("contained processes", result.stdout)
+        run_dir = self.latest_run()
+        detached_pid = int((run_dir / "detached.pid").read_text())
+        with self.assertRaises(ProcessLookupError):
+            os.kill(detached_pid, 0)
+        self.assertTrue((run_dir / "completed").is_file())
+
+    def test_interruption_kills_detached_setsid_descendant_before_evidence(self) -> None:
+        self.install_gate()
+        python = shlex.quote(sys.executable)
+        extension = self.fixture.root / "tools/quality/checks.d/common/10-detached-wait"
+        extension.write_text(
+            "#!/usr/bin/env bash\n"
+            "echo $$ > \"$QUALITY_GATE_RUN_DIR/leader.pid\"\n"
+            f"{python} -c 'import os,signal,sys,time; os.setsid(); "
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            "open(sys.argv[1], \"w\").write(str(os.getpid())); time.sleep(60)' "
+            '"$QUALITY_GATE_RUN_DIR/detached.pid" &\n'
+            'while [ ! -f "$QUALITY_GATE_RUN_DIR/detached.pid" ]; do sleep 0.01; done\n'
+            "wait\n",
+            encoding="utf-8",
+        )
+        extension.chmod(0o755)
+        self.base = self.fixture.commit("install interrupted detached descendant")
+        self.fixture.write("guide.md", "# Guide\n")
+        head = self.fixture.commit("docs")
+        process = subprocess.Popen(
+            [
+                str(self.fixture.root / "tools/quality/quality-gate.sh"),
+                "auto",
+                "--base",
+                self.base,
+                "--head",
+                head,
+            ],
+            cwd=self.fixture.root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        run_dir: Path | None = None
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            latest = self.fixture.root / ".quality-gate/latest"
+            if latest.is_file():
+                candidate = self.fixture.root / ".quality-gate/runs" / latest.read_text().strip()
+                if (candidate / "leader.pid").is_file() and (
+                    candidate / "detached.pid"
+                ).is_file():
+                    run_dir = candidate
+                    break
+            time.sleep(0.02)
+        self.assertIsNotNone(run_dir, "detached descendant did not start")
+        assert run_dir is not None
+        leader_pid = int((run_dir / "leader.pid").read_text())
+        detached_pid = int((run_dir / "detached.pid").read_text())
+        os.kill(process.pid, signal.SIGTERM)
+        stdout, stderr = process.communicate(timeout=15)
+        self.assertEqual(128 + signal.SIGTERM, process.returncode, stdout + stderr)
+        self.assertIn("status: INTERRUPTED", stdout)
+        self.assertTrue((run_dir / "completed").is_file())
+        for pid in (leader_pid, detached_pid):
+            with self.assertRaises(ProcessLookupError):
+                os.kill(pid, 0)
+
     def test_signal_immediately_after_launch_reaps_child_and_completes_evidence(self) -> None:
         self.install_gate()
         extension = self.fixture.root / "tools/quality/checks.d/common/10-signal-at-launch"
@@ -833,6 +945,59 @@ class QualityGateEvidenceTest(unittest.TestCase):
         self.assertIn("status: INTERRUPTED", stdout)
         self.assertIn("status: INTERRUPTED", (run_dir / "summary.txt").read_text())
         self.assertTrue((run_dir / "completed").is_file())
+
+    def test_pending_signal_after_completion_cannot_leave_pass_evidence(self) -> None:
+        self.install_gate()
+        core = self.fixture.root / "tools/quality/quality_gate.py"
+        source = core.read_text(encoding="utf-8")
+        needle = (
+            "        finalization_mask = signal.pthread_sigmask(\n"
+            "            signal.SIG_BLOCK, set(watched_signals)\n"
+            "        )\n"
+        )
+        instrumented = (
+            needle
+            + '        (evidence.run_dir / "signals-blocked").write_text("ready\\n")\n'
+            + "        time.sleep(0.5)\n"
+        )
+        self.assertIn(needle, source)
+        core.write_text(source.replace(needle, instrumented, 1), encoding="utf-8")
+        self.base = self.fixture.commit("instrument post-completion signal window")
+        self.fixture.write("guide.md", "# Guide\n")
+        head = self.fixture.commit("docs")
+        process = subprocess.Popen(
+            [
+                str(self.fixture.root / "tools/quality/quality-gate.sh"),
+                "auto",
+                "--base",
+                self.base,
+                "--head",
+                head,
+            ],
+            cwd=self.fixture.root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        run_dir: Path | None = None
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            latest = self.fixture.root / ".quality-gate/latest"
+            if latest.is_file():
+                candidate = self.fixture.root / ".quality-gate/runs" / latest.read_text().strip()
+                if (candidate / "signals-blocked").is_file():
+                    run_dir = candidate
+                    break
+            time.sleep(0.01)
+        self.assertIsNotNone(run_dir, "did not enter blocked post-completion window")
+        assert run_dir is not None
+        os.kill(process.pid, signal.SIGTERM)
+        stdout, stderr = process.communicate(timeout=10)
+        self.assertEqual(128 + signal.SIGTERM, process.returncode, stdout + stderr)
+        self.assertIn("status: INTERRUPTED", stdout)
+        summary = (run_dir / "summary.txt").read_text()
+        self.assertIn("status: INTERRUPTED", summary)
+        self.assertNotIn("status: PASS", summary)
 
 
 class EvidencePathSafetyTest(unittest.TestCase):
@@ -980,6 +1145,32 @@ class BoundedTailTest(unittest.TestCase):
         self.assertIn("profile: test", retained)
         self.assertIn("enabled: true", retained)
         self.assertGreaterEqual(retained.count("[REDACTED]"), 2)
+
+    def test_compact_sequence_yaml_blocks_are_redacted_until_mapping_dedent(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "compact-yaml.log"
+            credential_key = "pass" + "word"
+            secret = "compact-yaml-secret-" + "1234567890"
+            content = (
+                "credentials:\n"
+                f"  - {credential_key}: |+\n"
+                f"      {secret}\n"
+                "      second-secret-line\n"
+                "    enabled: true\n"
+                f"  - {credential_key}: >2-\n"
+                "      another-secret-line\n"
+                "    name: safe\n"
+            )
+            path.write_text(content, encoding="utf-8")
+            tail = quality_gate.redacted_tail(path)
+            direct = quality_gate.redact(content)
+        retained = "\n".join(tail)
+        for fragment in (secret, "second-secret-line", "another-secret-line"):
+            self.assertNotIn(fragment, retained)
+            self.assertNotIn(fragment, direct)
+        self.assertIn("- password: [REDACTED]", retained)
+        self.assertIn("enabled: true", retained)
+        self.assertIn("name: safe", retained)
 
 
 if __name__ == "__main__":

@@ -10,6 +10,8 @@ from __future__ import annotations
 import argparse
 import codecs
 from collections import deque
+import contextlib
+import ctypes
 import datetime as dt
 import os
 from pathlib import Path, PurePosixPath
@@ -20,6 +22,7 @@ import signal
 import stat
 import subprocess
 import sys
+import threading
 import time
 from typing import NamedTuple
 import urllib.parse
@@ -53,7 +56,8 @@ CREDENTIAL_QUOTED_START = re.compile(
     rf"(?P=key_quote)\s*[:=]\s*)(?P<value_quote>['\"])"
 )
 YAML_BLOCK_CREDENTIAL_HEADER = re.compile(
-    rf"(?i)^(?P<indent> *)(?P<prefix>['\"]?{CREDENTIAL_KEY}['\"]?\s*:\s*)"
+    rf"(?i)^(?P<indent> *)(?P<sequence>- +)?"
+    rf"(?P<prefix>['\"]?{CREDENTIAL_KEY}['\"]?\s*:\s*)"
     r"(?P<style>[|>])(?P<indicators>(?:[1-9][+-]?|[+-][1-9]?))?"
     r"\s*(?:#.*)?(?:\r?\n)?$"
 )
@@ -398,6 +402,10 @@ def _line_indent(line: str) -> int:
     return len(line) - len(line.lstrip(" "))
 
 
+def _yaml_block_parent_indent(header: re.Match[str]) -> int:
+    return len(header.group("indent")) + len(header.group("sequence") or "")
+
+
 def _yaml_block_spans(content: str) -> list[tuple[int, int]]:
     lines = content.splitlines(keepends=True)
     offsets: list[int] = []
@@ -412,7 +420,7 @@ def _yaml_block_spans(content: str) -> list[tuple[int, int]]:
         if header is None:
             index += 1
             continue
-        header_indent = len(header.group("indent"))
+        header_indent = _yaml_block_parent_indent(header)
         end_index = index + 1
         while end_index < len(lines):
             candidate = lines[end_index]
@@ -489,9 +497,10 @@ def redact_yaml_blocks(text: str) -> str:
             continue
         ending = "\n" if lines[index].endswith("\n") else ""
         output.append(
-            f"{header.group('indent')}{header.group('prefix')}[REDACTED]{ending}"
+            f"{header.group('indent')}{header.group('sequence') or ''}"
+            f"{header.group('prefix')}[REDACTED]{ending}"
         )
-        header_indent = len(header.group("indent"))
+        header_indent = _yaml_block_parent_indent(header)
         index += 1
         while index < len(lines):
             candidate = lines[index]
@@ -741,6 +750,13 @@ def _open_existing_private(path: Path, parent: Path, mode: str):
     return os.fdopen(descriptor, "a", encoding="utf-8")
 
 
+def _unlink_existing_private(path: Path, parent: Path) -> None:
+    if _lstat(path) is None:
+        return
+    _validate_regular(path, parent)
+    path.unlink()
+
+
 def _validate_run_tree(run: Path, runs: Path) -> None:
     _ensure_directory(run, runs)
     for current_root, directory_names, file_names in os.walk(run, followlinks=False):
@@ -852,6 +868,19 @@ class GateSignalState:
         self.first_signum = signum
         if self.interruptible:
             raise GateInterrupted(signum)
+
+
+def consume_pending_watched_signals(
+    signal_state: GateSignalState, watched_signals: tuple[signal.Signals, ...]
+) -> None:
+    """Consume blocked watched signals so restoring defaults cannot lose the first one."""
+    watched = {int(signum) for signum in watched_signals}
+    while True:
+        pending = {int(signum) for signum in signal.sigpending()} & watched
+        if not pending:
+            return
+        consumed = signal.sigwait({min(pending)})
+        signal_state.handle(int(consumed))
 
 
 PENDING_CREDENTIAL_KEY = re.compile(
@@ -1023,10 +1052,11 @@ class StreamingRedactor:
         if yaml_header is not None:
             self._append_line(
                 f"{yaml_header.group('indent')}"
+                f"{yaml_header.group('sequence') or ''}"
                 f"{yaml_header.group('prefix')}[REDACTED]"
             )
             self.open_yaml_block = OpenYamlCredentialBlock(
-                len(yaml_header.group("indent"))
+                _yaml_block_parent_indent(yaml_header)
             )
             return
         if PENDING_CREDENTIAL_KEY.search(line.rstrip("\r\n")):
@@ -1113,21 +1143,193 @@ def _process_group_exists(process_group: int) -> bool:
     return True
 
 
-def _wait_for_process_group_exit(
-    process: subprocess.Popen[str], process_group: int, timeout: float
+class ProcessIdentity(NamedTuple):
+    pid: int
+    started: tuple[int, int] | str
+
+
+if sys.platform == "darwin":
+
+    class _DarwinProcessInfo(ctypes.Structure):
+        _fields_ = [
+            ("flags", ctypes.c_uint32),
+            ("status", ctypes.c_uint32),
+            ("xstatus", ctypes.c_uint32),
+            ("pid", ctypes.c_uint32),
+            ("ppid", ctypes.c_uint32),
+            ("uid", ctypes.c_uint32),
+            ("gid", ctypes.c_uint32),
+            ("ruid", ctypes.c_uint32),
+            ("rgid", ctypes.c_uint32),
+            ("svuid", ctypes.c_uint32),
+            ("svgid", ctypes.c_uint32),
+            ("reserved", ctypes.c_uint32),
+            ("command", ctypes.c_char * 16),
+            ("name", ctypes.c_char * 32),
+            ("file_count", ctypes.c_uint32),
+            ("process_group", ctypes.c_uint32),
+            ("job_control", ctypes.c_uint32),
+            ("terminal_device", ctypes.c_uint32),
+            ("terminal_group", ctypes.c_uint32),
+            ("nice", ctypes.c_int32),
+            ("start_seconds", ctypes.c_uint64),
+            ("start_microseconds", ctypes.c_uint64),
+        ]
+
+    _DARWIN_LIBPROC = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+
+
+def _process_identity(pid: int) -> ProcessIdentity | None:
+    if sys.platform == "darwin":
+        info = _DarwinProcessInfo()
+        size = _DARWIN_LIBPROC.proc_pidinfo(
+            pid, 3, 0, ctypes.byref(info), ctypes.sizeof(info)
+        )
+        if size != ctypes.sizeof(info):
+            return None
+        return ProcessIdentity(pid, (info.start_seconds, info.start_microseconds))
+    if sys.platform.startswith("linux"):
+        try:
+            fields = (Path("/proc") / str(pid) / "stat").read_text().split()
+        except (FileNotFoundError, PermissionError, ProcessLookupError):
+            return None
+        return ProcessIdentity(pid, fields[21])
+    raise GateError(f"descendant containment is unsupported on {sys.platform}")
+
+
+def _direct_child_pids(pid: int) -> list[int]:
+    if sys.platform == "darwin":
+        buffer = (ctypes.c_int * 4096)()
+        byte_count = _DARWIN_LIBPROC.proc_listchildpids(
+            pid, buffer, ctypes.sizeof(buffer)
+        )
+        count = max(0, byte_count) // ctypes.sizeof(ctypes.c_int)
+        return [value for value in buffer[:count] if value]
+    if sys.platform.startswith("linux"):
+        children = Path("/proc") / str(pid) / "task" / str(pid) / "children"
+        try:
+            return [int(value) for value in children.read_text().split()]
+        except (FileNotFoundError, PermissionError, ProcessLookupError):
+            return []
+    raise GateError(f"descendant containment is unsupported on {sys.platform}")
+
+
+def _path_holder_pids(path: Path) -> list[int]:
+    if sys.platform == "darwin":
+        buffer = (ctypes.c_int * 16384)()
+        byte_count = _DARWIN_LIBPROC.proc_listpidspath(
+            1, 0, os.fsencode(path), 0, buffer, ctypes.sizeof(buffer)
+        )
+        count = max(0, byte_count) // ctypes.sizeof(ctypes.c_int)
+        return [value for value in buffer[:count] if value]
+    if sys.platform.startswith("linux"):
+        expected = path.resolve(strict=True)
+        holders: list[int] = []
+        for process_dir in Path("/proc").glob("[0-9]*"):
+            try:
+                if any(
+                    descriptor.resolve(strict=True) == expected
+                    for descriptor in (process_dir / "fd").iterdir()
+                ):
+                    holders.append(int(process_dir.name))
+            except (FileNotFoundError, PermissionError, ProcessLookupError):
+                continue
+        return holders
+    raise GateError(f"descendant containment is unsupported on {sys.platform}")
+
+
+class DescendantTracker:
+    def __init__(self, root_pid: int, inherited_path: Path) -> None:
+        root = _process_identity(root_pid)
+        self.root_pid = root_pid
+        self.inherited_path = inherited_path
+        self.identities: dict[int, ProcessIdentity] = (
+            {root.pid: root} if root is not None else {}
+        )
+        self.lock = threading.Lock()
+        self.stop_event = threading.Event()
+        self.thread = threading.Thread(target=self._monitor, daemon=True)
+
+    def start(self) -> None:
+        self.thread.start()
+
+    def stop(self) -> None:
+        self.stop_event.set()
+        self.thread.join(timeout=1)
+
+    def _monitor(self) -> None:
+        while not self.stop_event.is_set():
+            self.refresh()
+            self.stop_event.wait(0.02)
+
+    def refresh(self) -> None:
+        with self.lock:
+            parents = list(self.identities.values())
+        discovered: list[ProcessIdentity] = []
+        for parent in parents:
+            if _process_identity(parent.pid) != parent:
+                continue
+            for pid in _direct_child_pids(parent.pid):
+                identity = _process_identity(pid)
+                if identity is not None:
+                    discovered.append(identity)
+        if discovered:
+            with self.lock:
+                self.identities.update((identity.pid, identity) for identity in discovered)
+
+    def capture_inherited_path_holders(self) -> None:
+        discovered = []
+        for pid in _path_holder_pids(self.inherited_path):
+            if pid == os.getpid():
+                continue
+            identity = _process_identity(pid)
+            if identity is not None:
+                discovered.append(identity)
+        if discovered:
+            with self.lock:
+                self.identities.update((identity.pid, identity) for identity in discovered)
+
+    def live(self) -> list[ProcessIdentity]:
+        self.refresh()
+        self.capture_inherited_path_holders()
+        with self.lock:
+            identities = list(self.identities.values())
+        return [
+            identity
+            for identity in identities
+            if identity.pid != os.getpid()
+            and _process_identity(identity.pid) == identity
+        ]
+
+    def signal(self, signum: int) -> None:
+        for identity in self.live():
+            try:
+                os.kill(identity.pid, signum)
+            except ProcessLookupError:
+                pass
+
+
+def _wait_for_containment_exit(
+    process: subprocess.Popen[str],
+    process_group: int,
+    descendants: DescendantTracker,
+    timeout: float,
 ) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         process.poll()
-        if not _process_group_exists(process_group):
+        if not _process_group_exists(process_group) and not descendants.live():
             return True
         time.sleep(0.05)
     process.poll()
-    return not _process_group_exists(process_group)
+    return not _process_group_exists(process_group) and not descendants.live()
 
 
-def _terminate_process_group(
-    process: subprocess.Popen[str], process_group: int, signum: int = signal.SIGTERM
+def _terminate_process_containment(
+    process: subprocess.Popen[str],
+    process_group: int,
+    descendants: DescendantTracker,
+    signum: int = signal.SIGTERM,
 ) -> None:
     cleanup_error: GateError | None = None
     if _process_group_exists(process_group):
@@ -1135,13 +1337,22 @@ def _terminate_process_group(
             os.killpg(process_group, signum)
         except ProcessLookupError:
             pass
-    if not _wait_for_process_group_exit(process, process_group, PROCESS_GROUP_TERM_SECONDS):
+    descendants.signal(signum)
+    if not _wait_for_containment_exit(
+        process, process_group, descendants, PROCESS_GROUP_TERM_SECONDS
+    ):
         try:
             os.killpg(process_group, signal.SIGKILL)
         except ProcessLookupError:
             pass
-        if not _wait_for_process_group_exit(process, process_group, PROCESS_GROUP_KILL_SECONDS):
-            cleanup_error = GateError(f"process group {process_group} did not exit after SIGKILL")
+        descendants.signal(signal.SIGKILL)
+        if not _wait_for_containment_exit(
+            process, process_group, descendants, PROCESS_GROUP_KILL_SECONDS
+        ):
+            survivor_pids = ", ".join(str(item.pid) for item in descendants.live())
+            cleanup_error = GateError(
+                f"process containment did not exit after SIGKILL: {survivor_pids}"
+            )
     try:
         process.wait(timeout=PROCESS_GROUP_KILL_SECONDS)
     except subprocess.TimeoutExpired:
@@ -1160,7 +1371,18 @@ class Runner:
     def step(self, name: str, command: list[str], env: dict[str, str] | None = None) -> bool:
         process: subprocess.Popen[str] | None = None
         process_group: int | None = None
-        with _open_existing_private(self.evidence.log_path, self.evidence.run_dir, "a") as log:
+        descendants: DescendantTracker | None = None
+        guard_path = self.evidence.run_dir / f".process-{len(self.results):03d}.guard"
+        with contextlib.ExitStack() as resources:
+            resources.callback(
+                _unlink_existing_private, guard_path, self.evidence.run_dir
+            )
+            guard = resources.enter_context(
+                _open_new_private(guard_path, self.evidence.run_dir)
+            )
+            log = resources.enter_context(
+                _open_existing_private(self.evidence.log_path, self.evidence.run_dir, "a")
+            )
             log.write(f"\n=== {name} ===\n$ {shlex.join(command)}\n")
             log.flush()
             try:
@@ -1177,29 +1399,59 @@ class Runner:
                         stderr=subprocess.STDOUT,
                         start_new_session=True,
                         preexec_fn=_unblock_watched_signals,
+                        pass_fds=(guard.fileno(),),
                     )
                     process_group = os.getpgid(process.pid)
+                    descendants = DescendantTracker(process.pid, guard_path)
+                    descendants.start()
                 finally:
                     signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
                 return_code = process.wait()
             except GateInterrupted as interrupted:
-                if process is not None and process_group is not None:
-                    _terminate_process_group(process, process_group, interrupted.signum)
+                if (
+                    process is not None
+                    and process_group is not None
+                    and descendants is not None
+                ):
+                    try:
+                        _terminate_process_containment(
+                            process, process_group, descendants, interrupted.signum
+                        )
+                    finally:
+                        descendants.stop()
                 self.results.append(
                     (name, 128 + interrupted.signum, redacted_tail(self.evidence.log_path))
                 )
                 raise
             except BaseException:
-                if process is not None and process_group is not None:
-                    _terminate_process_group(process, process_group)
+                if (
+                    process is not None
+                    and process_group is not None
+                    and descendants is not None
+                ):
+                    try:
+                        _terminate_process_containment(process, process_group, descendants)
+                    finally:
+                        descendants.stop()
                 raise
             assert process_group is not None
-            if _process_group_exists(process_group):
-                log.write(f"step left process group {process_group} running; terminating it\n")
+            assert descendants is not None
+            escaped = descendants.live()
+            if _process_group_exists(process_group) or escaped:
+                escaped_pids = ", ".join(str(item.pid) for item in escaped) or "none"
+                log.write(
+                    f"step left contained processes running; pgid={process_group}; "
+                    f"descendants={escaped_pids}; terminating them\n"
+                )
                 log.flush()
-                _terminate_process_group(process, process_group)
+                try:
+                    _terminate_process_containment(process, process_group, descendants)
+                finally:
+                    descendants.stop()
                 if return_code == 0:
                     return_code = 1
+            else:
+                descendants.stop()
         excerpt = redacted_tail(self.evidence.log_path) if return_code else []
         self.results.append((name, return_code, excerpt))
         return return_code == 0
@@ -1495,18 +1747,24 @@ def gate(arguments: list[str]) -> int:
         finalization_mask = signal.pthread_sigmask(
             signal.SIG_BLOCK, set(watched_signals)
         )
+        consume_pending_watched_signals(signal_state, watched_signals)
         before_refresh = interrupted_signum
         absorb_signal()
         if interrupted_signum != before_refresh:
             evidence.replace_summary(render_summary())
-        with _open_existing_private(evidence.summary_path, evidence.run_dir, "rb") as summary_file:
-            print(summary_file.read().decode("utf-8", "replace"), end="")
     finally:
         if finalization_mask is None:
             signal.pthread_sigmask(signal.SIG_BLOCK, set(watched_signals))
+        consume_pending_watched_signals(signal_state, watched_signals)
+        before_restore = interrupted_signum
+        absorb_signal()
+        if interrupted_signum != before_restore and _lstat(evidence.summary_path) is not None:
+            evidence.replace_summary(render_summary())
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
         signal.pthread_sigmask(signal.SIG_SETMASK, previous_signal_mask)
+    with _open_existing_private(evidence.summary_path, evidence.run_dir, "rb") as summary_file:
+        print(summary_file.read().decode("utf-8", "replace"), end="")
     if interrupted_signum:
         return 128 + interrupted_signum
     return 0 if failure is None else 1

@@ -70,14 +70,19 @@ unchanged key. Exact environment placeholders remain allowed. Identifier and
 code-expression exemptions apply only to Java source; config-like files remain
 strict, while terminal redaction stays conservative for every file type. YAML
 credential block scalars (`|` and `>`, including chomping and indentation
-indicators) are scanned and redacted through their indentation-defined dedent;
-oversized open blocks remain suppressed under a bounded state limit.
+indicators and compact sequence mappings such as `- password: |`) are scanned
+and redacted through their indentation-defined dedent; oversized open blocks
+remain suppressed under a bounded state limit.
 SIGINT/SIGTERM is masked through child launch and process group capture. Cleanup
 then tracks the group through descendant exit, escalates resistant members to
 SIGKILL, and completes interrupted evidence only after the direct child has
-been reaped. The first interrupt remains recorded through snapshot cleanup,
-evidence finalization, and retention pruning; later signals are suppressed
-while that interrupted record is completed.
+been reaped. Descendants are also tracked by process birth identity and by a
+private lifecycle descriptor they inherit, so a child that creates a new session
+cannot escape cleanup or let a step PASS while it remains alive. The first
+interrupt remains recorded through snapshot cleanup, evidence finalization,
+and retention pruning. Watched signals pending in the final blocked window are
+consumed into the interrupted record before handlers and masks are restored;
+later signals are suppressed while that record is completed.
 
 Run the deterministic policy and fixture suite directly with:
 
