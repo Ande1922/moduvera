@@ -121,11 +121,9 @@ class HookRepository:
     def git(self, *arguments: str, check: bool = True) -> subprocess.CompletedProcess[str]:
         return run(["git", *arguments], cwd=self.root, env=self.env, check=check)
 
-    def command(
-        self, action: str, *, script: Path | None = None
-    ) -> subprocess.CompletedProcess[str]:
+    def command(self, action: str) -> subprocess.CompletedProcess[str]:
         return run(
-            ["python3", str(script or "tools/git-hooks/hooks.py"), action],
+            ["python3", "tools/git-hooks/hooks.py", action],
             cwd=self.root,
             env=self.env,
             check=False,
@@ -339,10 +337,17 @@ class GitHookTest(unittest.TestCase):
                     self.assertEqual(before, self.fixture.local_hook_config())
 
     def test_uninstall_remains_an_escape_hatch_when_owned_assets_are_unsafe(self) -> None:
-        driver = Path(self.fixture.temp.name) / "hooks-driver.py"
-        shutil.copy2(self.fixture.root / "tools/git-hooks/hooks.py", driver)
-        for asset in (".githooks/pre-push", "tools/git-hooks/hooks.py"):
-            for mutation in ("missing", "modified", "staged", "non-executable"):
+        cases = {
+            ".githooks/pre-push": (
+                "missing",
+                "modified",
+                "staged",
+                "non-executable",
+            ),
+            "tools/git-hooks/hooks.py": ("modified", "staged", "non-executable"),
+        }
+        for asset, mutations in cases.items():
+            for mutation in mutations:
                 with self.subTest(asset=asset, mutation=mutation):
                     self.fixture.git("reset", "--hard", "HEAD")
                     self.fixture.git(
@@ -360,10 +365,26 @@ class GitHookTest(unittest.TestCase):
                             self.fixture.git("add", asset)
                     else:
                         path.chmod(path.stat().st_mode & ~0o111)
-                    result = self.fixture.command("uninstall", script=driver)
+                    result = self.fixture.command("uninstall")
                     self.assertEqual(0, result.returncode, result.stderr)
                     self.assertIn("disabled", result.stdout)
                     self.assertEqual("", self.fixture.local_hook_config())
+
+    def test_missing_implementation_is_restored_before_uninstall(self) -> None:
+        implementation = "tools/git-hooks/hooks.py"
+        self.fixture.git("config", "--local", "core.hooksPath", ".githooks")
+        self.fixture.git("rm", implementation)
+        unavailable = self.fixture.command("uninstall")
+        self.assertNotEqual(0, unavailable.returncode)
+        self.assertEqual(".githooks\0", self.fixture.local_hook_config())
+
+        self.fixture.git(
+            "restore", "--source=HEAD", "--staged", "--worktree", "--", implementation
+        )
+        restored = self.fixture.command("uninstall")
+        self.assertEqual(0, restored.returncode, restored.stderr)
+        self.assertIn("disabled", restored.stdout)
+        self.assertEqual("", self.fixture.local_hook_config())
 
     def test_existing_ref_uses_advertised_remote_old_commit(self) -> None:
         result = self.fixture.invoke(self.fixture.record())

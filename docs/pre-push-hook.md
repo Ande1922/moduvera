@@ -36,8 +36,18 @@ python3 tools/git-hooks/hooks.py uninstall
 Uninstall removes only a single local value that is still exactly
 `.githooks`. A foreign or multiple local value is left untouched and reported
 as a conflict. Any global configuration is always left untouched. Uninstall is
-an escape hatch: once the sole local value is confirmed as owned, missing,
-modified, staged, or non-executable hook assets do not prevent its removal.
+an escape hatch: when the Python entrypoint exists, a missing, modified, staged,
+or non-executable wrapper and a modified, staged, or non-executable entrypoint
+do not prevent removal of the owned value.
+
+If `tools/git-hooks/hooks.py` itself is missing, restore that committed file
+from the integrated revision before running uninstall; do not bypass the
+ownership checks with a raw configuration edit:
+
+```bash
+git restore --source=HEAD --staged --worktree -- tools/git-hooks/hooks.py
+python3 tools/git-hooks/hooks.py uninstall
+```
 
 ## Push behavior
 
