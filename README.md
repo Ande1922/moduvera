@@ -98,6 +98,10 @@ Business code does not need to understand `TenantLineInnerInterceptor`, JWT clai
 ./mvnw clean verify
 ```
 
+Developers may also opt in to the repository's fail-closed local
+[pre-push quality gate](./docs/pre-push-hook.md). Installation is explicit and
+never replaces an existing Git hooks configuration.
+
 The reactor runs unit, architecture, dependency-convergence and real PostgreSQL/MySQL/Kafka integration tests. App packages also produce CycloneDX SBOMs. Common failures are explicit: missing transaction infrastructure, empty/unsafe Kafka routes, missing service credentials, unsupported JWT issuer/audience and absent execution context all fail closed rather than silently disabling isolation.
 
 Design background remains available in [canonical language](./CONTEXT.md), the [decision ledger](./docs/grill/DECISION-LEDGER.md), [ADRs](./docs/adr), and the [structural module map](./docs/implementation/MODULE-MAP.md). Those explain decisions; they do not override the current product-surface page.
