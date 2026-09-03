@@ -10,6 +10,9 @@ if [[ ! -f "$CONFIG_FILE" ]]; then
   echo "Unknown topology '$TOPOLOGY'; expected microservices or business-core-monolith" >&2
   exit 64
 fi
+# shellcheck source=port-plan.sh
+source "$HARNESS_DIR/port-plan.sh"
+reference_configure_port_plan "$TOPOLOGY"
 # shellcheck source=/dev/null
 source "$CONFIG_FILE"
 
@@ -17,74 +20,133 @@ REFERENCE_PRODUCT_DIR="$PROJECT_ROOT/verification/reference-product"
 COMPOSE_DIR="$REFERENCE_PRODUCT_DIR/compose"
 ACCEPTANCE_DIR="$PROJECT_ROOT/verification/acceptance"
 COMPOSE_FILE="$COMPOSE_DIR/docker-compose.yml"
-RUN_ID="$(date +%s)-$$-$TOPOLOGY"
+RUN_ID="slot$RUN_SLOT-$(date +%s)-$$-$TOPOLOGY"
 COMPOSE_PROJECT="${REFERENCE_COMPOSE_PROJECT:-moduvera-reference-$RUN_ID}"
-KAFKA_PORT="${REFERENCE_KAFKA_PORT:-59092}"
-POSTGRES_PORT="${REFERENCE_POSTGRES_PORT:-55432}"
-GATEWAY_PORT="${REFERENCE_GATEWAY_PORT:-58080}"
-IDENTITY_PORT="${REFERENCE_IDENTITY_PORT:-58081}"
-CATALOG_PORT="${REFERENCE_CATALOG_PORT:-58082}"
-ORDER_PORT="${REFERENCE_ORDER_PORT:-58083}"
-INVENTORY_PORT="${REFERENCE_INVENTORY_PORT:-58084}"
-MONOLITH_PORT="${REFERENCE_MONOLITH_PORT:-58085}"
+INVENTORY_RESERVE_TOPIC="inventory-reserve-$RUN_ID"
+INVENTORY_RESULT_TOPIC="inventory-result-$RUN_ID"
 HEALTH_TIMEOUT_SECONDS="${REFERENCE_HEALTH_TIMEOUT_SECONDS:-180}"
+APP_STOP_TIMEOUT_SECONDS="${REFERENCE_APP_STOP_TIMEOUT_SECONDS:-5}"
+DIAGNOSTICS_TIMEOUT_SECONDS="${REFERENCE_DIAGNOSTICS_TIMEOUT_SECONDS:-5}"
+COMPOSE_DOWN_TIMEOUT_SECONDS="${REFERENCE_COMPOSE_DOWN_TIMEOUT_SECONDS:-10}"
 REFERENCE_JAVA_TOOL_OPTIONS="${REFERENCE_JAVA_TOOL_OPTIONS:--Xms64m -Xmx256m}"
+for timeout_specification in \
+  "REFERENCE_APP_STOP_TIMEOUT_SECONDS=$APP_STOP_TIMEOUT_SECONDS" \
+  "REFERENCE_DIAGNOSTICS_TIMEOUT_SECONDS=$DIAGNOSTICS_TIMEOUT_SECONDS" \
+  "REFERENCE_COMPOSE_DOWN_TIMEOUT_SECONDS=$COMPOSE_DOWN_TIMEOUT_SECONDS"; do
+  timeout_name="${timeout_specification%%=*}"
+  timeout_value="${timeout_specification#*=}"
+  if [[ ! "$timeout_value" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Invalid $timeout_name '$timeout_value'; expected a positive integer number of seconds" >&2
+    exit 64
+  fi
+done
 RUN_DIR="$(mktemp -d "${TMPDIR:-/tmp}/moduvera-reference.XXXXXX")"
+PORT_MANIFEST="${REFERENCE_PORT_MANIFEST:-$RUN_DIR/port-manifest.json}"
+REFERENCE_MANIFEST_RUN_ID="$RUN_ID"
+REFERENCE_MANIFEST_COMPOSE_PROJECT="$COMPOSE_PROJECT"
+REFERENCE_MANIFEST_RUN_DIRECTORY="$RUN_DIR"
+REFERENCE_MANIFEST_INVENTORY_RESERVE_TOPIC="$INVENTORY_RESERVE_TOPIC"
+REFERENCE_MANIFEST_INVENTORY_RESULT_TOPIC="$INVENTORY_RESULT_TOPIC"
 STATE_FILE="$RUN_DIR/recovery-order-id"
 FAILED=1
+COMPOSE_STARTED=0
 JAVA_BIN="${JAVA_HOME:-}/bin/java"
 if [[ ! -x "$JAVA_BIN" ]]; then JAVA_BIN="$(command -v java || true)"; fi
 
 compose() { docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE" "$@"; }
 
-diagnostics() {
-  echo "Reference-product diagnostics for $REFERENCE_TOPOLOGY_NAME (secrets and payloads omitted)" >&2
-  compose ps >&2 || true
-  for database in orders inventory; do
-    if [[ "$(compose exec -T postgres psql -At -U postgres -d "$database" -c "SELECT to_regclass('moduvera_message_outbox')" 2>/dev/null || true)" == "moduvera_message_outbox" ]]; then
-      compose exec -T postgres psql -U postgres -d "$database" -c \
-        "SELECT message_id,status,attempt_count,next_attempt_at,published_at,terminal_at,last_failure FROM moduvera_message_outbox ORDER BY occurred_at DESC LIMIT 12" >&2 || true
-    fi
-  done
-  for app in identity catalog order inventory monolith gateway; do
-    if [[ -f "$RUN_DIR/$app.log" ]]; then
-      echo "--- $app (last 80 lines)" >&2
-      tail -80 "$RUN_DIR/$app.log" >&2 || true
-    fi
-  done
-  compose logs --tail=80 postgres kafka >&2 || true
-  compose exec -T kafka kafka-consumer-groups --bootstrap-server localhost:29092 --list >&2 || true
+compose_down() {
+  python3 "$HARNESS_DIR/bounded_process.py" "$COMPOSE_DOWN_TIMEOUT_SECONDS" -- \
+    docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE" down \
+      --timeout "$COMPOSE_DOWN_TIMEOUT_SECONDS" -v --remove-orphans
 }
 
-stop_app() {
-  local app="$1"
-  if [[ -f "$RUN_DIR/$app.pid" ]]; then
-    local pid
-    pid="$(<"$RUN_DIR/$app.pid")"
-    if kill -0 "$pid" 2>/dev/null; then
-      kill "$pid" 2>/dev/null || true
-      for _ in {1..20}; do kill -0 "$pid" 2>/dev/null || break; sleep 0.25; done
-      kill -9 "$pid" 2>/dev/null || true
-    fi
+diagnostics() {
+  local diagnostics_status
+  python3 "$HARNESS_DIR/bounded_process.py" "$DIAGNOSTICS_TIMEOUT_SECONDS" -- \
+    "$HARNESS_DIR/diagnostics.sh" "$REFERENCE_TOPOLOGY_NAME" \
+      "$COMPOSE_PROJECT" "$COMPOSE_FILE" "$RUN_DIR" >&2
+  diagnostics_status=$?
+  if [[ $diagnostics_status -eq 124 ]]; then
+    echo "Reference diagnostics exceeded the ${DIAGNOSTICS_TIMEOUT_SECONDS}s wall-clock deadline" >&2
+  elif [[ $diagnostics_status -ne 0 ]]; then
+    echo "Reference diagnostics exited with status $diagnostics_status" >&2
   fi
+  return "$diagnostics_status"
+}
+
+stop_apps() {
+  local app pid deadline active
+  local pids=()
+  for app in "$@"; do
+    if [[ -f "$RUN_DIR/$app.pid" ]]; then
+      pid="$(<"$RUN_DIR/$app.pid")"
+      if [[ "$pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$pid" 2>/dev/null; then
+        pids+=("$pid")
+      fi
+    fi
+  done
+  [[ -n "${pids[*]-}" ]] || return 0
+  for pid in "${pids[@]}"; do kill -TERM "$pid" 2>/dev/null || true; done
+  deadline=$((SECONDS + APP_STOP_TIMEOUT_SECONDS))
+  while (( SECONDS < deadline )); do
+    active=0
+    for pid in "${pids[@]}"; do
+      if kill -0 "$pid" 2>/dev/null; then active=$((active + 1)); fi
+    done
+    (( active == 0 )) && break
+    sleep 0.1
+  done
+  for pid in "${pids[@]}"; do
+    if kill -0 "$pid" 2>/dev/null; then kill -KILL "$pid" 2>/dev/null || true; fi
+  done
+  for pid in "${pids[@]}"; do wait "$pid" 2>/dev/null || true; done
 }
 
 cleanup() {
-  local exit_code=$?
-  for app in gateway monolith inventory order catalog identity; do stop_app "$app"; done
-  if [[ $FAILED -ne 0 && $exit_code -ne 0 ]]; then diagnostics; fi
-  compose down -v --remove-orphans >/dev/null 2>&1 || true
-  rm -rf "$RUN_DIR"
-  exit "$exit_code"
+  local primary_status=$? cleanup_status=0 compose_status=0
+  trap - EXIT INT TERM
+  set +e
+  stop_apps gateway monolith inventory order catalog identity
+  if [[ $FAILED -ne 0 && $primary_status -ne 0 && $COMPOSE_STARTED -eq 1 ]]; then diagnostics; fi
+  if [[ $COMPOSE_STARTED -eq 1 ]]; then
+    compose_down >/dev/null 2>"$RUN_DIR/compose-down-cleanup.err"
+    compose_status=$?
+    if [[ $compose_status -ne 0 ]]; then
+      echo "Reference cleanup failure: docker compose down failed for $COMPOSE_PROJECT" >&2
+      if [[ $compose_status -eq 124 ]]; then
+        echo "Reference cleanup detail: compose down exceeded the ${COMPOSE_DOWN_TIMEOUT_SECONDS}s wall-clock deadline" >&2
+      else
+        echo "Reference cleanup detail: compose down exited with status $compose_status" >&2
+      fi
+      cleanup_status=70
+    fi
+  fi
+  if ! reference_release_run_locks; then
+    echo "Reference cleanup failure: one or more owned run locks could not be released" >&2
+    cleanup_status=70
+  fi
+  if ! rm -rf "$RUN_DIR"; then
+    echo "Reference cleanup failure: unable to remove temporary directory $RUN_DIR" >&2
+    cleanup_status=70
+  fi
+  if [[ $primary_status -ne 0 ]]; then
+    exit "$primary_status"
+  fi
+  exit "$cleanup_status"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
 start_app() {
-  local app="$1" jar="$2"
+  local app="$1" jar="$2" java_tool_options="$REFERENCE_JAVA_TOOL_OPTIONS" debug_port
   shift 2
-  env "JAVA_TOOL_OPTIONS=$REFERENCE_JAVA_TOOL_OPTIONS" "$@" \
+  if [[ "$REFERENCE_DEBUG" == "1" ]]; then
+    debug_port="$(reference_debug_port "$app")"
+    java_tool_options="$java_tool_options -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=127.0.0.1:$debug_port"
+  fi
+  env "JAVA_TOOL_OPTIONS=$java_tool_options" "$@" \
     "$JAVA_BIN" -jar "$PROJECT_ROOT/$jar" >"$RUN_DIR/$app.log" 2>&1 &
   echo $! >"$RUN_DIR/$app.pid"
 }
@@ -133,7 +195,7 @@ seed() {
     < "$COMPOSE_DIR/seed-inventory.sql" >/dev/null
 }
 
-COMMON_KAFKA=("KAFKA_BROKERS=localhost:$KAFKA_PORT" "INVENTORY_RESERVE_TOPIC=inventory-reserve-$RUN_ID" "INVENTORY_RESULT_TOPIC=inventory-result-$RUN_ID")
+COMMON_KAFKA=("KAFKA_BROKERS=localhost:$KAFKA_PORT" "INVENTORY_RESERVE_TOPIC=$INVENTORY_RESERVE_TOPIC" "INVENTORY_RESULT_TOPIC=$INVENTORY_RESULT_TOPIC")
 DISPOSABLE_DATABASE_MIGRATION=(
   "MODUVERA_DATABASE_MIGRATION_MODE=startup"
   "MODUVERA_DATABASE_MIGRATION_INITIALIZE=true"
@@ -185,15 +247,25 @@ start_monolith() {
 }
 
 start_business_apps() { local app; for app in "${BUSINESS_APPS[@]}"; do "start_$app"; done; }
-stop_business_apps() { local app; for app in "${BUSINESS_APPS[@]}"; do stop_app "$app"; done; }
+stop_business_apps() { stop_apps "${BUSINESS_APPS[@]}"; }
 
 cd "$PROJECT_ROOT"
-for executable in docker curl python3 uv; do
+reference_write_port_manifest "$TOPOLOGY" "$PORT_MANIFEST"
+reference_acquire_run_locks
+reference_preflight_ports "$HARNESS_DIR"
+echo "Reference port preflight: PASS"
+if [[ "${REFERENCE_PREFLIGHT_ONLY:-0}" == "1" ]]; then
+  FAILED=0
+  exit 0
+fi
+
+for executable in docker curl uv; do
   command -v "$executable" >/dev/null 2>&1 || { echo "Required executable is unavailable: $executable" >&2; exit 127; }
 done
 [[ -n "$JAVA_BIN" ]] || { echo "Required executable is unavailable: java" >&2; exit 127; }
 
-compose down -v --remove-orphans >/dev/null 2>&1 || true
+compose_down >/dev/null 2>&1
+COMPOSE_STARTED=1
 compose up -d postgres zookeeper kafka
 wait_postgres
 wait_kafka
