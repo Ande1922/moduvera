@@ -40,8 +40,9 @@ EXPECTED_ROUTES = {
 
 MARKDOWN_LINK = re.compile(r"(?<!!)\[[^]]+\]\(([^)]+)\)")
 PERSONAL_REFERENCE = re.compile(
-    r"(?:/Users/|/home/[^/\s]+/|~/\.(?:codex|agents)(?:/|\b)|"
-    r"\$HOME/\.(?:codex|agents)(?:/|\b))",
+    r"(?:/Users/|/home/[^/\s]+/|/root/\.(?:codex|agents)(?:/|\b)|"
+    r"[A-Z]:[\\/]Users[\\/][^\\/\s]+[\\/]|"
+    r"~/\.(?:codex|agents)(?:/|\b)|\$HOME/\.(?:codex|agents)(?:/|\b))",
     re.IGNORECASE,
 )
 
@@ -55,8 +56,12 @@ class AcceptanceInput:
     gate_exit: int
     gate_base: str
     gate_head: str
+    gate_ref: str
+    gate_profile: str
     delivered_base: str
     delivered_head: str
+    delivered_ref: str
+    delivered_profile: str
     reviewed_base: str
     reviewed_head: str
     standards_review_complete: bool
@@ -100,10 +105,16 @@ def final_acceptance_status(evidence: AcceptanceInput) -> str:
         evidence.gate_exit == 0
         and bool(evidence.gate_base)
         and bool(evidence.gate_head)
+        and bool(evidence.gate_ref)
+        and bool(evidence.gate_profile)
         and bool(evidence.delivered_base)
         and bool(evidence.delivered_head)
+        and bool(evidence.delivered_ref)
+        and bool(evidence.delivered_profile)
         and evidence.gate_base == evidence.delivered_base
         and evidence.gate_head == evidence.delivered_head
+        and evidence.gate_ref == evidence.delivered_ref
+        and evidence.gate_profile == evidence.delivered_profile
         and bool(evidence.reviewed_base)
         and bool(evidence.reviewed_head)
         and evidence.reviewed_base == evidence.delivered_base
@@ -135,8 +146,12 @@ def representative_forward_failures(root: Path) -> list[str]:
         gate_exit=0,
         gate_base="base",
         gate_head="head",
+        gate_ref="refs/heads/change",
+        gate_profile="normal",
         delivered_base="base",
         delivered_head="head",
+        delivered_ref="refs/heads/change",
+        delivered_profile="normal",
         reviewed_base="base",
         reviewed_head="head",
         standards_review_complete=True,

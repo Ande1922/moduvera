@@ -62,8 +62,12 @@ class DeliveryForwardTest(unittest.TestCase):
             gate_exit=0,
             gate_base="base",
             gate_head="head",
+            gate_ref="refs/heads/change",
+            gate_profile="normal",
             delivered_base="base",
             delivered_head="head",
+            delivered_ref="refs/heads/change",
+            delivered_profile="normal",
             reviewed_base="base",
             reviewed_head="head",
             standards_review_complete=True,
@@ -145,6 +149,8 @@ class DeliveryForwardTest(unittest.TestCase):
             replace(passing, gate_exit=1),
             replace(passing, gate_base="old"),
             replace(passing, gate_head="old"),
+            replace(passing, gate_ref="refs/heads/other"),
+            replace(passing, gate_profile="docs-only"),
             replace(passing, reviewed_base="old"),
             replace(passing, reviewed_head="old"),
             replace(passing, reviewed_base=""),
@@ -217,6 +223,28 @@ Stop after reporting the selected delivery stage.
         self.assertTrue(any("frontmatter name must be add-business-service" in item
                             for item in failures))
 
+    def test_cross_platform_personal_skill_paths_fail_closed(self) -> None:
+        for personal_path in (
+            "/root/.codex/skills/private/SKILL.md",
+            r"C:\Users\maintainer\.agents\skills\private\SKILL.md",
+        ):
+            with self.subTest(personal_path=personal_path):
+                temporary, root = self.isolated_checkout()
+                self.addCleanup(temporary.cleanup)
+                standards = root / "docs/agents/delivery-standards.md"
+                standards.write_text(
+                    standards.read_text(encoding="utf-8")
+                    + f"\nPrivate dependency: `{personal_path}`\n",
+                    encoding="utf-8",
+                )
+
+                failures = validate_repository(root)
+
+                self.assertTrue(any(
+                    "personal Skill path or username is forbidden" in item
+                    for item in failures
+                ))
+
     def test_quality_extension_fails_when_delivery_validator_is_missing(self) -> None:
         temporary, root = self.isolated_checkout()
         self.addCleanup(temporary.cleanup)
@@ -231,6 +259,29 @@ Stop after reporting the selected delivery stage.
         )
         self.assertNotEqual(0, result.returncode)
         self.assertIn("validation is required", result.stderr)
+
+    def test_quality_extension_fails_when_delivery_test_runner_is_unusable(self) -> None:
+        for failure_mode in ("missing", "not-executable"):
+            with self.subTest(failure_mode=failure_mode):
+                temporary, root = self.isolated_checkout()
+                self.addCleanup(temporary.cleanup)
+                runner = root / "tools/agent-delivery/test/run-tests.sh"
+                if failure_mode == "missing":
+                    runner.unlink()
+                else:
+                    runner.chmod(0o644)
+
+                result = subprocess.run(
+                    [str(root / "tools/quality/checks.d/common/10-agent-delivery")],
+                    cwd=root,
+                    env=self.isolated_environment(Path(temporary.name) / "empty-home"),
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("forward tests are required", result.stderr)
 
 
 if __name__ == "__main__":
