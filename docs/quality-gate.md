@@ -57,15 +57,22 @@ mode `0600`. Symlinked evidence components are rejected before use.
 Permissions are applied through no-follow file descriptors after confinement
 checks, rather than through path-following chmod operations.
 `.quality-gate/latest` is a private regular file containing the run ID of the
-lexically newest attempt, including an incomplete or failed base-resolution
-attempt; an older attempt completing later cannot move it backward. Only the
-newest 20 completed runs are kept. Required retention pruning succeeds before
-the current summary and `completed` marker are published, so a pruning failure
-cannot leave an authoritative PASS run. A private, no-follow, owner-validated
+newest attempt, including an incomplete or failed base-resolution attempt. A
+private monotonic attempt sequence, allocated under the evidence lock, defines
+latest and retention ordering even if the system clock moves backward. Existing
+evidence without sequence metadata is migrated once in deterministic run-ID
+order. An older attempt completing later cannot move `latest` backward. Only
+the newest 20 completed runs are kept. Required retention pruning succeeds
+before the current summary and `completed` marker are published, so a pruning
+failure cannot leave an authoritative PASS run. A private, no-follow, owner-validated
 cross-process lock serializes existing-run validation, run creation, retention
-reservation, summary and completion publication, and conditional `latest` update. Concurrent
-creation therefore cannot race pruning into recreating an incomplete orphan,
-and concurrent completions share the same 20-run limit.
+reservation, summary and completion publication, monotonic sequence allocation,
+and conditional `latest` update. Concurrent creation therefore cannot race
+pruning into recreating an incomplete orphan, and concurrent completions share
+the same 20-run limit. Each invocation retains a private active marker from run
+creation through handler restoration and terminal-summary output. Pruning skips
+active runs; final release removes the marker and enforces retention atomically,
+so late signal updates and output never access a concurrently deleted run.
 The terminal prints only the bounded redacted summary; inspect `full.log`
 locally when more detail is required. The complete log is streamed through a
 stateful redactor before only the final redacted lines are retained. Credential

@@ -846,6 +846,27 @@ def _unlink_existing_private(path: Path, parent: Path) -> None:
     path.unlink()
 
 
+def _read_private_integer(path: Path, parent: Path) -> int:
+    _validate_regular(path, parent)
+    with _open_existing_private(path, parent, "rb") as value_file:
+        text = value_file.read(128).decode("ascii", "replace").strip()
+    if not text.isdecimal():
+        raise GateError(f"invalid private evidence integer: {path}")
+    return int(text)
+
+
+def _replace_private_text(path: Path, parent: Path, content: str) -> None:
+    temporary = parent / f".{path.name}-{os.getpid()}"
+    if _lstat(temporary) is not None:
+        raise GateError(f"unexpected evidence temporary exists: {temporary}")
+    with _open_new_private(temporary, parent) as output:
+        output.write(content)
+    if _lstat(path) is not None:
+        _validate_regular(path, parent)
+    os.replace(temporary, path)
+    _validate_regular(path, parent)
+
+
 def _validate_run_tree(run: Path, runs: Path) -> None:
     if run.parent != runs:
         raise GateError(f"unsafe evidence run parent: {run}")
@@ -881,6 +902,7 @@ class Evidence:
         self.root = self.repo / ".quality-gate"
         self.runs = self.root / "runs"
         self.completion_lock = self.root / "completion.lock"
+        self.sequence_counter = self.root / "attempt-sequence-counter"
         old_umask = os.umask(0o077)
         try:
             _ensure_directory(self.root, self.repo)
@@ -894,17 +916,55 @@ class Evidence:
                     if stat.S_ISLNK(state.st_mode) or not stat.S_ISDIR(state.st_mode):
                         raise GateError(f"invalid evidence run component: {existing}")
                     _validate_run_tree(existing, self.runs)
+                self.attempt_sequence = self._allocate_attempt_sequence()
                 stamp = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%S.%fZ")
                 self.run_id = f"{stamp}-{os.getpid()}"
                 self.run_dir = self.runs / self.run_id
+                if _lstat(self.run_dir) is not None:
+                    raise GateError(f"evidence run ID already exists: {self.run_id}")
                 _ensure_directory(self.run_dir, self.runs)
                 self.log_path = self.run_dir / "full.log"
                 self.summary_path = self.run_dir / "summary.txt"
+                self.active_path = self.run_dir / "active"
+                with _open_new_private(
+                    self.run_dir / "attempt-sequence", self.run_dir
+                ) as sequence_file:
+                    sequence_file.write(f"{self.attempt_sequence}\n")
+                with _open_new_private(self.active_path, self.run_dir) as active_file:
+                    active_file.write(f"{os.getpid()}\n")
                 with _open_new_private(self.log_path, self.run_dir):
                     pass
                 self._update_latest()
         finally:
             os.umask(old_umask)
+
+    def _allocate_attempt_sequence(self) -> int:
+        counter = (
+            _read_private_integer(self.sequence_counter, self.root)
+            if _lstat(self.sequence_counter) is not None
+            else 0
+        )
+        seen: set[int] = set()
+        missing: list[Path] = []
+        for run in sorted(self.runs.iterdir(), key=lambda path: path.name):
+            sequence_path = run / "attempt-sequence"
+            if _lstat(sequence_path) is None:
+                missing.append(run)
+                continue
+            sequence = _read_private_integer(sequence_path, run)
+            if sequence <= 0 or sequence in seen:
+                raise GateError(f"invalid or duplicate evidence attempt sequence: {run}")
+            seen.add(sequence)
+            counter = max(counter, sequence)
+        for run in missing:
+            counter += 1
+            with _open_new_private(run / "attempt-sequence", run) as sequence_file:
+                sequence_file.write(f"{counter}\n")
+        allocated = counter + 1
+        _replace_private_text(
+            self.sequence_counter, self.root, f"{allocated}\n"
+        )
+        return allocated
 
     def _update_latest(self) -> None:
         latest = self.root / "latest"
@@ -914,17 +974,14 @@ class Evidence:
                 current = pointer.read(MAX_SUMMARY_BYTES).decode("ascii", "replace").strip()
             if not RUN_ID.fullmatch(current):
                 raise GateError("invalid evidence latest run ID")
-            if current >= self.run_id:
+            current_run = self.runs / current
+            _validate_run_tree(current_run, self.runs)
+            current_sequence = _read_private_integer(
+                current_run / "attempt-sequence", current_run
+            )
+            if current_sequence >= self.attempt_sequence:
                 return
-        temporary = self.root / f".latest-{os.getpid()}"
-        if _lstat(temporary) is not None:
-            raise GateError(f"unexpected evidence pointer temporary exists: {temporary}")
-        with _open_new_private(temporary, self.root) as pointer:
-            pointer.write(f"{self.run_id}\n")
-        if _lstat(latest) is not None:
-            _validate_regular(latest, self.root)
-        os.replace(temporary, self.root / "latest")
-        _validate_regular(latest, self.root)
+        _replace_private_text(latest, self.root, f"{self.run_id}\n")
 
     @staticmethod
     def _encode_summary(summary: str) -> bytes:
@@ -952,27 +1009,45 @@ class Evidence:
         os.replace(temporary, self.summary_path)
         _validate_regular(self.summary_path, self.run_dir)
 
+    def release_active(self) -> None:
+        with _exclusive_private_lock(self.completion_lock, self.root):
+            _unlink_existing_private(self.active_path, self.run_dir)
+            self._prune_unlocked(protect_current=False)
+
     def prune(self, reserve: int = 0) -> None:
         with _exclusive_private_lock(self.completion_lock, self.root):
             self._prune_unlocked(reserve)
 
-    def _prune_unlocked(self, reserve: int = 0) -> None:
+    def _prune_unlocked(
+        self, reserve: int = 0, *, protect_current: bool = True
+    ) -> None:
         if reserve < 0 or reserve > MAX_COMPLETED_RUNS:
             raise GateError(f"invalid evidence retention reservation: {reserve}")
-        completed: list[Path] = []
+        completed: list[tuple[int, Path]] = []
         for path in sorted(self.runs.iterdir()):
             _validate_run_tree(path, self.runs)
+            sequence = _read_private_integer(path / "attempt-sequence", path)
             marker = path / "completed"
             if _lstat(marker) is not None:
                 _validate_regular(marker, path)
-                completed.append(path)
-        removable = [path for path in completed if path != self.run_dir]
+                completed.append((sequence, path))
+        completed.sort(key=lambda item: item[0])
+        unpinned = [
+            item for item in completed if _lstat(item[1] / "active") is None
+        ]
+        removable = [
+            item
+            for item in unpinned
+            if not protect_current or item[1] != self.run_dir
+        ]
         retained_limit = MAX_COMPLETED_RUNS - reserve
-        while len(completed) > retained_limit and removable:
-            victim = removable.pop(0)
+        while len(unpinned) > retained_limit and removable:
+            victim_item = removable.pop(0)
+            victim = victim_item[1]
             _validate_run_tree(victim, self.runs)
             shutil.rmtree(victim)
-            completed.remove(victim)
+            completed.remove(victim_item)
+            unpinned.remove(victim_item)
 
 
 class GateInterrupted(GateError):
@@ -1918,6 +1993,7 @@ def gate(arguments: list[str]) -> int:
     summary = render_summary()
     finalization_mask: set[signal.Signals] | None = None
     handlers_restored = False
+    active_released = False
     try:
         evidence.complete(summary)
         finalization_mask = signal.pthread_sigmask(
@@ -1944,6 +2020,15 @@ def gate(arguments: list[str]) -> int:
         consume_pending_watched_signals(signal_state, watched_signals)
         refresh_interrupted_summary()
         handlers_restored = True
+        with _open_existing_private(
+            evidence.summary_path, evidence.run_dir, "rb"
+        ) as summary_file:
+            terminal_summary = summary_file.read().decode("utf-8", "replace")
+        print(terminal_summary, end="", flush=True)
+        consume_pending_watched_signals(signal_state, watched_signals)
+        refresh_interrupted_summary()
+        evidence.release_active()
+        active_released = True
     finally:
         if not handlers_restored:
             signal.pthread_sigmask(signal.SIG_BLOCK, set(watched_signals))
@@ -1953,9 +2038,9 @@ def gate(arguments: list[str]) -> int:
                 signal.signal(signum, handler)
             consume_pending_watched_signals(signal_state, watched_signals)
             refresh_interrupted_summary()
+        if not active_released:
+            evidence.release_active()
         signal.pthread_sigmask(signal.SIG_SETMASK, previous_signal_mask)
-    with _open_existing_private(evidence.summary_path, evidence.run_dir, "rb") as summary_file:
-        print(summary_file.read().decode("utf-8", "replace"), end="")
     if interrupted_signum:
         return 128 + interrupted_signum
     return 0 if failure is None else 1

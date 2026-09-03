@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime as dt
 import importlib.util
 import os
 from pathlib import Path
@@ -625,6 +626,7 @@ class QualityGateEvidenceTest(unittest.TestCase):
             "Path(sys.argv[3]).write_text(evidence.run_id); barrier=Path(sys.argv[4]); "
             "\nwhile not barrier.exists(): time.sleep(0.005)"
             "\nevidence.complete('status: PASS\\n')"
+            "\nevidence.release_active()"
         )
         processes = [
             subprocess.Popen(
@@ -683,6 +685,7 @@ class QualityGateEvidenceTest(unittest.TestCase):
             "Path(sys.argv[3]).write_text(evidence.run_id); release=Path(sys.argv[4]); "
             "\nwhile not release.exists(): time.sleep(0.005)"
             "\nevidence.complete('status: PASS\\n')"
+            "\nevidence.release_active()"
         )
         older_process = subprocess.Popen(
             [
@@ -710,6 +713,86 @@ class QualityGateEvidenceTest(unittest.TestCase):
         stdout, stderr = older_process.communicate(timeout=10)
         self.assertEqual(0, older_process.returncode, stdout + stderr)
         self.assertEqual(newer.run_id, (newer.root / "latest").read_text().strip())
+        newer.release_active()
+
+    def test_clock_rollback_uses_monotonic_attempt_order_for_latest_and_retention(self) -> None:
+        runs = self.fixture.root / ".quality-gate/runs"
+        runs.mkdir(parents=True)
+        for index in range(quality_gate.MAX_COMPLETED_RUNS - 1):
+            run = runs / f"20000101T000000.{index:06d}Z-1"
+            run.mkdir()
+            (run / "completed").write_text("complete\n", encoding="utf-8")
+
+        moments = iter(
+            (
+                dt.datetime(2035, 1, 1, tzinfo=dt.UTC),
+                dt.datetime(2025, 1, 1, tzinfo=dt.UTC),
+            )
+        )
+
+        class RollbackClock(dt.datetime):
+            @classmethod
+            def now(cls, timezone: dt.tzinfo | None = None) -> dt.datetime:
+                del timezone
+                return next(moments)
+
+        with mock.patch.object(quality_gate.dt, "datetime", RollbackClock):
+            earlier_attempt = quality_gate.Evidence(self.fixture.root)
+            earlier_attempt.complete("status: PASS\n")
+            earlier_attempt.release_active()
+            later_attempt = quality_gate.Evidence(self.fixture.root)
+            later_attempt.complete("status: PASS\n")
+            later_attempt.release_active()
+
+        self.assertGreater(earlier_attempt.run_id, later_attempt.run_id)
+        self.assertLess(earlier_attempt.attempt_sequence, later_attempt.attempt_sequence)
+        self.assertEqual(
+            later_attempt.run_id,
+            (later_attempt.root / "latest").read_text().strip(),
+        )
+        self.assertTrue(earlier_attempt.run_dir.is_dir())
+        self.assertTrue(later_attempt.run_dir.is_dir())
+        retained = [path for path in runs.iterdir() if (path / "completed").is_file()]
+        self.assertEqual(quality_gate.MAX_COMPLETED_RUNS, len(retained))
+
+    def test_active_origin_survives_concurrent_pruning_until_output_release(self) -> None:
+        origin = quality_gate.Evidence(self.fixture.root)
+        origin.complete("status: PASS\n")
+        worker = (
+            "import importlib.util,sys; from pathlib import Path; "
+            "spec=importlib.util.spec_from_file_location('pruning_gate',sys.argv[1]); "
+            "module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module); "
+            "repo=Path(sys.argv[2]); count=int(sys.argv[3]); "
+            "\nfor _ in range(count):"
+            "\n evidence=module.Evidence(repo)"
+            "\n evidence.complete('status: PASS\\n')"
+            "\n evidence.release_active()"
+        )
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                worker,
+                str(CORE_PATH),
+                str(self.fixture.root),
+                str(quality_gate.MAX_COMPLETED_RUNS),
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=30,
+        )
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertTrue(origin.active_path.is_file())
+        self.assertIn("status: PASS", origin.summary_path.read_text())
+        origin.release_active()
+        self.assertFalse(origin.run_dir.exists())
+        retained = [
+            path
+            for path in origin.runs.iterdir()
+            if (path / "completed").is_file()
+        ]
+        self.assertEqual(quality_gate.MAX_COMPLETED_RUNS, len(retained))
 
     def test_run_validation_and_pruning_do_not_recreate_a_pruned_orphan(self) -> None:
         runs = self.fixture.root / ".quality-gate/runs"
@@ -731,6 +814,7 @@ class QualityGateEvidenceTest(unittest.TestCase):
             "\nwhile not go.exists(): time.sleep(0.005)"
             "\nPath(sys.argv[5]).write_text('entering')"
             "\nevidence.complete('status: PASS\\n')"
+            "\nevidence.release_active()"
         )
         pruner = subprocess.Popen(
             [
@@ -1362,6 +1446,7 @@ class QualityGateEvidenceTest(unittest.TestCase):
         summary = (run_dir / "summary.txt").read_text()
         self.assertIn("status: INTERRUPTED", summary)
         self.assertNotIn("status: PASS", summary)
+        self.assertFalse((run_dir / "active").exists())
 
     def test_signal_during_per_handler_restore_is_interrupted(self) -> None:
         self.install_gate()
@@ -1422,7 +1507,7 @@ class QualityGateEvidenceTest(unittest.TestCase):
 
 class EvidencePathSafetyTest(unittest.TestCase):
     def test_symlinked_evidence_components_never_mutate_external_target(self) -> None:
-        for scenario in ("root", "runs", "latest", "lock", "run"):
+        for scenario in ("root", "runs", "latest", "lock", "sequence", "run"):
             with self.subTest(scenario=scenario):
                 fixture = RepositoryFixture()
                 self.addCleanup(fixture.close)
@@ -1444,6 +1529,11 @@ class EvidencePathSafetyTest(unittest.TestCase):
                                 os.symlink(sentinel, quality_root / "latest")
                             elif scenario == "lock":
                                 os.symlink(sentinel, quality_root / "completion.lock")
+                            elif scenario == "sequence":
+                                os.symlink(
+                                    sentinel,
+                                    quality_root / "attempt-sequence-counter",
+                                )
                             else:
                                 os.symlink(outside, runs / "20000101T000000.000000Z-1")
                     before = {
@@ -1476,6 +1566,12 @@ class EvidencePathSafetyTest(unittest.TestCase):
         self.assertEqual(0o600, stat.S_IMODE(evidence.log_path.stat().st_mode))
         self.assertEqual(0o600, stat.S_IMODE(evidence.summary_path.stat().st_mode))
         self.assertEqual(0o600, stat.S_IMODE(evidence.completion_lock.stat().st_mode))
+        self.assertEqual(0o600, stat.S_IMODE(evidence.sequence_counter.stat().st_mode))
+        self.assertEqual(0o600, stat.S_IMODE(evidence.active_path.stat().st_mode))
+        self.assertEqual(
+            0o600,
+            stat.S_IMODE((evidence.run_dir / "attempt-sequence").stat().st_mode),
+        )
 
 
 class BoundedTailTest(unittest.TestCase):
