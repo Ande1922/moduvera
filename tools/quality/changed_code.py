@@ -412,8 +412,9 @@ def _source_artifact(
     return Artifact(relative, digest, state.st_mtime_ns)
 
 
-def _provenance_artifact(path: Path) -> Artifact:
-    raw, state = _read_regular_snapshot(path, path.parent, "Maven provenance")
+def _provenance_artifact(
+    path: Path, raw: bytes, state: os.stat_result
+) -> Artifact:
     return Artifact(path.name, hashlib.sha256(raw).hexdigest(), state.st_mtime_ns)
 
 
@@ -645,11 +646,17 @@ def analyze(
     base = _resolve(repo, base_revision, "base")
     head = _resolve(repo, head_revision, "head")
     _require_clean_head(repo, head)
-    started_ns, completed_ns, provenance, _raw_provenance, _provenance_state = _validate_provenance(
-        provenance_path, base, head
-    )
+    (
+        started_ns,
+        completed_ns,
+        provenance,
+        raw_provenance,
+        provenance_state,
+    ) = _validate_provenance(provenance_path, base, head)
     manifest = _validate_manifest(manifest_path, provenance, base, head)
-    provenance_artifact = _provenance_artifact(provenance_path)
+    provenance_artifact = _provenance_artifact(
+        provenance_path, raw_provenance, provenance_state
+    )
 
     lines: list[LineScore] = []
     exclusions: list[Exclusion] = []

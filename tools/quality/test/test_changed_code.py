@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "changed_code.py"
@@ -352,6 +353,37 @@ class ChangedCodeAnalysisTest(unittest.TestCase):
             changed_code.ChangedCodeError, "does not match post-Maven manifest"
         ):
             self.fixture.analyze(base, head)
+
+    def test_provenance_artifact_uses_validated_snapshot_after_path_replacement(self) -> None:
+        head, _report = self.fixture.add_java_change(
+            "services/sample/sample-service/src/main/java/example/domain/Policy.java"
+        )
+        base = self.fixture.git("rev-parse", "HEAD^")
+        provenance = self.fixture.evidence / "maven-provenance.json"
+        captured = provenance.read_bytes()
+        captured_state = provenance.stat()
+        replacement = captured.rstrip(b"\n") + b" \n"
+        original_validate_manifest = changed_code._validate_manifest
+
+        def replace_after_manifest_validation(*arguments):
+            manifest = original_validate_manifest(*arguments)
+            replacement_path = provenance.with_name("replacement-provenance.json")
+            replacement_path.write_bytes(replacement)
+            os.replace(replacement_path, provenance)
+            return manifest
+
+        with mock.patch.object(
+            changed_code,
+            "_validate_manifest",
+            side_effect=replace_after_manifest_validation,
+        ):
+            result = self.fixture.analyze(base, head)
+
+        self.assertEqual(hashlib.sha256(captured).hexdigest(), result.provenance.sha256)
+        self.assertEqual(captured_state.st_mtime_ns, result.provenance.mtime_ns)
+        self.assertNotEqual(
+            hashlib.sha256(replacement).hexdigest(), result.provenance.sha256
+        )
 
     def test_symlinked_analysis_artifact_fails_before_consumption(self) -> None:
         head, report = self.fixture.add_java_change(
