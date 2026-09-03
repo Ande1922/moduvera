@@ -415,11 +415,13 @@ def _method_name(header: str, class_name: str) -> str | None:
         return "<clinit>"
     if "(" not in header:
         return None
-    token = header.split("(", 1)[0].split()[-1]
+    method_token = header.split("(", 1)[0].split()[-1]
     dotted_class = class_name.replace("/", ".")
-    if token == dotted_class or token.endswith("." + dotted_class.rsplit(".", 1)[-1]):
+    if method_token == dotted_class or method_token.endswith(
+        "." + dotted_class.rsplit(".", 1)[-1]
+    ):
         return "<init>"
-    return token
+    return method_token
 
 
 def javap_line_tables(
