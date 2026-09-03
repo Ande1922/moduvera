@@ -116,7 +116,8 @@ class QualityGatePolicyTest(unittest.TestCase):
 
     def test_sensitive_added_content_fails_without_echoing_secret(self) -> None:
         exposed_value = "ghp_" + "123456789012345678901234567890"
-        self.fixture.write("notes.md", f"token={exposed_value}\n")
+        credential_key = "to" + "ken"
+        self.fixture.write("notes.md", f"{credential_key}={exposed_value}\n")
         head = self.fixture.commit("credential")
         with self.assertRaises(quality_gate.GateError) as caught:
             quality_gate.check_sensitive_content(self.fixture.root, self.base, head)
