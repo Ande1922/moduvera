@@ -1,5 +1,5 @@
 Type: spec
-Status: ready-for-agent
+Status: resolved
 
 # 脚手架基线评审整改第一迭代
 
