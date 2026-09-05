@@ -11,11 +11,17 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 class ExecutionContextSnapshotTest {
 
     private static final ExecutionContext TENANT_A = context("tenant-a", "alice", "corr-a");
+    private static final ExecutionContext TENANT_A_SECOND_REQUEST = new ExecutionContext(
+            new TenantId("tenant-a"),
+            new Actor(ActorType.SERVICE, "catalog"),
+            new Initiator(ActorType.USER, "bob"),
+            "corr-a-2");
     private static final ExecutionContext TENANT_B = context("tenant-b", "bob", "corr-b");
 
     @Test
@@ -40,7 +46,7 @@ class ExecutionContextSnapshotTest {
     }
 
     @Test
-    void restoresAfterNormalExceptionalTimedOutCancelledAndRejectedTasks() throws Exception {
+    void restoresAfterNormalExceptionalAndRejectedTasks() throws Exception {
         try (var pool = Executors.newFixedThreadPool(1)) {
             var failed = ExecutionContextHolder.call(TENANT_A, () -> pool.submit(
                     ExecutionContextSnapshot.capture().wrap((Runnable) () -> {
@@ -50,24 +56,6 @@ class ExecutionContextSnapshotTest {
             assertThatThrownBy(failed::get)
                     .isInstanceOf(ExecutionException.class)
                     .hasCauseInstanceOf(IllegalStateException.class);
-            assertThat(pool.submit(ExecutionContextHolder::current).get()).isEmpty();
-
-            var started = new CountDownLatch(1);
-            var release = new CountDownLatch(1);
-            var waiting = ExecutionContextHolder.call(TENANT_B, () -> pool.submit(
-                    ExecutionContextSnapshot.capture().wrap((Runnable) () -> {
-                        started.countDown();
-                        try {
-                            release.await();
-                        } catch (InterruptedException interrupted) {
-                            Thread.currentThread().interrupt();
-                        }
-                    })));
-            assertThat(started.await(2, TimeUnit.SECONDS)).isTrue();
-            assertThatThrownBy(() -> waiting.get(1, TimeUnit.MILLISECONDS))
-                    .isInstanceOf(TimeoutException.class);
-            waiting.cancel(true);
-            release.countDown();
             assertThat(pool.submit(ExecutionContextHolder::current).get()).isEmpty();
         }
 
@@ -79,6 +67,104 @@ class ExecutionContextSnapshotTest {
                         .isInstanceOf(RejectedExecutionException.class);
                 assertThat(ExecutionContextHolder.require()).isEqualTo(TENANT_A);
             });
+        }
+        assertThat(ExecutionContextHolder.current()).isEmpty();
+    }
+
+    @Test
+    void keepsTheFullContextUntilACancelledDelegateActuallyExits() throws Exception {
+        var started = new CountDownLatch(1);
+        var sampleAfterTimeout = new CountDownLatch(1);
+        var sampledAfterTimeout = new CountDownLatch(1);
+        var waitForCancellation = new CountDownLatch(1);
+        var sampledAfterCancellation = new CountDownLatch(1);
+        var releaseDelegate = new CountDownLatch(1);
+        var delegateExited = new CountDownLatch(1);
+        var contextAfterTimeout = new AtomicReference<ExecutionContext>();
+        var contextAfterCancellation = new AtomicReference<ExecutionContext>();
+
+        try (var pool = Executors.newFixedThreadPool(1)) {
+            var waiting = ExecutionContextHolder.call(TENANT_B, () -> pool.submit(
+                    ExecutionContextSnapshot.capture().wrap((Runnable) () -> {
+                        started.countDown();
+                        try {
+                            assertThat(sampleAfterTimeout.await(2, TimeUnit.SECONDS)).isTrue();
+                            contextAfterTimeout.set(ExecutionContextHolder.require());
+                            sampledAfterTimeout.countDown();
+                            try {
+                                waitForCancellation.await();
+                                throw new AssertionError("delegate was released without cancellation");
+                            } catch (InterruptedException cancellation) {
+                                contextAfterCancellation.set(ExecutionContextHolder.require());
+                                sampledAfterCancellation.countDown();
+                                try {
+                                    assertThat(releaseDelegate.await(2, TimeUnit.SECONDS)).isTrue();
+                                } catch (InterruptedException unexpected) {
+                                    Thread.currentThread().interrupt();
+                                    throw new AssertionError(
+                                            "delegate interrupted after cancellation observation", unexpected);
+                                }
+                            }
+                        } catch (InterruptedException unexpected) {
+                            Thread.currentThread().interrupt();
+                            throw new AssertionError("delegate interrupted before cancellation checkpoint", unexpected);
+                        } finally {
+                            delegateExited.countDown();
+                        }
+                    })));
+
+            assertThat(started.await(2, TimeUnit.SECONDS)).isTrue();
+            assertThatThrownBy(() -> waiting.get(1, TimeUnit.MILLISECONDS))
+                    .isInstanceOf(TimeoutException.class);
+            sampleAfterTimeout.countDown();
+            assertThat(sampledAfterTimeout.await(2, TimeUnit.SECONDS)).isTrue();
+            assertThat(contextAfterTimeout.get()).isEqualTo(TENANT_B);
+            assertThat(delegateExited.getCount()).isEqualTo(1);
+
+            assertThat(waiting.cancel(true)).isTrue();
+            assertThat(waiting.isCancelled()).isTrue();
+            assertThat(sampledAfterCancellation.await(2, TimeUnit.SECONDS)).isTrue();
+            assertThat(contextAfterCancellation.get()).isEqualTo(TENANT_B);
+            assertThat(delegateExited.getCount()).isEqualTo(1);
+
+            releaseDelegate.countDown();
+            assertThat(delegateExited.await(2, TimeUnit.SECONDS)).isTrue();
+            assertThat(pool.submit(ExecutionContextHolder::current).get()).isEmpty();
+        }
+        assertThat(ExecutionContextHolder.current()).isEmpty();
+    }
+
+    @Test
+    void isolatesAndRestoresCompleteContextsForTwoRequestsInTheSameTenant() throws Exception {
+        assertThat(TENANT_A_SECOND_REQUEST.tenantId()).isEqualTo(TENANT_A.tenantId());
+        assertThat(TENANT_A_SECOND_REQUEST.actor()).isNotEqualTo(TENANT_A.actor());
+        assertThat(TENANT_A_SECOND_REQUEST.initiator()).isNotEqualTo(TENANT_A.initiator());
+        assertThat(TENANT_A_SECOND_REQUEST.correlationId()).isNotEqualTo(TENANT_A.correlationId());
+
+        ExecutionContextSnapshot firstRequest =
+                ExecutionContextHolder.call(TENANT_A, ExecutionContextSnapshot::capture);
+        ExecutionContextSnapshot secondRequest = ExecutionContextHolder.call(
+                TENANT_A_SECOND_REQUEST, ExecutionContextSnapshot::capture);
+
+        ExecutionContextHolder.run(TENANT_A, () -> {
+            assertThat(ExecutionContextHolder.require()).isEqualTo(TENANT_A);
+            try (var second = secondRequest.openScope()) {
+                assertThat(ExecutionContextHolder.require()).isEqualTo(TENANT_A_SECOND_REQUEST);
+                try (var first = firstRequest.openScope()) {
+                    assertThat(ExecutionContextHolder.require()).isEqualTo(TENANT_A);
+                }
+                assertThat(ExecutionContextHolder.require()).isEqualTo(TENANT_A_SECOND_REQUEST);
+            }
+            assertThat(ExecutionContextHolder.require()).isEqualTo(TENANT_A);
+        });
+        assertThat(ExecutionContextHolder.current()).isEmpty();
+
+        try (var pool = Executors.newFixedThreadPool(1)) {
+            assertThat(pool.submit(firstRequest.wrap(ExecutionContextHolder::require)).get())
+                    .isEqualTo(TENANT_A);
+            assertThat(pool.submit(secondRequest.wrap(ExecutionContextHolder::require)).get())
+                    .isEqualTo(TENANT_A_SECOND_REQUEST);
+            assertThat(pool.submit(ExecutionContextHolder::current).get()).isEmpty();
         }
         assertThat(ExecutionContextHolder.current()).isEmpty();
     }

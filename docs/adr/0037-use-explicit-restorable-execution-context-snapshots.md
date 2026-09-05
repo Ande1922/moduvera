@@ -20,6 +20,15 @@ thread. Opening that snapshot hides any worker identity for the synchronous
 delegate and restores it when the delegate returns or throws. Explicit trusted
 Snapshot construction rejects null.
 
+This includes two compatibility-relevant behavior corrections. Previously,
+`ExecutionContextHolder.open(null)` installed an implicit absent state; it now
+rejects null before changing the Holder. A caller that receives an explicitly
+absent native-carrier value must use `ExecutionContextSnapshot.absent()` and
+`openScope()`, while a caller capturing the current present-or-absent state uses
+`captureAllowingAbsent()`. Previously, `ExecutionContextSnapshot.wrap(Callable)`
+converted a checked Exception into a private RuntimeException wrapper; it now
+propagates the original checked Exception unchanged.
+
 Runnable and Callable wrappers use this same Scope lifecycle on the thread
 that actually invokes the delegate. They preserve return values and the
 delegate's RuntimeException, Error, or checked Exception. A captured Snapshot
