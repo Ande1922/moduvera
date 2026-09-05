@@ -25,6 +25,7 @@
     <module>framework/testing/moduvera-test-support</module>
     <module>framework/testing/moduvera-bom-smoke</module>
     <module>framework/adapters/moduvera-lock-local</module>
+    <module>framework/adapters/moduvera-reactor-context</module>
     <module>framework/adapters/moduvera-spring-ai-context</module>
     <module>framework/starters/moduvera-web-spring-boot-starter</module>
     <module>services/catalog/catalog-api</module>
@@ -41,6 +42,7 @@
     <module>apps/gateway-app</module>
     <module>apps/app-monolith</module>
     <module>examples/simple-notes-demo</module>
+    <module>verification/moduvera-reactor-context-consumer</module>
     <module>verification/moduvera-spring-ai-context-consumer</module>
   </modules>
 

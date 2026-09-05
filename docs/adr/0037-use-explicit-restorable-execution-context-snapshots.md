@@ -183,11 +183,36 @@ the supported lifecycle are documented in
 
 ## Reactor context templates — ticket 07
 
-Status: planned.
+Status: verified for the optional Reactor adapter and independent Reactor-only consumer.
 
-Subscription Context is the native carrier. Selected synchronous callbacks restore the Holder without global hooks or thread-identity fallback.
+The optional `moduvera-reactor-context` Adapter keeps Reactor types out of the
+Kernel. `withContext` writes a trusted value and `propagate` strictly captures
+the Holder when the template is called; both return a Publisher fixed to that
+logical execution. `require(ContextView)` reads only the native carrier and
+rejects a missing key or wrongly typed value without consulting the signal
+thread's Holder.
 
-Implementation and consumer evidence remain the responsibility of ticket 07.
+`mapInContext` is an identity-free template. Each subscription reads its native
+Context and creates a present or explicitly absent Snapshot. Each actual
+synchronous mapper invocation opens and closes that Snapshot around the
+delegate, restoring the full preceding worker identity after normal return,
+failure, retry, or the actual exit of a cancelled callback. Missing native
+state hides a foreign worker identity; Platform and Tenant scope retain their
+normal strict access rules.
+
+The adapter installs no global Hook and does not make arbitrary map/flatMap
+callbacks, inner asynchronous Publishers, blocking I/O, or third-party code
+Holder-aware. Fixed-context Publishers must not be cached or shared across
+requests, including same-tenant requests with different identity or
+correlation. Reactor cache/share data semantics require their own tenant
+isolation proof.
+
+Evidence: Reactor Core 3.8.7 with Java 26; real scheduler tests for delayed
+subscription after the parent Scope exits, foreign worker restoration,
+concurrent Tenant/Platform/same-Tenant identities, explicit absence, wrong
+types, exception, retry, and cancellation during a still-running synchronous
+mapper; and an independent BOM-managed Reactor-only consumer. Dependency
+closure verifies Kernel has no Reactor and the consumer has no Spring AI.
 
 ## AI request and streaming response context — ticket 08
 
