@@ -82,54 +82,73 @@ class ExecutionContextSnapshotTest {
         var delegateExited = new CountDownLatch(1);
         var contextAfterTimeout = new AtomicReference<ExecutionContext>();
         var contextAfterCancellation = new AtomicReference<ExecutionContext>();
+        var delegateFailure = new AtomicReference<Throwable>();
 
         try (var pool = Executors.newFixedThreadPool(1)) {
             var waiting = ExecutionContextHolder.call(TENANT_B, () -> pool.submit(
                     ExecutionContextSnapshot.capture().wrap((Runnable) () -> {
                         started.countDown();
                         try {
-                            assertThat(sampleAfterTimeout.await(2, TimeUnit.SECONDS)).isTrue();
-                            contextAfterTimeout.set(ExecutionContextHolder.require());
-                            sampledAfterTimeout.countDown();
                             try {
-                                waitForCancellation.await();
-                                throw new AssertionError("delegate was released without cancellation");
-                            } catch (InterruptedException cancellation) {
-                                contextAfterCancellation.set(ExecutionContextHolder.require());
-                                sampledAfterCancellation.countDown();
+                                assertThat(sampleAfterTimeout.await(2, TimeUnit.SECONDS)).isTrue();
+                                contextAfterTimeout.set(ExecutionContextHolder.require());
+                                sampledAfterTimeout.countDown();
                                 try {
-                                    assertThat(releaseDelegate.await(2, TimeUnit.SECONDS)).isTrue();
-                                } catch (InterruptedException unexpected) {
-                                    Thread.currentThread().interrupt();
-                                    throw new AssertionError(
-                                            "delegate interrupted after cancellation observation", unexpected);
+                                    boolean releasedWithoutCancellation =
+                                            waitForCancellation.await(2, TimeUnit.SECONDS);
+                                    throw new AssertionError(releasedWithoutCancellation
+                                            ? "delegate cancellation checkpoint was released normally"
+                                            : "delegate did not receive cancellation within two seconds");
+                                } catch (InterruptedException cancellation) {
+                                    contextAfterCancellation.set(ExecutionContextHolder.require());
+                                    sampledAfterCancellation.countDown();
+                                    try {
+                                        assertThat(releaseDelegate.await(2, TimeUnit.SECONDS)).isTrue();
+                                    } catch (InterruptedException unexpected) {
+                                        Thread.currentThread().interrupt();
+                                        throw new AssertionError(
+                                                "delegate interrupted after cancellation observation", unexpected);
+                                    }
                                 }
+                            } catch (InterruptedException unexpected) {
+                                Thread.currentThread().interrupt();
+                                throw new AssertionError(
+                                        "delegate interrupted before cancellation checkpoint", unexpected);
                             }
-                        } catch (InterruptedException unexpected) {
-                            Thread.currentThread().interrupt();
-                            throw new AssertionError("delegate interrupted before cancellation checkpoint", unexpected);
+                        } catch (RuntimeException | Error failure) {
+                            delegateFailure.set(failure);
+                            throw failure;
                         } finally {
                             delegateExited.countDown();
                         }
                     })));
 
-            assertThat(started.await(2, TimeUnit.SECONDS)).isTrue();
-            assertThatThrownBy(() -> waiting.get(1, TimeUnit.MILLISECONDS))
-                    .isInstanceOf(TimeoutException.class);
-            sampleAfterTimeout.countDown();
-            assertThat(sampledAfterTimeout.await(2, TimeUnit.SECONDS)).isTrue();
-            assertThat(contextAfterTimeout.get()).isEqualTo(TENANT_B);
-            assertThat(delegateExited.getCount()).isEqualTo(1);
+            try {
+                assertThat(started.await(2, TimeUnit.SECONDS)).isTrue();
+                assertThatThrownBy(() -> waiting.get(1, TimeUnit.MILLISECONDS))
+                        .isInstanceOf(TimeoutException.class);
+                sampleAfterTimeout.countDown();
+                assertThat(sampledAfterTimeout.await(2, TimeUnit.SECONDS)).isTrue();
+                assertThat(contextAfterTimeout.get()).isEqualTo(TENANT_B);
+                assertThat(delegateExited.getCount()).isEqualTo(1);
 
-            assertThat(waiting.cancel(true)).isTrue();
-            assertThat(waiting.isCancelled()).isTrue();
-            assertThat(sampledAfterCancellation.await(2, TimeUnit.SECONDS)).isTrue();
-            assertThat(contextAfterCancellation.get()).isEqualTo(TENANT_B);
-            assertThat(delegateExited.getCount()).isEqualTo(1);
+                assertThat(waiting.cancel(true)).isTrue();
+                assertThat(waiting.isCancelled()).isTrue();
+                assertThat(sampledAfterCancellation.await(2, TimeUnit.SECONDS)).isTrue();
+                assertThat(contextAfterCancellation.get()).isEqualTo(TENANT_B);
+                assertThat(delegateExited.getCount()).isEqualTo(1);
 
-            releaseDelegate.countDown();
-            assertThat(delegateExited.await(2, TimeUnit.SECONDS)).isTrue();
-            assertThat(pool.submit(ExecutionContextHolder::current).get()).isEmpty();
+                releaseDelegate.countDown();
+                assertThat(delegateExited.await(2, TimeUnit.SECONDS)).isTrue();
+                assertThat(delegateFailure.get()).isNull();
+                assertThat(pool.submit(ExecutionContextHolder::current).get(2, TimeUnit.SECONDS))
+                        .isEmpty();
+            } finally {
+                sampleAfterTimeout.countDown();
+                waiting.cancel(true);
+                waitForCancellation.countDown();
+                releaseDelegate.countDown();
+            }
         }
         assertThat(ExecutionContextHolder.current()).isEmpty();
     }
