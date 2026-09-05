@@ -16,6 +16,10 @@ import io.github.ande1922.moduvera.context.MissingExecutionContextException;
 import io.github.ande1922.moduvera.context.TenantId;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClientResponse;
+import org.springframework.ai.chat.model.ToolContext;
+import org.springframework.ai.tool.ToolCallback;
+import org.springframework.ai.tool.definition.ToolDefinition;
+import org.springframework.ai.tool.metadata.ToolMetadata;
 
 class SpringAiExecutionContextsTest {
 
@@ -112,10 +116,108 @@ class SpringAiExecutionContextsTest {
         assertThat(delegateCalls).hasValue(0);
     }
 
+    @Test
+    void toolCallbackReadsEachToolContextAndPreservesDelegateContract() {
+        ToolDefinition definition = ToolDefinition.builder()
+            .name("lookup")
+            .description("Looks up a value")
+            .inputSchema("{\"type\":\"object\"}")
+            .build();
+        ToolMetadata metadata = ToolMetadata.builder().returnDirect(true).build();
+        AtomicInteger delegateCalls = new AtomicInteger();
+        ToolCallback delegate = new ToolCallback() {
+            @Override
+            public ToolDefinition getToolDefinition() {
+                return definition;
+            }
+
+            @Override
+            public ToolMetadata getToolMetadata() {
+                return metadata;
+            }
+
+            @Override
+            public String call(String input) {
+                throw new AssertionError("context-aware entry required");
+            }
+
+            @Override
+            public String call(String input, ToolContext toolContext) {
+                delegateCalls.incrementAndGet();
+                assertThat(ExecutionContextHolder.require()).isSameAs(REQUEST);
+                return "result:" + input;
+            }
+        };
+        ToolCallback wrapped = SpringAiExecutionContexts.toolCallback(delegate);
+
+        assertThat(wrapped.getToolDefinition()).isSameAs(definition);
+        assertThat(wrapped.getToolMetadata()).isSameAs(metadata);
+        ExecutionContextHolder.run(WORKER, () -> {
+            assertThat(wrapped.call("input", toolContext(REQUEST))).isEqualTo("result:input");
+            assertThat(ExecutionContextHolder.require()).isSameAs(WORKER);
+        });
+        assertThat(delegateCalls).hasValue(1);
+    }
+
+    @Test
+    void toolCallbackRejectsInvalidEntrypointsBeforeDelegateAndRestoresOnFailure() {
+        AtomicInteger delegateCalls = new AtomicInteger();
+        TestFailure failure = new TestFailure();
+        ToolCallback wrapped = SpringAiExecutionContexts.toolCallback(new ToolCallback() {
+            @Override
+            public ToolDefinition getToolDefinition() {
+                return ToolDefinition.builder()
+                    .name("failing")
+                    .description("Fails")
+                    .inputSchema("{\"type\":\"object\"}")
+                    .build();
+            }
+
+            @Override
+            public String call(String input) {
+                throw new AssertionError("context-aware entry required");
+            }
+
+            @Override
+            public String call(String input, ToolContext toolContext) {
+                delegateCalls.incrementAndGet();
+                assertThat(ExecutionContextHolder.require()).isSameAs(REQUEST);
+                throw failure;
+            }
+        });
+
+        ExecutionContextHolder.run(WORKER, () -> {
+            assertThatThrownBy(() -> wrapped.call("input"))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("ToolContext");
+            assertThatThrownBy(() -> wrapped.call("input", null))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("missing");
+            assertThatThrownBy(() -> wrapped.call("input", new ToolContext(Map.of())))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("missing");
+            assertThatThrownBy(() -> wrapped.call(
+                            "input",
+                            new ToolContext(Map.of(
+                                    SpringAiExecutionContexts.EXECUTION_CONTEXT_KEY, "wrong"))))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("wrong type");
+            assertThat(delegateCalls).hasValue(0);
+
+            assertThatThrownBy(() -> wrapped.call("input", toolContext(REQUEST))).isSameAs(failure);
+            assertThat(ExecutionContextHolder.require()).isSameAs(WORKER);
+        });
+        assertThat(delegateCalls).hasValue(1);
+    }
+
     private static ChatClientResponse responseWith(ExecutionContext context) {
         return ChatClientResponse.builder()
             .context(SpringAiExecutionContexts.EXECUTION_CONTEXT_KEY, context)
             .build();
+    }
+
+    private static ToolContext toolContext(ExecutionContext context) {
+        return new ToolContext(Map.of(SpringAiExecutionContexts.EXECUTION_CONTEXT_KEY, context));
     }
 
     private static ExecutionContext context(String tenant, String subject, String correlation) {

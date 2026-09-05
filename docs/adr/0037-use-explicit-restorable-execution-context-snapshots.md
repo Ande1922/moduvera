@@ -241,11 +241,31 @@ and multi-round tool-loop evidence remain owned by ticket 09.
 
 ## AI tool loop context — ticket 09
 
-Status: planned.
+Status: implemented.
 
-Each synchronous tool invocation reads its own ToolContext. The shared adapter retains no request snapshot and preserves real multi-round loop behavior.
+`SpringAiExecutionContexts.toolCallback(...)` is a stateless wrapper. Every
+invocation reads the reserved `ExecutionContext` from that call's native
+ToolContext, rejects a missing ToolContext, missing key, wrong value type, or
+the context-free callback entry before invoking the delegate, and never falls
+back to a Holder value already present on the worker. It opens a Scope only for
+the synchronous delegate call and preserves the delegate's definition,
+metadata, input, result, and exception contract. The wrapper captures no
+request snapshot, so it can be shared when the delegate itself is safe to
+share.
 
-Implementation and consumer evidence remain the responsibility of ticket 09.
+Evidence: a real streaming ChatClient and ToolCallingAdvisor loop driven by a
+test-source scripted model performs two tool rounds before the final response.
+The same wrapper isolates concurrent same-Tenant/different-identity and
+Platform requests across model, bounded-elastic tool, and response-worker
+threads; the final ChatClientResponse is consumed through the ticket 08
+response mapper. Missing/wrong native contexts stop before the delegate, a
+delegate failure remains the same exception, and bounded same-thread probes
+confirm the actual tool workers have no residual Holder binding after return.
+
+Custom Advisor code that creates internal asynchronous callbacks must still
+propagate context explicitly at those callback boundaries. Opening a Scope
+around `return nextStream(...)` covers only synchronous Publisher assembly and
+cannot cover the stream's later signals.
 
 ## Tenant-only message compatibility — ticket 10
 

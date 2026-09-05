@@ -43,7 +43,27 @@ when the delegate is thread-safe. Keep `ChatClientResponse` until all work that
 needs its context is complete; a content `String` does not retain the response
 context.
 
+Wrap every Spring AI tool that requires the Holder once, then register the
+wrapper as a normal request or default tool:
+
+```java
+ToolCallback contextAwareTool =
+        SpringAiExecutionContexts.toolCallback(applicationTool);
+```
+
+The wrapper is stateless and reads the reserved value from every native
+`ToolContext`; it does not capture the Holder when the wrapper is created. It
+rejects a missing ToolContext, missing key, wrong value type, and the
+context-free `call(String)` entry before calling the tool. During
+`call(String, ToolContext)` it opens a Scope only around the synchronous
+delegate and restores the tool thread after either a result or an exception.
+The original ToolDefinition (including name, description and input schema),
+ToolMetadata, input, result, and exception are delegated unchanged. Sharing is
+safe only when the underlying tool is itself safe to share.
+
 The reserved values are native execution metadata. They must not be copied
 into user/system prompt text, message metadata, tool parameter schemas, or
 tool results. This adapter does not make arbitrary Advisor callbacks
-Holder-aware and does not implement tool callback wrapping or a tool loop.
+Holder-aware. Custom Advisor asynchronous callbacks need their own explicit
+propagation boundary; a Scope surrounding `return nextStream(...)` ends after
+Publisher assembly and cannot cover later stream signals.

@@ -15,8 +15,12 @@ import org.springframework.ai.chat.client.advisor.api.CallAdvisor;
 import org.springframework.ai.chat.client.advisor.api.CallAdvisorChain;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisor;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisorChain;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
+import org.springframework.ai.tool.ToolCallback;
+import org.springframework.ai.tool.definition.ToolDefinition;
+import org.springframework.ai.tool.metadata.ToolMetadata;
 import org.springframework.core.Ordered;
 import reactor.core.publisher.Flux;
 
@@ -70,6 +74,15 @@ public final class SpringAiExecutionContexts {
         };
     }
 
+    /**
+     * Wraps a tool callback with a stateless execution-context boundary. Every invocation reads
+     * the current {@link ToolContext}; the wrapper captures no request identity and may be shared
+     * when its delegate is thread-safe. The context-free callback entry point is unsupported.
+     */
+    public static ToolCallback toolCallback(ToolCallback delegate) {
+        return new ExecutionContextToolCallback(Objects.requireNonNull(delegate, "delegate"));
+    }
+
     private static ExecutionContext requireResponseContext(ChatClientResponse response) {
         Objects.requireNonNull(response, "response");
         if (!response.context().containsKey(EXECUTION_CONTEXT_KEY)) {
@@ -81,6 +94,21 @@ public final class SpringAiExecutionContexts {
                     "ChatClientResponse reserved execution context has the wrong type");
         }
         return context;
+    }
+
+    private static ExecutionContext requireToolContext(ToolContext toolContext) {
+        if (toolContext == null) {
+            throw new IllegalStateException("ToolContext is missing the reserved execution context");
+        }
+        Map<String, Object> context = toolContext.getContext();
+        if (!context.containsKey(EXECUTION_CONTEXT_KEY)) {
+            throw new IllegalStateException("ToolContext is missing the reserved execution context");
+        }
+        Object candidate = context.get(EXECUTION_CONTEXT_KEY);
+        if (!(candidate instanceof ExecutionContext executionContext)) {
+            throw new IllegalStateException("ToolContext reserved execution context has the wrong type");
+        }
+        return executionContext;
     }
 
     private static Map<String, Object> withCapturedContext(
@@ -214,6 +242,38 @@ public final class SpringAiExecutionContexts {
                     && context.get(EXECUTION_CONTEXT_KEY) != captured) {
                 throw new IllegalStateException(
                         channel + " contains a different reserved execution context");
+            }
+        }
+    }
+
+    private static final class ExecutionContextToolCallback implements ToolCallback {
+
+        private final ToolCallback delegate;
+
+        private ExecutionContextToolCallback(ToolCallback delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public ToolDefinition getToolDefinition() {
+            return delegate.getToolDefinition();
+        }
+
+        @Override
+        public ToolMetadata getToolMetadata() {
+            return delegate.getToolMetadata();
+        }
+
+        @Override
+        public String call(String toolInput) {
+            throw new IllegalStateException("Execution-context tool callback requires ToolContext");
+        }
+
+        @Override
+        public String call(String toolInput, ToolContext toolContext) {
+            ExecutionContext context = requireToolContext(toolContext);
+            try (ExecutionContextHolder.Scope ignored = ExecutionContextHolder.open(context)) {
+                return delegate.call(toolInput, toolContext);
             }
         }
     }
