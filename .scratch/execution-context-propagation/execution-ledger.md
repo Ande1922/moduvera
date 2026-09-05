@@ -6,7 +6,7 @@ Code base: ce1636f82f9652b2b14dd9e146e62c748fbf3233. Integration branch: codex/e
 
 ## Current frontier
 
-05, 07, 09, 10; claimed now: 07, 09, 10.
+05, 09, 10; claimed now: 05, 09, 10.
 
 ## Evidence rules
 
@@ -48,3 +48,7 @@ Base `5e687cfdb21d2d9dc55be42a5ffb93a59b15c452`; worker head `269116daf70afb2779
 ## Ticket 06 integrated
 
 Base `46ac0c4c189533ae0d13ddd79ba06a735657acf9`; worker head `3eb2e5c3c9d5ad07806a94925670deea166598ef`; integrated `28d0644cec7dd263843113386fe06f560b502055`. Branch `codex/execution-context-20260905-06`, worktree `/private/tmp/execution-context-frontier-20260905/06`. Standards and Spec clean at the same fixed range. Verification PASS: Worker final Resource Server verify passed 18 unit tests and 5 real signed-JWT Servlet ITs; Catalog virtual-thread consumer passed 8 ITs. Regression-first generated-correlation mismatch is closed, with full REQUEST/ASYNC/selected ERROR identity and actual-thread cleanup. Prior Notes 2 ITs and both public reference topologies passed on this ticket; final combined Scenario remains a later requirement. Integrated auth/Catalog/Notes verify passed all affected units, quality checks and 15 selected real ITs (5+8+2) in 39.521 seconds. All 22 ticket files and allocated ADR section match the reviewed worker head. Evidence is under `evidence/06/`. Remaining frontier: 05, 07, 09, 10.
+
+## Ticket 07 integrated
+
+Base `f3ef17e028802d4072e943c167f9abea0aca5b3a`; worker head `77f93f0f468f0beec6e35b2c8f9ca9c385908c51`; integrated `8d7a7f3b8ac6aa6402f747a4e49673183d47b231`. Branch `codex/execution-context-20260905-07`, worktree `/private/tmp/execution-context-frontier-20260905/07`. Standards and Spec clean at the same fixed range. Verification PASS: Worker scoped verify passed Kernel43, Reactor Adapter8 and independent consumer2 with real Reactor3.8.7 schedulers and full context restoration; Kernel has no Reactor and Reactor-only consumer no AI. Integrated Kernel52, Reactor8/consumer2 and AI4/consumer5 tests passed across 6 modules. All 9 ticket files and allocated ADR section match the reviewed worker head. Final integration gate report wiring for external-parent consumers is tracked separately as coordinator build readiness. Evidence is under `evidence/07/`. Remaining frontier: 05, 09, 10.
