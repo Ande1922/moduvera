@@ -350,6 +350,41 @@ class InventoryApplicationIT {
     }
 
     @Test
+    void asynchronouslyRejectedContractHasNoSideEffectsAfterSamePartitionBarrier()
+            throws Exception {
+        ReserveInventoryCommand rejected = command(
+                "async-invalid-contract", 45, List.of(new ReserveInventoryLine(7, 2)));
+        SerializedMessage validShape = serialized(
+                rejected, "tenant-a", "corr-async-invalid-contract");
+        SerializedMessage invalid = withContract(
+                validShape,
+                MessageKind.EVENT,
+                validShape.descriptor().type(),
+                validShape.descriptor().source(),
+                validShape.descriptor().destination());
+        ReserveInventoryCommand barrier = command(
+                "async-invalid-barrier", 45, List.of(new ReserveInventoryLine(8, 1)));
+        ProgressBarrier consumed = ProgressBarrier.capture(this::consumedReserveRecords);
+
+        transport.send(invalid);
+        transport.send(serialized(barrier, "tenant-a", "corr-async-invalid-barrier"));
+        consumed.awaitAdvanceBy(
+                2,
+                Duration.ofSeconds(15),
+                Duration.ofMillis(50),
+                () -> "consumer=inventory-it, topic=" + RESERVE_TOPIC
+                        + ", rejected=async-invalid-contract, barrier=async-invalid-barrier");
+
+        assertThat(available("tenant-a", 7)).isEqualTo(5);
+        assertThat(available("tenant-a", 8)).isEqualTo(3);
+        assertThat(jdbc.queryForList(
+                        "SELECT command_id FROM inventory_reservation_result", String.class))
+                .containsExactly("async-invalid-barrier");
+        assertThat(count("moduvera_message_inbox")).isEqualTo(1);
+        assertThat(count("moduvera_message_outbox")).isEqualTo(1);
+    }
+
+    @Test
     void concurrentReservationsNeverOversellAndProduceOneRejection() throws Exception {
         var ready = new CountDownLatch(2);
         var start = new CountDownLatch(1);

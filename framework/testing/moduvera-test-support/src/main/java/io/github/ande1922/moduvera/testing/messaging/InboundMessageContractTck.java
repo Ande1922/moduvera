@@ -5,11 +5,14 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import io.github.ande1922.moduvera.context.Actor;
+import io.github.ande1922.moduvera.context.ActorType;
 import io.github.ande1922.moduvera.context.ExecutionContext;
 import io.github.ande1922.moduvera.context.ExecutionContextHolder;
+import io.github.ande1922.moduvera.context.ExecutionScope;
 import io.github.ande1922.moduvera.message.Destination;
 import io.github.ande1922.moduvera.message.MessageDescriptor;
 import io.github.ande1922.moduvera.message.MessageKind;
@@ -43,7 +46,12 @@ public interface InboundMessageContractTck {
                 "the TCK fixture must prove that wire permissions are not trusted");
 
         int before = probe.applicationInvocations().getAsInt();
-        probe.deliver().accept(withActor(valid, forgedWireActor));
+        ExecutionContext previous = priorWorkerContext();
+        ExecutionContextHolder.run(previous, () -> {
+            probe.deliver().accept(withActor(valid, forgedWireActor));
+            assertSame(previous, ExecutionContextHolder.require(),
+                    "successful delivery must restore the worker's prior identity");
+        });
 
         assertEquals(before + 1, probe.applicationInvocations().getAsInt());
         assertEquals(
@@ -61,12 +69,18 @@ public interface InboundMessageContractTck {
     default void rejectsEachContractIdentityMismatchBeforeApplicationInvocation() {
         InboundMessageContractProbe probe = newInboundMessageContractProbe();
         int before = probe.applicationInvocations().getAsInt();
+        ExecutionContext previous = priorWorkerContext();
 
         contractMismatches(probe.validMessage()).forEach((dimension, invalid) -> {
-            NonRetryableMessageException failure = assertThrows(
-                    NonRetryableMessageException.class,
-                    () -> probe.deliver().accept(invalid),
-                    () -> "expected rejection for mismatched " + dimension);
+            NonRetryableMessageException failure = ExecutionContextHolder.call(previous, () -> {
+                NonRetryableMessageException rejected = assertThrows(
+                        NonRetryableMessageException.class,
+                        () -> probe.deliver().accept(invalid),
+                        () -> "expected rejection for mismatched " + dimension);
+                assertSame(previous, ExecutionContextHolder.require(),
+                        "rejected delivery must restore the worker's prior identity");
+                return rejected;
+            });
             assertEquals(
                     "message does not match the expected inbound contract",
                     failure.getMessage(),
@@ -124,6 +138,13 @@ public interface InboundMessageContractTck {
                         descriptor.source(),
                         differentDestination(descriptor.destination())));
         return mismatches;
+    }
+
+    private static ExecutionContext priorWorkerContext() {
+        return ExecutionContext.initiatedBy(
+                ExecutionScope.platform(),
+                new Actor(ActorType.SERVICE, "listener-worker", Set.of("listener:local")),
+                "corr-worker-before-message");
     }
 
     private static MessageType differentMessageType(MessageType expected) {

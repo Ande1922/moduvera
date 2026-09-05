@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.ande1922.moduvera.context.Actor;
 import io.github.ande1922.moduvera.context.ActorType;
+import io.github.ande1922.moduvera.context.ExecutionContext;
+import io.github.ande1922.moduvera.context.ExecutionContextHolder;
 import io.github.ande1922.moduvera.context.Initiator;
 import io.github.ande1922.moduvera.context.TenantId;
 import io.github.ande1922.moduvera.message.Destination;
@@ -109,6 +111,34 @@ class OutboxRelayIT {
         } finally {
             relay.stop();
         }
+    }
+
+    @Test
+    void relaysPersistedTenantMessageAfterTheOriginatingContextHasClosed() throws Exception {
+        SerializedMessage persisted = message("msg-after-request", "order-1");
+        var requestContext = ExecutionContext.initiatedBy(
+                new TenantId("tenant-a"),
+                new Actor(ActorType.USER, "alice"),
+                "corr-originating-request");
+        ExecutionContextHolder.run(requestContext, () -> append(persisted));
+        assertThat(ExecutionContextHolder.current()).isEmpty();
+
+        var sent = new AtomicReference<SerializedMessage>();
+        var relay = relay(message -> {
+            assertThat(ExecutionContextHolder.current()).isEmpty();
+            sent.set(message);
+        }, properties());
+
+        relay.start();
+        try {
+            await(() -> sent.get() != null && relay.state() == OutboxRelay.State.WAITING);
+        } finally {
+            relay.stop();
+        }
+
+        assertThat(sent.get()).usingRecursiveComparison().isEqualTo(persisted);
+        assertThat(outbox.backlog().pendingCount()).isZero();
+        assertThat(ExecutionContextHolder.current()).isEmpty();
     }
 
     @Test

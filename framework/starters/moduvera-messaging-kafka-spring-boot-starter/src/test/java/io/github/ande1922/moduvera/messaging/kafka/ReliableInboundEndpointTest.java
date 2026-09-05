@@ -5,7 +5,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.ande1922.moduvera.context.Actor;
 import io.github.ande1922.moduvera.context.ActorType;
+import io.github.ande1922.moduvera.context.ExecutionContext;
 import io.github.ande1922.moduvera.context.ExecutionContextHolder;
+import io.github.ande1922.moduvera.context.ExecutionScope;
 import io.github.ande1922.moduvera.context.Initiator;
 import io.github.ande1922.moduvera.context.TenantId;
 import io.github.ande1922.moduvera.data.TransactionBoundary;
@@ -56,10 +58,15 @@ class ReliableInboundEndpointTest {
         var inbound = mapper.toSpringMessage(message("msg-once", "notes.events"));
 
         assertThat(consumer).isInstanceOf(Consumer.class);
-        assertThat(consumer.handle(inbound))
-                .isEqualTo(io.github.ande1922.moduvera.message.inbox.InboxOutcome.APPLIED);
-        assertThat(consumer.handle(inbound))
-                .isEqualTo(io.github.ande1922.moduvera.message.inbox.InboxOutcome.DUPLICATE);
+        var previous = priorWorkerContext();
+        ExecutionContextHolder.run(previous, () -> {
+            assertThat(consumer.handle(inbound))
+                    .isEqualTo(io.github.ande1922.moduvera.message.inbox.InboxOutcome.APPLIED);
+            assertThat(ExecutionContextHolder.require()).isSameAs(previous);
+            assertThat(consumer.handle(inbound))
+                    .isEqualTo(io.github.ande1922.moduvera.message.inbox.InboxOutcome.DUPLICATE);
+            assertThat(ExecutionContextHolder.require()).isSameAs(previous);
+        });
 
         assertThat(handled).hasValue(1);
         assertThat(ExecutionContextHolder.current()).isEmpty();
@@ -79,13 +86,17 @@ class ReliableInboundEndpointTest {
             throw new IllegalStateException("boom");
         });
 
-        successful.handle(mapper.toSpringMessage(message("msg-success", "notes.events")));
-        assertThat(ExecutionContextHolder.current()).isEmpty();
+        var previous = priorWorkerContext();
+        ExecutionContextHolder.run(previous, () -> {
+            successful.handle(mapper.toSpringMessage(message("msg-success", "notes.events")));
+            assertThat(ExecutionContextHolder.require()).isSameAs(previous);
 
-        assertThatThrownBy(() -> failing.handle(
-                        mapper.toSpringMessage(message("msg-failure", "notes.events"))))
-                .isInstanceOf(NonRetryableMessageException.class)
-                .hasCauseInstanceOf(IllegalStateException.class);
+            assertThatThrownBy(() -> failing.handle(
+                            mapper.toSpringMessage(message("msg-failure", "notes.events"))))
+                    .isInstanceOf(NonRetryableMessageException.class)
+                    .hasCauseInstanceOf(IllegalStateException.class);
+            assertThat(ExecutionContextHolder.require()).isSameAs(previous);
+        });
         assertThat(ExecutionContextHolder.current()).isEmpty();
         assertThat(handled).hasValue(1);
     }
@@ -142,12 +153,21 @@ class ReliableInboundEndpointTest {
                 Duration.ofNanos(1));
         AtomicInteger attempts = new AtomicInteger();
         var consumer = retryingFactory.forConsumer("notes-audit", contract(), ignored -> {
+            assertThat(ExecutionContextHolder.require()).isEqualTo(new ExecutionContext(
+                    new TenantId("tenant-a"),
+                    contract().executionActor(),
+                    new Initiator(ActorType.USER, "alice"),
+                    "corr-1"));
             if (attempts.incrementAndGet() < 3) {
                 throw new IllegalStateException("temporary");
             }
         });
 
-        consumer.handle(mapper.toSpringMessage(message("msg-retry", "notes.events")));
+        var previous = priorWorkerContext();
+        ExecutionContextHolder.run(previous, () -> {
+            consumer.handle(mapper.toSpringMessage(message("msg-retry", "notes.events")));
+            assertThat(ExecutionContextHolder.require()).isSameAs(previous);
+        });
 
         assertThat(attempts).hasValue(3);
         assertThat(ExecutionContextHolder.current()).isEmpty();
@@ -213,6 +233,13 @@ class ReliableInboundEndpointTest {
                 URI.create("urn:service:notes"),
                 new Destination("notes.events"),
                 new Actor(ActorType.SERVICE, "notes-service", Set.of("notes:consume")));
+    }
+
+    private static ExecutionContext priorWorkerContext() {
+        return ExecutionContext.initiatedBy(
+                ExecutionScope.platform(),
+                new Actor(ActorType.SERVICE, "listener-worker", Set.of("listener:local")),
+                "corr-worker-before-message");
     }
 
     private static SerializedMessage message(String id, String destination) {

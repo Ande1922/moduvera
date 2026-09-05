@@ -32,6 +32,7 @@ public final class OutboxInventoryResultPublisher implements InventoryResultPubl
     @Override
     public void publish(InventoryReservationResult result) {
         var context = ExecutionContextHolder.require();
+        var tenantId = context.requireTenantId();
         String messageId = "inventory-result:" + result.commandId();
         var descriptor = new MessageDescriptor(
                 new MessageId(messageId),
@@ -40,12 +41,12 @@ public final class OutboxInventoryResultPublisher implements InventoryResultPubl
                 URI.create("urn:moduvera:reference:inventory-service"),
                 new Destination(InventoryReservationResult.DESTINATION),
                 clock.instant(),
-                context.tenantId(),
+                tenantId,
                 new Actor(ActorType.SERVICE, "inventory-service"),
                 context.correlationId(),
                 new MessageId(result.commandId()),
                 context.initiator(),
-                context.tenantId().value() + ':' + result.orderId());
+                tenantId.value() + ':' + result.orderId());
         try {
             outbox.append(SerializedMessage.json(descriptor, json.writeValueAsString(result)));
         } catch (JacksonException failure) {

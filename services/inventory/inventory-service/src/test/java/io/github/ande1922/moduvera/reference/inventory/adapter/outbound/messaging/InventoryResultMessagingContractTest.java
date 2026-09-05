@@ -1,11 +1,14 @@
 package io.github.ande1922.moduvera.reference.inventory.adapter.outbound.messaging;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.ande1922.moduvera.context.Actor;
 import io.github.ande1922.moduvera.context.ActorType;
 import io.github.ande1922.moduvera.context.ExecutionContext;
 import io.github.ande1922.moduvera.context.ExecutionContextHolder;
+import io.github.ande1922.moduvera.context.ExecutionScope;
+import io.github.ande1922.moduvera.context.Initiator;
 import io.github.ande1922.moduvera.context.TenantId;
 import io.github.ande1922.moduvera.message.SerializedMessage;
 import io.github.ande1922.moduvera.reference.inventory.api.InventoryReserved;
@@ -36,6 +39,30 @@ class InventoryResultMessagingContractTest {
                     .isEqualTo("io.github.ande1922.moduvera.reference.inventory.reservation-result.v1");
             assertThat(descriptor.destination().value()).isEqualTo("order.inventory-result");
         });
+    }
+
+    @Test
+    void resultPublisherRejectsPlatformAndMissingContextBeforeOutboxAppend() {
+        var published = new AtomicReference<SerializedMessage>();
+        var publisher = new OutboxInventoryResultPublisher(
+                published::set,
+                new ObjectMapper(),
+                Clock.fixed(Instant.parse("2026-08-30T00:00:01Z"), ZoneOffset.UTC));
+        var result = new InventoryReserved(
+                "reserve-order-42", 42, Instant.parse("2026-08-30T00:00:01Z"));
+        var platform = new ExecutionContext(
+                ExecutionScope.platform(),
+                new Actor(ActorType.SERVICE, "platform-service"),
+                new Initiator(ActorType.USER, "alice"),
+                "corr-platform");
+
+        assertThatThrownBy(() -> ExecutionContextHolder.run(
+                        platform, () -> publisher.publish(result)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("tenant execution scope is required at this boundary");
+        assertThatThrownBy(() -> publisher.publish(result))
+                .isInstanceOf(io.github.ande1922.moduvera.context.MissingExecutionContextException.class);
+        assertThat(published).hasNullValue();
     }
 
     private static ExecutionContext context() {

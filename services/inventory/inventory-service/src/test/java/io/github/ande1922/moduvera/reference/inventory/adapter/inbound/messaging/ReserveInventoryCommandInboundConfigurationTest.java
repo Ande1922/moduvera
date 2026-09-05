@@ -6,10 +6,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.github.ande1922.moduvera.authorization.UseCaseAuthorizer;
 import io.github.ande1922.moduvera.context.Actor;
 import io.github.ande1922.moduvera.context.ActorType;
+import io.github.ande1922.moduvera.context.ExecutionContext;
+import io.github.ande1922.moduvera.context.ExecutionContextHolder;
 import io.github.ande1922.moduvera.context.Initiator;
 import io.github.ande1922.moduvera.context.TenantId;
 import io.github.ande1922.moduvera.data.TransactionBoundary;
 import io.github.ande1922.moduvera.message.Destination;
+import io.github.ande1922.moduvera.message.InboundMessageContract;
 import io.github.ande1922.moduvera.message.MessageDescriptor;
 import io.github.ande1922.moduvera.message.MessageId;
 import io.github.ande1922.moduvera.message.MessageKind;
@@ -27,12 +30,14 @@ import io.github.ande1922.moduvera.reference.inventory.application.InventoryAppl
 import io.github.ande1922.moduvera.reference.inventory.domain.AllOrNothingReservationPolicy;
 import io.github.ande1922.moduvera.reference.inventory.domain.ReservationDecision;
 import io.github.ande1922.moduvera.reference.inventory.domain.ReservationExecution;
+import io.github.ande1922.moduvera.testing.messaging.InboundMessageContractProbe;
+import io.github.ande1922.moduvera.testing.messaging.InboundMessageContractTck;
 import java.net.URI;
-import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
@@ -42,9 +47,33 @@ import org.springframework.context.annotation.AnnotationConfigApplicationContext
 import org.springframework.messaging.Message;
 import tools.jackson.databind.ObjectMapper;
 
-class ReserveInventoryCommandInboundConfigurationTest {
+class ReserveInventoryCommandInboundConfigurationTest implements InboundMessageContractTck {
 
     private final KafkaMessageMapper mapper = new KafkaMessageMapper();
+
+    @Override
+    public InboundMessageContractProbe newInboundMessageContractProbe() {
+        var invocations = new AtomicInteger();
+        var observedContext = new AtomicReference<ExecutionContext>();
+        var acceptedCommand = new AtomicReference<ReserveInventoryCommand>();
+        var inventory = service(command -> {
+            invocations.incrementAndGet();
+            observedContext.set(ExecutionContextHolder.require());
+            acceptedCommand.set(command);
+        });
+        return new InboundMessageContractProbe(
+                reserveInventoryContract(),
+                message(validPayload()),
+                serialized -> {
+                    try (var context = context(inventory)) {
+                        consumer(context).accept(mapper.toSpringMessage(serialized));
+                    }
+                },
+                invocations::get,
+                observedContext::get,
+                () -> assertThat(acceptedCommand.get()).isEqualTo(new ReserveInventoryCommand(
+                        "reserve-order-42", 42, List.of(new ReserveInventoryLine(7, 2)))));
+    }
 
     @Test
     void registersTheNamedCommandHandlerAndReliableSpringEndpoint() {
@@ -95,34 +124,6 @@ class ReserveInventoryCommandInboundConfigurationTest {
                     .isInstanceOf(NonRetryableMessageException.class)
                     .hasMessage("invalid reserve inventory command");
         }
-    }
-
-    @Test
-    void publicConsumerRejectsEveryMismatchedContractBeforeInventoryBehavior() {
-        var invocations = new AtomicInteger();
-        var service = service(command -> invocations.incrementAndGet());
-        var valid = message(validPayload());
-        var invalidMessages = List.of(
-                withContract(valid, MessageKind.EVENT, valid.descriptor().type(),
-                        valid.descriptor().source(), valid.descriptor().destination()),
-                withContract(valid, MessageKind.ASYNC_COMMAND,
-                        new MessageType("inventory.reserve.unknown.v1"),
-                        valid.descriptor().source(), valid.descriptor().destination()),
-                withContract(valid, MessageKind.ASYNC_COMMAND, valid.descriptor().type(),
-                        URI.create("urn:moduvera:reference:unknown-service"),
-                        valid.descriptor().destination()),
-                withContract(valid, MessageKind.ASYNC_COMMAND, valid.descriptor().type(),
-                        valid.descriptor().source(), new Destination("inventory.unknown")));
-
-        try (var context = context(service)) {
-            var consumer = consumer(context);
-            invalidMessages.forEach(invalid -> assertThatThrownBy(
-                            () -> consumer.accept(mapper.toSpringMessage(invalid)))
-                    .isInstanceOf(NonRetryableMessageException.class)
-                    .hasMessage("message does not match the expected inbound contract"));
-        }
-
-        assertThat(invocations.get()).isZero();
     }
 
     private AnnotationConfigApplicationContext context(InventoryApplicationService service) {
@@ -180,17 +181,6 @@ class ReserveInventoryCommandInboundConfigurationTest {
                 payload);
     }
 
-    private static SerializedMessage withContract(
-            SerializedMessage message,
-            MessageKind kind,
-            MessageType type,
-            URI source,
-            Destination destination) {
-        return SerializedMessage.json(
-                descriptor(kind, type, source, destination),
-                new String(message.payload(), StandardCharsets.UTF_8));
-    }
-
     private static MessageDescriptor descriptor(
             MessageKind kind, MessageType type, URI source, Destination destination) {
         return new MessageDescriptor(
@@ -206,6 +196,18 @@ class ReserveInventoryCommandInboundConfigurationTest {
                 null,
                 new Initiator(ActorType.USER, "alice"),
                 "42");
+    }
+
+    private static InboundMessageContract reserveInventoryContract() {
+        return new InboundMessageContract(
+                MessageKind.valueOf(ReserveInventoryCommand.MESSAGE_KIND),
+                new MessageType(ReserveInventoryCommand.MESSAGE_TYPE),
+                URI.create("urn:moduvera:reference:order-service"),
+                new Destination(ReserveInventoryCommand.DESTINATION),
+                new Actor(
+                        ActorType.SERVICE,
+                        "order-service",
+                        Set.of(InventoryApplicationService.RESERVE.value())));
     }
 
     private static String validPayload() {

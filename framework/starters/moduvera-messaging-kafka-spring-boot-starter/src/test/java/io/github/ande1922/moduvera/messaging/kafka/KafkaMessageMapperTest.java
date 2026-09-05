@@ -16,6 +16,7 @@ import io.github.ande1922.moduvera.message.SerializedMessage;
 import java.nio.charset.StandardCharsets;
 import java.net.URI;
 import java.time.Instant;
+import java.util.List;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -111,6 +112,27 @@ class KafkaMessageMapperTest {
 
         assertThatThrownBy(() -> mapper.fromSpringMessage(message))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void rejectsMissingTenantAndExecutionIdentityAttributes() throws Exception {
+        var mapper = new KafkaMessageMapper();
+        var json = new tools.jackson.databind.ObjectMapper();
+        var valid = mapper.toSpringMessage(
+                SerializedMessage.json(descriptor(MessageKind.ASYNC_COMMAND), "{}"));
+
+        for (String attribute : List.of(
+                "tenantid", "correlationid", "initiatortype", "initiatorsubject")) {
+            var envelope = json.readTree(valid.getPayload()).asObject();
+            envelope.remove(attribute);
+            var missingAttribute = MessageBuilder.withPayload(json.writeValueAsBytes(envelope))
+                    .copyHeaders(valid.getHeaders())
+                    .build();
+
+            assertThatThrownBy(() -> mapper.fromSpringMessage(missingAttribute))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("missing message attribute: " + attribute);
+        }
     }
 
     private static MessageDescriptor descriptor(MessageKind kind) {

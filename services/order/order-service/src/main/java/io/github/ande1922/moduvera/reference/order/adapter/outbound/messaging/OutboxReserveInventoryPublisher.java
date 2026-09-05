@@ -32,6 +32,7 @@ public final class OutboxReserveInventoryPublisher implements ReserveInventoryPu
     @Override
     public void publish(ReserveInventoryCommand command) {
         var context = ExecutionContextHolder.require();
+        var tenantId = context.requireTenantId();
         var descriptor = new MessageDescriptor(
                 new MessageId(command.commandId()),
                 MessageKind.valueOf(ReserveInventoryCommand.MESSAGE_KIND),
@@ -39,7 +40,7 @@ public final class OutboxReserveInventoryPublisher implements ReserveInventoryPu
                 URI.create("urn:moduvera:reference:order-service"),
                 new Destination(ReserveInventoryCommand.DESTINATION),
                 clock.instant(),
-                context.tenantId(),
+                tenantId,
                 new Actor(ActorType.SERVICE, "order-service"),
                 context.correlationId(),
                 null,
