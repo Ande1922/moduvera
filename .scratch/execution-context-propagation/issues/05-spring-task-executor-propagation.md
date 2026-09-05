@@ -1,5 +1,5 @@
 Type: issue
-Status: blocked
+Status: ready-for-agent
 Blocked by: 03
 
 # Spring TaskExecutor 接入

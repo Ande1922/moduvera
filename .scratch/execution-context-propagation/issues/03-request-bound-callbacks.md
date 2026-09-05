@@ -1,5 +1,5 @@
 Type: issue
-Status: claimed
+Status: resolved
 Blocked by: 02
 
 # 请求归属的具名回调绑定
@@ -19,14 +19,14 @@ Test seams: T01、T03、T08、T09
 
 ## Acceptance criteria
 
-- [ ] 提供 Runnable、Callable、Supplier、Function、Consumer、BiFunction、BiConsumer 的具名 Bound 类型，兼容对应 JDK 接口，构造经 Snapshot 绑定入口完成。
-- [ ] 绑定期间固定快照，委托执行时开 Scope 并恢复；值与原异常透明，允许缺失快照遮蔽目标线程旧身份。
-- [ ] Future 已完成时 inline 回调、由外部线程完成及使用原生指定 Executor 的异步回调均读注册方身份；业务严格捕获缺失时立即失败。
-- [ ] 父 Scope 退出后回调仍可执行；同次执行可重试/重复回调；子范围切换不回写父范围。覆盖同租户不同 Actor/Initiator/Correlation。
-- [ ] 用独立业务函数复用示例与 Javadoc 明确禁止跨请求缓存 Bound 对象，即使 Tenant 相同；不承诺运行时检测所有类型擦除/缓存误用或将其视为一次性对象。
-- [ ] thenCompose 只覆盖同步回调，内部新异步链需独立传播；长期监听器按每条可信事件建立，不固定注册监听器时的请求身份。提供两种边界的可运行测试/示例。
-- [ ] 保留 Runnable/Callable wrap 兼容入口，委托统一机制；直接调用原函数，避免在每次回调内部再创建捕获 lambda；不承诺零分配。
-- [ ] 公开消费者调用、类型/生命周期说明与 Kernel 依赖检查随本票交付，不等待 11。
+- [x] 提供 Runnable、Callable、Supplier、Function、Consumer、BiFunction、BiConsumer 的具名 Bound 类型，兼容对应 JDK 接口，构造经 Snapshot 绑定入口完成。
+- [x] 绑定期间固定快照，委托执行时开 Scope 并恢复；值与原异常透明，允许缺失快照遮蔽目标线程旧身份。
+- [x] Future 已完成时 inline 回调、由外部线程完成及使用原生指定 Executor 的异步回调均读注册方身份；业务严格捕获缺失时立即失败。
+- [x] 父 Scope 退出后回调仍可执行；同次执行可重试/重复回调；子范围切换不回写父范围。覆盖同租户不同 Actor/Initiator/Correlation。
+- [x] 用独立业务函数复用示例与 Javadoc 明确禁止跨请求缓存 Bound 对象，即使 Tenant 相同；不承诺运行时检测所有类型擦除/缓存误用或将其视为一次性对象。
+- [x] thenCompose 只覆盖同步回调，内部新异步链需独立传播；长期监听器按每条可信事件建立，不固定注册监听器时的请求身份。提供两种边界的可运行测试/示例。
+- [x] 保留 Runnable/Callable wrap 兼容入口，委托统一机制；直接调用原函数，避免在每次回调内部再创建捕获 lambda；不承诺零分配。
+- [x] 公开消费者调用、类型/生命周期说明与 Kernel 依赖检查随本票交付，不等待 11。
 
 ## Verification
 
@@ -41,3 +41,16 @@ Test seams: T01、T03、T08、T09
 ## Comments
 
 - 2026-09-05：按批准 DAG 等待 02；03 交付的具名绑定是 04/05 的直接前置。
+
+## Answer
+
+Implemented and integrated on 2026-09-06.
+
+- Base: `46ac0c4c189533ae0d13ddd79ba06a735657acf9`. Worker head: `a1b0aaccb421d81f7871c571bba3c5a8704d1351`.
+- Integrated commit: `8f4cace9078dcb55b737d61ff7ec830f68fe3c6f` on `codex/execution-context-20260905-integration`.
+- Worktree: `/private/tmp/execution-context-frontier-20260905/03`; branch: `codex/execution-context-20260905-03`.
+- Verification PASS: Worker Kernel verify 43 tests passed; independent public consumer 2 tests passed before/after SDK driver cleanup; java.base-only dependencies. Integrated core context, callback and public-consumer test selection passed across the 11-module reactor. Integrated source tree equals the reviewed worker tree.
+- Standards review completed clean and Spec review completed clean against the same base/worker head.
+- Acceptance mapping and exact commands: [worker report](../evidence/03/worker-report.md).
+- Review evidence: [Standards](../evidence/03/review-standards-closure-1.md) and [Spec](../evidence/03/review-spec-closure-1.md).
+- This ticket result is not final feature acceptance; parent spec/finding remain unchanged.

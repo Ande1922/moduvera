@@ -6,7 +6,7 @@ Code base: ce1636f82f9652b2b14dd9e146e62c748fbf3233. Integration branch: codex/e
 
 ## Current frontier
 
-03, 06, 07, 08, 10; claimed now: 03, 06, 08.
+04, 05, 06, 07, 08, 10; claimed now: 04, 06, 08.
 
 ## Evidence rules
 
@@ -28,3 +28,7 @@ Base `ccaf3b9850bd3485f7accdafbc38461c1a4d7ddc`; worker head `89416367c1b009ef7e
 ## Ticket 02 integrated
 
 Base `4b7baf1904ae34bb63525939b8afef60bc74c8a1`; worker head `dbb2a1ade64f1d6bb8ddb31cf52822f5f6e453e7`; integrated `4313748aac07b06943072f7d00f71ce8af5751d0`. Branch `codex/execution-context-20260905-02`, worktree `/private/tmp/execution-context-frontier-20260905/02`. Standards and Spec clean at the same fixed range. Verification PASS: Kernel 37, MySQL production IT 5 and independent PostgreSQL consumer IT 2 passed with no skips; affected unit reactor passed; old-API compiled consumer ran against new classes; jdeps java.base only. Integrated 16-module focused model/Holder/Snapshot/MyBatis/Job/HTTP test reactor passed. Integrated source tree equals reviewed worker tree. Evidence is under `evidence/02/`. Remaining frontier: 03, 06, 07, 08, 10.
+
+## Ticket 03 integrated
+
+Base `46ac0c4c189533ae0d13ddd79ba06a735657acf9`; worker head `a1b0aaccb421d81f7871c571bba3c5a8704d1351`; integrated `8f4cace9078dcb55b737d61ff7ec830f68fe3c6f`. Branch `codex/execution-context-20260905-03`, worktree `/private/tmp/execution-context-frontier-20260905/03`. Standards and Spec clean at the same fixed range. Verification PASS: Worker Kernel verify 43 tests passed; independent public consumer 2 tests passed before/after SDK driver cleanup; java.base-only dependencies. Integrated core context, callback and public-consumer test selection passed across the 11-module reactor. Integrated source tree equals the reviewed worker tree. Evidence is under `evidence/03/`. Remaining frontier: 04, 05, 06, 07, 08, 10.
