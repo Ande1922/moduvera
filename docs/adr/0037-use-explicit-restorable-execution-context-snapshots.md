@@ -79,11 +79,33 @@ focused tenant-only HTTP and Job/Lock tests; and an independent Maven consumer.
 
 ## Request-bound callbacks — ticket 03
 
-Status: planned.
+Status: verified for the Kernel callback binding surface and independent consumer usage.
 
-Registration captures the full logical execution. Ordinary functions may be shared; fixed request snapshots may not be reused across requests.
+`ExecutionContextSnapshot` constructs seven immutable named binding types for `Runnable`,
+`Callable`, `Supplier`, `Function`, `Consumer`, `BiFunction` and `BiConsumer`. Each binding
+opens the fixed present-or-absent snapshot only around an actual synchronous delegate call,
+then restores the invoking thread on normal return or failure. The legacy Runnable and
+Callable `wrap` methods delegate to those same named bindings.
 
-Implementation and consumer evidence remain the responsibility of ticket 03.
+Request-owned Future or SDK callbacks strictly capture at registration. A completed Future
+may invoke inline, an incomplete Future may invoke on its completing thread, and an async
+callback may use a specified Executor; none of those execution choices changes the bound
+identity. The binding remains usable after its parent Scope exits and may be retried or
+invoked repeatedly within the same logical execution. An absent snapshot hides a worker's
+existing identity for the call.
+
+Ordinary business functions may be shared, while every fixed snapshot and named binding
+belongs to one logical execution and must not be cached or shared across requests, including
+requests for the same tenant. A `thenCompose` binding covers only its synchronous Function
+call; asynchronous work represented by the returned stage needs propagation at its own
+boundary. A long-lived listener therefore stays unbound and creates a binding from each
+trusted event's context instead of retaining the listener-registration identity.
+
+Evidence: Kernel tests exercise all seven public JDK shapes, original outcomes, present and
+absent restoration, completed/externally completed/async CompletableFuture callbacks,
+parent-Scope exit, retries, same-tenant distinct identities and the `thenCompose` boundary.
+The independent `simple-notes-demo` consumer compiles and runs per-request function binding
+and per-trusted-event long-lived listener examples using only the public Kernel API.
 
 ## JDK executors — ticket 04
 
