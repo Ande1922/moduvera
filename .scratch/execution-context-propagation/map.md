@@ -84,3 +84,5 @@ AI 08/09 不以 07 为阻塞项：原生 Reactor 库依赖不等于依赖本项�
 
 - 2026-09-05：用户在 11 票提案后回复“可以”，授权按所示粒度及边落盘；未授权实施。按校验器的实际依赖状态规则发布 01 ready-for-agent、02–11 blocked，父 spec 和草案保持原样。
 - 2026-09-05：只读复核后明确 08 必须验证真实流式订阅，并将 10 的当前上下文要求限定到业务消息构建入口；后台 Relay 继续可在没有原请求 Holder 时投递合法持久化消息。未改变批准 DAG 或首期边界，未运行功能测试。
+
+- 2026-09-05 implementation: ticket 01 integrated at `0226e17cfbc48fdd2af42a2b132f438f5eb94177`, both review axes clean; verification PASS. Current open frontier: 02. Claims: 02. See [ticket evidence](issues/01-safe-scope-and-snapshots.md#answer). Historical publication states above remain the original snapshot.

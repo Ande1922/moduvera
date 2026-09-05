@@ -6,7 +6,7 @@ Code base: ce1636f82f9652b2b14dd9e146e62c748fbf3233. Integration branch: codex/e
 
 ## Current frontier
 
-01 claimed for worker t01 in worktree 01; baseline commit ac86dff0a0dbc41d64316357a4c262ec815b0d2b. Dispatch base will include this claim. 02–11 remain blocked by their declared prerequisites.
+02; claimed now: 02.
 
 ## Evidence rules
 
@@ -20,3 +20,7 @@ Record each ticket base, worktree, branch, worker commit, exact checks, independ
 ## Preserved state
 
 Main remains at the code base with user changes. Existing adjacent HTTP tracker failure is excluded from the clean isolated baseline, not repaired. Approved spec and interface draft remain unchanged.
+
+## Ticket 01 integrated
+
+Base `ccaf3b9850bd3485f7accdafbc38461c1a4d7ddc`; worker head `89416367c1b009ef7ebe986c1eac9e69dfdfa2a4`; integrated `0226e17cfbc48fdd2af42a2b132f438f5eb94177`. Branch `codex/execution-context-20260905-01`, worktree `/private/tmp/execution-context-frontier-20260905/01`. Standards and Spec clean at the same fixed range. Verification PASS: Worker Kernel verify: 30 tests, Spotless, PMD and JaCoCo passed; production consumer compile across 10 modules passed; jdeps java.base only. Integrated ./mvnw -pl framework/foundation/moduvera-kernel -am test: 30 tests passed, 0 failures/errors/skips. Integrated Kernel and ADR trees match the reviewed worker head. Evidence is under `evidence/01/`. Remaining frontier: 02.

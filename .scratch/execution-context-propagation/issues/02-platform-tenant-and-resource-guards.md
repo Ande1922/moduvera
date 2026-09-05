@@ -1,5 +1,5 @@
 Type: issue
-Status: blocked
+Status: claimed
 Blocked by: 01
 
 # Platform/Tenant 模型与租户资源保护
