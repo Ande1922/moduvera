@@ -17,4 +17,26 @@ class DefaultRequestCorrelationIdResolverTest {
 
         assertThat(resolver.resolve(request)).isEqualTo("corr-42");
     }
+
+    @Test
+    void establishesAnAcceptedHeaderForLaterRequestPhases() {
+        var request = new MockHttpServletRequest();
+        request.addHeader(DefaultRequestCorrelationIdResolver.HEADER, "corr-header");
+
+        assertThat(resolver.resolve(request)).isEqualTo("corr-header");
+        assertThat(request.getAttribute(DefaultRequestCorrelationIdResolver.REQUEST_ATTRIBUTE))
+                .isEqualTo("corr-header");
+    }
+
+    @Test
+    void establishesAndReusesOneGeneratedValue() {
+        var request = new MockHttpServletRequest();
+
+        String generated = resolver.resolve(request);
+
+        assertThat(generated).isNotBlank();
+        assertThat(request.getAttribute(DefaultRequestCorrelationIdResolver.REQUEST_ATTRIBUTE))
+                .isEqualTo(generated);
+        assertThat(resolver.resolve(request)).isEqualTo(generated);
+    }
 }

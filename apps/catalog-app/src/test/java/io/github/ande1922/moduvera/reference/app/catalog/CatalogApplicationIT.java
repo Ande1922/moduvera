@@ -7,6 +7,7 @@ import io.github.ande1922.moduvera.context.Actor;
 import io.github.ande1922.moduvera.context.ActorType;
 import io.github.ande1922.moduvera.context.ExecutionContext;
 import io.github.ande1922.moduvera.context.ExecutionContextHolder;
+import io.github.ande1922.moduvera.context.ExecutionScope;
 import io.github.ande1922.moduvera.context.MissingExecutionContextException;
 import io.github.ande1922.moduvera.context.TenantId;
 import io.github.ande1922.moduvera.migration.MigrationDefinition;
@@ -19,16 +20,26 @@ import io.github.ande1922.moduvera.reference.catalog.catalog.domain.Product;
 import io.github.ande1922.moduvera.reference.catalog.catalog.domain.ProductRepository;
 import io.github.ande1922.moduvera.reference.catalog.migration.CatalogMigrationConfiguration;
 import io.github.ande1922.moduvera.security.web.ExecutionContextHandlerSelection;
+import jakarta.servlet.DispatcherType;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import javax.sql.DataSource;
+import java.io.IOException;
 import java.math.BigDecimal;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Currency;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.MigrationVersion;
 import org.junit.jupiter.api.BeforeEach;
@@ -43,6 +54,8 @@ import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -50,6 +63,7 @@ import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtException;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.filter.OncePerRequestFilter;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.junit.jupiter.Container;
@@ -108,8 +122,12 @@ class CatalogApplicationIT {
     @Autowired
     private ModuveraDatabaseMigrationProperties migrationProperties;
 
+    @Autowired
+    private VirtualDispatchEvidence virtualDispatchEvidence;
+
     @BeforeEach
     void seedProducts() {
+        virtualDispatchEvidence.reset();
         jdbc.update("DELETE FROM catalog_product");
         insert("tenant-a", 100L, "Keyboard", new BigDecimal("399.00"));
         insert("tenant-b", 200L, "Private Product", new BigDecimal("10.00"));
@@ -227,11 +245,28 @@ class CatalogApplicationIT {
 
     @Test
     void establishesAndClearsTenantContextOnVirtualHttpThreads() throws Exception {
-        HttpResponse<String> tenantA = probe("tenant-a", "corr-virtual-a");
-        HttpResponse<String> tenantB = probe("tenant-b", "corr-virtual-b");
-        assertThat(tenantA.statusCode()).isEqualTo(200);
-        assertThat(tenantA.body()).isEqualTo("tenant-a:true:corr-virtual-a");
-        assertThat(tenantB.body()).isEqualTo("tenant-b:true:corr-virtual-b");
+        virtualDispatchEvidence.expectCompletions(2);
+        HttpResponse<String> alice =
+                probe("catalog-virtual-alice", "tenant-a", "corr-virtual-alice");
+        HttpResponse<String> bob =
+                probe("catalog-virtual-bob", "tenant-a", "corr-virtual-bob");
+
+        assertThat(alice.statusCode()).isEqualTo(200);
+        assertThat(alice.body())
+                .isEqualTo("TENANT:tenant-a:SERVICE:catalog-client-a:USER:alice:corr-virtual-alice:true");
+        assertThat(bob.body())
+                .isEqualTo("TENANT:tenant-a:SERVICE:catalog-client-b:USER:bob:corr-virtual-bob:true");
+        assertThat(virtualDispatchEvidence.awaitCompletions(Duration.ofSeconds(2)))
+                .as("both Servlet dispatches completed on their request threads")
+                .isTrue();
+        assertThat(virtualDispatchEvidence.records())
+                .hasSize(2)
+                .allSatisfy(record -> {
+                    assertThat(record.dispatcherType()).isEqualTo(DispatcherType.REQUEST);
+                    assertThat(record.sameThread()).isTrue();
+                    assertThat(record.virtualThread()).isTrue();
+                    assertThat(record.contextPresentAfterDispatch()).isFalse();
+                });
     }
 
     @Test
@@ -312,10 +347,11 @@ class CatalogApplicationIT {
         return HTTP.send(request.build(), HttpResponse.BodyHandlers.ofString());
     }
 
-    private HttpResponse<String> probe(String tenantId, String correlationId) throws Exception {
+    private HttpResponse<String> probe(String token, String tenantId, String correlationId)
+            throws Exception {
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create("http://localhost:" + port + "/test/virtual-context"))
-                .header("Authorization", "Bearer catalog-reader")
+                .header("Authorization", "Bearer " + token)
                 .header("Tenant-Id", tenantId)
                 .header("X-Correlation-Id", correlationId)
                 .GET()
@@ -348,8 +384,14 @@ class CatalogApplicationIT {
         @Bean
         JwtDecoder catalogTestJwtDecoder() {
             return token -> switch (token) {
-                case "catalog-reader" -> service(token, List.of("catalog:read"));
-                case "catalog-no-permission" -> service(token, List.of());
+                case "catalog-reader" ->
+                    service(token, "order-service", "alice", List.of("catalog:read"));
+                case "catalog-no-permission" ->
+                    service(token, "order-service", "alice", List.of());
+                case "catalog-virtual-alice" ->
+                    service(token, "catalog-client-a", "alice", List.of("catalog:read"));
+                case "catalog-virtual-bob" ->
+                    service(token, "catalog-client-b", "bob", List.of("catalog:read"));
                 default -> throw new JwtException("unknown test token");
             };
         }
@@ -364,17 +406,29 @@ class CatalogApplicationIT {
                     .build();
         }
 
-        private static Jwt service(String token, List<String> permissions) {
+        @Bean
+        VirtualDispatchEvidence virtualDispatchEvidence() {
+            return new VirtualDispatchEvidence();
+        }
+
+        @Bean
+        CatalogDispatchCleanupProbe catalogDispatchCleanupProbe(
+                VirtualDispatchEvidence evidence) {
+            return new CatalogDispatchCleanupProbe(evidence);
+        }
+
+        private static Jwt service(
+                String token, String subject, String initiator, List<String> permissions) {
             Instant now = Instant.now();
             return Jwt.withTokenValue(token)
                     .header("alg", "test")
-                    .subject("order-service")
+                    .subject(subject)
                     .issuedAt(now)
                     .expiresAt(now.plusSeconds(3600))
                     .claim("actor_type", "SERVICE")
                     .claim("permissions", permissions)
                     .claim("initiator_type", "USER")
-                    .claim("initiator_id", "alice")
+                    .claim("initiator_id", initiator)
                     .build();
         }
     }
@@ -385,11 +439,89 @@ class CatalogApplicationIT {
         @GetMapping("/test/virtual-context")
         String context() {
             var context = ExecutionContextHolder.require();
-            return context.tenantId().value()
+            var scope = (ExecutionScope.Tenant) context.scope();
+            return "TENANT:"
+                    + scope.tenantId().value()
                     + ":"
-                    + Thread.currentThread().isVirtual()
+                    + context.actor().type()
                     + ":"
-                    + context.correlationId();
+                    + context.actor().subjectId()
+                    + ":"
+                    + context.initiator().type()
+                    + ":"
+                    + context.initiator().subjectId()
+                    + ":"
+                    + context.correlationId()
+                    + ":"
+                    + Thread.currentThread().isVirtual();
+        }
+    }
+
+    static final class VirtualDispatchEvidence {
+
+        private final List<VirtualDispatchRecord> records = new CopyOnWriteArrayList<>();
+        private volatile CountDownLatch expectedCompletions = new CountDownLatch(0);
+
+        void expectCompletions(int count) {
+            expectedCompletions = new CountDownLatch(count);
+        }
+
+        void record(VirtualDispatchRecord record) {
+            records.add(record);
+            expectedCompletions.countDown();
+        }
+
+        List<VirtualDispatchRecord> records() {
+            return List.copyOf(records);
+        }
+
+        void reset() {
+            records.clear();
+            expectedCompletions = new CountDownLatch(0);
+        }
+
+        boolean awaitCompletions(Duration timeout) throws InterruptedException {
+            return expectedCompletions.await(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        }
+    }
+
+    record VirtualDispatchRecord(
+            DispatcherType dispatcherType,
+            boolean sameThread,
+            boolean virtualThread,
+            boolean contextPresentAfterDispatch) {}
+
+    @Order(Ordered.HIGHEST_PRECEDENCE)
+    static final class CatalogDispatchCleanupProbe extends OncePerRequestFilter {
+
+        private final VirtualDispatchEvidence evidence;
+
+        CatalogDispatchCleanupProbe(VirtualDispatchEvidence evidence) {
+            this.evidence = evidence;
+        }
+
+        @Override
+        protected boolean shouldNotFilter(HttpServletRequest request) {
+            return !request.getRequestURI().equals("/test/virtual-context");
+        }
+
+        @Override
+        protected void doFilterInternal(
+                HttpServletRequest request,
+                HttpServletResponse response,
+                FilterChain filterChain)
+                throws ServletException, IOException {
+            Thread requestThread = Thread.currentThread();
+            try {
+                filterChain.doFilter(request, response);
+            } finally {
+                Thread completionThread = Thread.currentThread();
+                evidence.record(new VirtualDispatchRecord(
+                        request.getDispatcherType(),
+                        requestThread == completionThread,
+                        completionThread.isVirtual(),
+                        ExecutionContextHolder.current().isPresent()));
+            }
         }
     }
 }

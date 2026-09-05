@@ -16,9 +16,10 @@ public final class DefaultRequestCorrelationIdResolver implements RequestCorrela
             return established.toString();
         }
         String candidate = request.getHeader(HEADER);
-        if (ExecutionContext.isValidCorrelationId(candidate)) {
-            return candidate;
-        }
-        return UUID.randomUUID().toString();
+        String resolved = ExecutionContext.isValidCorrelationId(candidate)
+                ? candidate
+                : UUID.randomUUID().toString();
+        request.setAttribute(REQUEST_ATTRIBUTE, resolved);
+        return resolved;
     }
 }

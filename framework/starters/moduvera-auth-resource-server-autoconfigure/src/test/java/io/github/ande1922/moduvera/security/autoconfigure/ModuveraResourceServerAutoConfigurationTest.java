@@ -46,4 +46,16 @@ class ModuveraResourceServerAutoConfigurationTest {
                 .run(context -> assertThat(context)
                         .hasSingleBean(ExecutionContextHandlerInterceptor.class));
     }
+
+    @Test
+    void preservesAnAppProvidedCorrelationResolver() {
+        RequestCorrelationIdResolver custom = request -> "custom-correlation";
+
+        new WebApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(ModuveraResourceServerAutoConfiguration.class))
+                .withBean(ObjectMapper.class, ObjectMapper::new)
+                .withBean(RequestCorrelationIdResolver.class, () -> custom)
+                .run(context -> assertThat(context.getBean(RequestCorrelationIdResolver.class))
+                        .isSameAs(custom));
+    }
 }

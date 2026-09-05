@@ -7,8 +7,13 @@ import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jose.jwk.gen.RSAKeyGenerator;
 import com.nimbusds.jose.jwk.source.ImmutableJWKSet;
 import com.nimbusds.jose.proc.SecurityContext;
+import io.github.ande1922.moduvera.context.Actor;
+import io.github.ande1922.moduvera.context.ActorType;
+import io.github.ande1922.moduvera.context.ExecutionContext;
 import io.github.ande1922.moduvera.context.ExecutionContextHolder;
 import io.github.ande1922.moduvera.context.ExecutionScope;
+import io.github.ande1922.moduvera.context.Initiator;
+import io.github.ande1922.moduvera.context.TenantId;
 import io.github.ande1922.moduvera.security.jwt.ModuveraJwtClaims;
 import jakarta.servlet.DispatcherType;
 import jakarta.servlet.FilterChain;
@@ -24,6 +29,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -34,6 +40,7 @@ import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.boot.webmvc.autoconfigure.error.BasicErrorController;
 import org.springframework.context.annotation.Bean;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
@@ -49,6 +56,9 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.filter.OncePerRequestFilter;
+import org.springframework.web.servlet.HandlerInterceptor;
+import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 @SpringBootTest(
         classes = HttpExecutionBoundaryIT.TestApplication.class,
@@ -121,7 +131,7 @@ class HttpExecutionBoundaryIT {
                 get("/managed/tenant", tenantUser, "tenant-b", "corr-conflict");
         assertProblem(conflict, 403, "security.forbidden", "corr-conflict");
 
-        String noPermission = token(ENCODER, "platform-user", null, List.of());
+        String noPermission = token(ENCODER, "platform-user", "tenant-a", List.of());
         HttpResponse<String> forbidden =
                 get("/managed/platform", noPermission, null, "corr-forbidden");
         assertProblem(forbidden, 403, "security.forbidden", "corr-forbidden");
@@ -176,13 +186,72 @@ class HttpExecutionBoundaryIT {
         assertThat(evidence.contextAfterDispatch()).containsOnly(false);
     }
 
+    @Test
+    void reusesOneGeneratedCorrelationAcrossProblemAsyncAndSelectedErrorDispatches()
+            throws Exception {
+        String alice = token(ENCODER, "alice", "tenant-a", List.of("tenant:read"));
+
+        HttpResponse<String> forbidden =
+                get("/managed/context-then-denied", alice, null, null);
+        assertThat(forbidden.statusCode()).isEqualTo(403);
+        List<ObservedContext> forbiddenContexts = evidence.observedContexts();
+        assertThat(forbiddenContexts).hasSize(1);
+        assertFullIdentity(
+                forbiddenContexts.getFirst(),
+                DispatcherType.REQUEST,
+                ExecutionScope.platform(),
+                "alice");
+        assertThat(forbidden.body())
+                .contains("\"correlationId\":\""
+                        + forbiddenContexts.getFirst().correlationId()
+                        + "\"");
+
+        evidence.reset();
+        HttpResponse<String> async = get("/managed/async", alice, null, null);
+        assertThat(async.statusCode()).isEqualTo(200);
+        assertThat(evidence.observedContexts())
+                .satisfiesExactly(
+                        observed -> assertFullIdentity(
+                                observed,
+                                DispatcherType.REQUEST,
+                                ExecutionScope.platform(),
+                                "alice"),
+                        observed -> assertFullIdentity(
+                                observed,
+                                DispatcherType.ASYNC,
+                                ExecutionScope.platform(),
+                                "alice"));
+        assertThat(evidence.observedContexts())
+                .extracting(ObservedContext::correlationId)
+                .containsOnly(evidence.observedContexts().getFirst().correlationId());
+
+        evidence.reset();
+        HttpResponse<String> error = get("/managed/error", alice, null, null);
+        assertThat(error.statusCode()).isEqualTo(500);
+        assertThat(evidence.observedContexts())
+                .satisfiesExactly(
+                        observed -> assertFullIdentity(
+                                observed,
+                                DispatcherType.REQUEST,
+                                ExecutionScope.platform(),
+                                "alice"),
+                        observed -> assertFullIdentity(
+                                observed,
+                                DispatcherType.ERROR,
+                                ExecutionScope.tenant(new TenantId("tenant-a")),
+                                "alice"));
+        assertThat(evidence.observedContexts())
+                .extracting(ObservedContext::correlationId)
+                .containsOnly(evidence.observedContexts().getFirst().correlationId());
+        assertThat(evidence.contextAfterDispatch()).containsOnly(false);
+    }
+
     private HttpResponse<String> get(
             String path, String bearerToken, String tenantId, String correlationId)
             throws Exception {
         HttpRequest.Builder request = HttpRequest.newBuilder()
                 .uri(URI.create("http://localhost:" + port + path))
                 .timeout(Duration.ofSeconds(10))
-                .header("X-Correlation-Id", correlationId)
                 .GET();
         if (bearerToken != null) {
             request.header("Authorization", "Bearer " + bearerToken);
@@ -190,7 +259,23 @@ class HttpExecutionBoundaryIT {
         if (tenantId != null) {
             request.header(ExecutionContextHandlerInterceptor.TENANT_HEADER, tenantId);
         }
+        if (correlationId != null) {
+            request.header("X-Correlation-Id", correlationId);
+        }
         return HTTP.send(request.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private static void assertFullIdentity(
+            ObservedContext observed,
+            DispatcherType dispatcherType,
+            ExecutionScope scope,
+            String subject) {
+        assertThat(observed.dispatcherType()).isEqualTo(dispatcherType);
+        assertThat(observed.scope()).isEqualTo(scope);
+        assertThat(observed.actor())
+                .isEqualTo(new Actor(ActorType.USER, subject, Set.of("tenant:read")));
+        assertThat(observed.initiator()).isEqualTo(new Initiator(ActorType.USER, subject));
+        assertThat(observed.correlationId()).isNotBlank();
     }
 
     private static void assertProblem(
@@ -258,6 +343,7 @@ class HttpExecutionBoundaryIT {
         ExecutionContextHandlerSelection managedHttpHandlers() {
             return ExecutionContextHandlerSelection.builder()
                     .managePackage(HttpExecutionBoundaryIT.class.getPackageName())
+                    .manageHandlers(BasicErrorController.class)
                     .excludeHandlers(ExcludedController.class)
                     .build();
         }
@@ -285,6 +371,27 @@ class HttpExecutionBoundaryIT {
         @Bean
         DispatchCleanupProbe dispatchCleanupProbe(InvocationEvidence evidence) {
             return new DispatchCleanupProbe(evidence);
+        }
+
+        @Bean
+        WebMvcConfigurer observedContextConfigurer(InvocationEvidence evidence) {
+            return new WebMvcConfigurer() {
+                @Override
+                public void addInterceptors(InterceptorRegistry registry) {
+                    registry.addInterceptor(new HandlerInterceptor() {
+                                @Override
+                                public boolean preHandle(
+                                        HttpServletRequest request,
+                                        HttpServletResponse response,
+                                        Object handler) {
+                                    ExecutionContextHolder.current().ifPresent(context ->
+                                            evidence.observe(request.getDispatcherType(), context));
+                                    return true;
+                                }
+                            })
+                            .order(Ordered.LOWEST_PRECEDENCE);
+                }
+            };
         }
     }
 
@@ -330,6 +437,12 @@ class HttpExecutionBoundaryIT {
         String error() {
             ExecutionContextHolder.require();
             throw new IllegalStateException("expected test error");
+        }
+
+        @GetMapping("/context-then-denied")
+        String contextThenDenied() {
+            ExecutionContextHolder.require();
+            throw new AccessDeniedException("expected denial after context installation");
         }
     }
 
@@ -377,6 +490,7 @@ class HttpExecutionBoundaryIT {
         private final AtomicInteger businessInvocations = new AtomicInteger();
         private final List<DispatcherType> dispatches = new CopyOnWriteArrayList<>();
         private final List<Boolean> contextAfterDispatch = new CopyOnWriteArrayList<>();
+        private final List<ObservedContext> observedContexts = new CopyOnWriteArrayList<>();
 
         void businessInvocation() {
             businessInvocations.incrementAndGet();
@@ -399,12 +513,33 @@ class HttpExecutionBoundaryIT {
             return new ArrayList<>(contextAfterDispatch);
         }
 
+        void observe(DispatcherType dispatcherType, ExecutionContext context) {
+            observedContexts.add(new ObservedContext(
+                    dispatcherType,
+                    context.scope(),
+                    context.actor(),
+                    context.initiator(),
+                    context.correlationId()));
+        }
+
+        List<ObservedContext> observedContexts() {
+            return new ArrayList<>(observedContexts);
+        }
+
         void reset() {
             businessInvocations.set(0);
             dispatches.clear();
             contextAfterDispatch.clear();
+            observedContexts.clear();
         }
     }
+
+    record ObservedContext(
+            DispatcherType dispatcherType,
+            ExecutionScope scope,
+            Actor actor,
+            Initiator initiator,
+            String correlationId) {}
 
     @Order(Ordered.HIGHEST_PRECEDENCE)
     static final class DispatchCleanupProbe extends OncePerRequestFilter {

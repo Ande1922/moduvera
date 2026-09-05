@@ -63,6 +63,13 @@ permissions and an optional tenant assertion. Handler resolution then selects
 the entry mode and the interceptor installs the context immediately before the
 Controller runs.
 
+The default correlation resolver establishes the first valid
+`X-Correlation-Id` or generated ID in the shared Servlet request attribute. The
+Controller context, later security Problem rendering, and selected redispatches
+therefore reuse one value even when the Resource Server is used without the Web
+Starter correlation filter. An App-provided `RequestCorrelationIdResolver` remains
+the supported customization seam and owns equivalent request-stability semantics.
+
 - A Platform handler creates Platform scope. A client `Tenant-Id` does not
   change it and is not a tenant-switch protocol.
 - A Tenant handler requires a concrete trusted tenant. A USER uses its

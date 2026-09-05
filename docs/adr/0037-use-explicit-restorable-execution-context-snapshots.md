@@ -175,7 +175,9 @@ Evidence: focused resolver/interceptor tests; embedded Tomcat with RSA-signed
 JWTs, virtual request threads, real Security and MVC chains, method/class/default
 selection, 401/403 Problem responses, side-effect guards, excluded handlers,
 same-tenant distinct identities and REQUEST/ASYNC/ERROR cleanup; Catalog App
-consumer IT and the applicable reference-product HTTP scenarios. Usage and
+consumer IT with full virtual-thread identity and same-thread cleanup; one
+generated correlation across Controller, security Problem and selected
+redispatches; and the applicable reference-product HTTP scenarios. Usage and
 the supported lifecycle are documented in
 [`HTTP-EXECUTION-BOUNDARIES.md`](../implementation/HTTP-EXECUTION-BOUNDARIES.md).
 
