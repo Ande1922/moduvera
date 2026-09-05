@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.List;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
@@ -97,6 +98,147 @@ class ExecutionContextSnapshotTest {
                     .isInstanceOf(ExecutionException.class)
                     .hasCauseInstanceOf(MissingExecutionContextException.class);
         }
+    }
+
+    @Test
+    void callableWrapPreservesTheOriginalCheckedException() {
+        Exception failure = new Exception("checked");
+        Callable<String> wrapped = ExecutionContextHolder.call(
+                TENANT_A, () -> ExecutionContextSnapshot.capture().wrap(() -> {
+                    throw failure;
+                }));
+
+        assertThatThrownBy(wrapped::call).isSameAs(failure);
+        assertThat(ExecutionContextHolder.current()).isEmpty();
+    }
+
+    @Test
+    void rejectsNullFactoryInputAndKeepsStrictCaptureFailClosed() {
+        assertThatThrownBy(() -> ExecutionContextSnapshot.of(null))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("context");
+        assertThatThrownBy(ExecutionContextSnapshot::capture)
+                .isInstanceOf(MissingExecutionContextException.class);
+        assertThat(ExecutionContextHolder.current()).isEmpty();
+    }
+
+    @Test
+    void explicitAbsentSnapshotDoesNotReadItsConstructionThreadIdentity() {
+        ExecutionContextSnapshot absent =
+                ExecutionContextHolder.call(TENANT_A, ExecutionContextSnapshot::absent);
+
+        ExecutionContextHolder.run(TENANT_B, () -> {
+            try (var ignored = absent.openScope()) {
+                assertThat(ExecutionContextHolder.current()).isEmpty();
+                assertThatThrownBy(ExecutionContextHolder::require)
+                        .isInstanceOf(MissingExecutionContextException.class);
+            }
+            assertThat(ExecutionContextHolder.require()).isSameAs(TENANT_B);
+        });
+        assertThat(ExecutionContextHolder.current()).isEmpty();
+    }
+
+    @Test
+    void restoresEveryPresentAndAbsentSnapshotCombination() {
+        ExecutionContextSnapshot capturedAbsent = ExecutionContextSnapshot.captureAllowingAbsent();
+        ExecutionContextSnapshot capturedPresent =
+                ExecutionContextHolder.call(TENANT_A, ExecutionContextSnapshot::captureAllowingAbsent);
+
+        try (var ignored = capturedAbsent.openScope()) {
+            assertThat(ExecutionContextHolder.current()).isEmpty();
+        }
+        assertThat(ExecutionContextHolder.current()).isEmpty();
+
+        try (var ignored = capturedPresent.openScope()) {
+            assertThat(ExecutionContextHolder.require()).isSameAs(TENANT_A);
+        }
+        assertThat(ExecutionContextHolder.current()).isEmpty();
+
+        ExecutionContextHolder.run(TENANT_B, () -> {
+            try (var ignored = capturedAbsent.openScope()) {
+                assertThat(ExecutionContextHolder.current()).isEmpty();
+            }
+            assertThat(ExecutionContextHolder.require()).isSameAs(TENANT_B);
+
+            try (var ignored = capturedPresent.openScope()) {
+                assertThat(ExecutionContextHolder.require()).isSameAs(TENANT_A);
+            }
+            assertThat(ExecutionContextHolder.require()).isSameAs(TENANT_B);
+        });
+        assertThat(ExecutionContextHolder.current()).isEmpty();
+    }
+
+    @Test
+    void absentSnapshotScopesAlsoRequireReverseClosure() {
+        ExecutionContextHolder.run(TENANT_B, () -> {
+            ExecutionContextHolder.Scope outer = ExecutionContextSnapshot.absent().openScope();
+            ExecutionContextHolder.Scope inner = ExecutionContextSnapshot.absent().openScope();
+            try {
+                assertThatThrownBy(outer::close)
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("reverse order");
+                assertThat(ExecutionContextHolder.current()).isEmpty();
+            } finally {
+                inner.close();
+                outer.close();
+            }
+            assertThat(ExecutionContextHolder.require()).isSameAs(TENANT_B);
+        });
+        assertThat(ExecutionContextHolder.current()).isEmpty();
+    }
+
+    @Test
+    void preservesNormalRuntimeAndErrorOutcomesWhileRestoring() throws Exception {
+        ExecutionContextSnapshot snapshot = ExecutionContextSnapshot.of(TENANT_A);
+        RuntimeException runtimeFailure = new IllegalStateException("runtime");
+        Error errorFailure = new AssertionError("error");
+
+        ExecutionContextHolder.run(TENANT_B, () -> {
+            Runnable normal = snapshot.wrap((Runnable) () ->
+                    assertThat(ExecutionContextHolder.require()).isSameAs(TENANT_A));
+            normal.run();
+            assertThat(ExecutionContextHolder.require()).isSameAs(TENANT_B);
+
+            assertThatThrownBy(snapshot.wrap((Runnable) () -> {
+                        throw runtimeFailure;
+                    })::run)
+                    .isSameAs(runtimeFailure);
+            assertThat(ExecutionContextHolder.require()).isSameAs(TENANT_B);
+
+            assertThatThrownBy(snapshot.wrap((Runnable) () -> {
+                        throw errorFailure;
+                    })::run)
+                    .isSameAs(errorFailure);
+            assertThat(ExecutionContextHolder.require()).isSameAs(TENANT_B);
+        });
+
+        Callable<String> returning = snapshot.wrap(() -> "result");
+        assertThat(returning.call()).isEqualTo("result");
+        assertThat(ExecutionContextHolder.current()).isEmpty();
+    }
+
+    @Test
+    void capturedSnapshotRemainsUsableAfterItsParentScopeExits() throws Exception {
+        ExecutionContextSnapshot snapshot =
+                ExecutionContextHolder.call(TENANT_A, ExecutionContextSnapshot::capture);
+
+        assertThat(ExecutionContextHolder.current()).isEmpty();
+        assertThat(snapshot.wrap(ExecutionContextHolder::require).call()).isSameAs(TENANT_A);
+        assertThat(ExecutionContextHolder.current()).isEmpty();
+    }
+
+    @Test
+    void legacyHolderAndSnapshotEntryPointsRemainUsable() throws Exception {
+        assertThat(ExecutionContextHolder.call(TENANT_A, () -> "holder-result"))
+                .isEqualTo("holder-result");
+        ExecutionContextHolder.run(TENANT_A, () -> assertThat(ExecutionContextHolder.require())
+                .isSameAs(TENANT_A));
+
+        ExecutionContextSnapshot snapshot = ExecutionContextSnapshot.of(TENANT_A);
+        snapshot.wrap((Runnable) () -> assertThat(ExecutionContextHolder.require()).isSameAs(TENANT_A))
+                .run();
+        assertThat(snapshot.wrap(() -> "snapshot-result").call()).isEqualTo("snapshot-result");
+        assertThat(ExecutionContextHolder.current()).isEmpty();
     }
 
     private static ExecutionContext context(String tenant, String subject, String correlation) {
