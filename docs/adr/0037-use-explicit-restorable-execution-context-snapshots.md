@@ -249,7 +249,9 @@ Implementation and consumer evidence remain the responsibility of ticket 09.
 
 ## Tenant-only message compatibility — ticket 10
 
-Status: verified for the existing message framework, reference consumers, and runtime Adapters.
+Status: verified for tenant-only envelope compatibility, reference-consumer contract handling,
+context restoration, and runtime Adapter delivery. Broker producer authentication and
+destination ACL enforcement remain deployment prerequisites outside this ticket's evidence.
 
 Outbound business-message adapters require a concrete Tenant before constructing or
 appending an envelope. Platform and missing context therefore cannot create a tenantless
@@ -259,16 +261,19 @@ Holder.
 
 Every inbound delivery validates the tenant-only envelope and provider contract before
 Application invocation, then reconstructs Tenant, Initiator and correlation from that message
-with the consumer's local Actor and permissions. Wire permissions remain untrusted. The
-per-message scope restores the listener thread's exact prior identity after success, retry,
-duplicate or rejection. Both reference consumers run the shared inbound contract TCK.
+with the consumer's local Actor and permissions. This source and contract matching is not
+producer authentication. Trust in the envelope depends on deployment-level authenticated
+producers and destination ACLs; wire permissions remain untrusted. The per-message scope
+restores the listener thread's exact prior identity after success, retry, duplicate or rejection.
+Both reference consumers run the shared inbound contract TCK.
 
 Evidence: message mapper and shared TCK tests preserve required tenant and identity fields,
 provider identities and the no-wire-permissions contract; focused consumer and outbound tests
 cover tenant construction and prior-worker restoration; PostgreSQL Outbox relay tests publish a
 persisted message after the request Scope closes; and the inventory application test uses real
 Kafka plus a same-partition consumer-progress barrier before asserting rejected-message side
-effects. See [the tenant-only message context guide](../implementation/TENANT-ONLY-MESSAGE-CONTEXT.md).
+effects. Those plaintext Testcontainers scenarios do not verify broker authentication or ACL
+configuration. See [the tenant-only message context guide](../implementation/TENANT-ONLY-MESSAGE-CONTEXT.md).
 
 ## Composition and consumer qualification — ticket 11
 

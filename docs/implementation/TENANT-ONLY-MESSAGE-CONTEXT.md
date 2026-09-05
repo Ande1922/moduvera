@@ -26,7 +26,8 @@ the envelope.
 
 The reliable inbound endpoint decodes the envelope and validates its required
 fields, kind, type, source, and destination before Inbox admission or business
-handling. For each delivery attempt it constructs a new trusted context from:
+handling. For each delivery attempt it constructs a new per-message Execution
+Context from:
 
 - the envelope's required Tenant ID, Initiator, and correlation identifier;
 - the consumer's configured local Actor and permissions.
@@ -36,6 +37,14 @@ already present on a reused listener thread is neither inherited nor a reason
 to reject the message. The endpoint installs the per-message context only for
 the Inbox transaction and handler call, then restores the exact previous
 worker state after success, retry, duplicate delivery, or failure.
+
+Kind, type, source, and destination matching validates the provider contract;
+it does not authenticate the producer. A deployment must authenticate allowed
+producers and enforce destination ACLs before treating the envelope's Tenant,
+Initiator, and correlation claims as trustworthy. The plaintext Kafka
+Testcontainers scenarios verify delivery and consumer behavior, but they do
+not verify that broker authentication or ACL boundary. Source matching alone
+is not authentication, as specified by ADR 0021.
 
 Malformed required identity fields and contract mismatches are rejected before
 the Application handler. Tests that send such a rejection asynchronously must
