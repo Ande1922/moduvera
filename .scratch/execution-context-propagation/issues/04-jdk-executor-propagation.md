@@ -1,5 +1,5 @@
 Type: issue
-Status: claimed
+Status: resolved
 Blocked by: 03
 
 # JDK 执行器传播
@@ -19,14 +19,14 @@ Test seams: T02、T03、T08、T09
 
 ## Acceptance criteria
 
-- [ ] 提供显式 Executor/ExecutorService 装饰，每次直接提交使用允许缺失捕获；创建装饰器时不保存请求身份。
-- [ ] 真实单工作线程连续处理不同租户、同租户不同请求、Platform 与缺失，任务内身份正确且退出后恢复原状态。
-- [ ] 每任务虚拟线程、inline Executor 与 CallerRuns 使用同一恢复语义，不依赖继承 ThreadLocal，不把 carrier 切换当作新任务。
-- [ ] execute、submit、适用批量调用的值、异常、拒绝和 Future 行为与委托契约一致；上下文包装不新增任务生命周期所有权。
-- [ ] 覆盖任务开始前取消、运行中取消、超时及忽略/延后响应中断的工作；通知发生时不清理另一线程，实际退出后清理。
-- [ ] shutdown、shutdownNow、awaitTermination、close 与待执行任务处理遵循原 ExecutorService 契约；记录真实委托策略及验证，不隐式接管其他执行器。
-- [ ] 显式 Bound 回调再经过执行器装饰时使用其原绑定身份；FutureTask 等嵌套安全，不反射拆解，也不承诺恰好一层包装。
-- [ ] 提供公共消费者用法，说明“直接任务提交时捕获”不能替代“Future 回调注册时绑定”；依赖和生命周期说明随票完成。
+- [x] 提供显式 Executor/ExecutorService 装饰，每次直接提交使用允许缺失捕获；创建装饰器时不保存请求身份。
+- [x] 真实单工作线程连续处理不同租户、同租户不同请求、Platform 与缺失，任务内身份正确且退出后恢复原状态。
+- [x] 每任务虚拟线程、inline Executor 与 CallerRuns 使用同一恢复语义，不依赖继承 ThreadLocal，不把 carrier 切换当作新任务。
+- [x] execute、submit、适用批量调用的值、异常、拒绝和 Future 行为与委托契约一致；上下文包装不新增任务生命周期所有权。
+- [x] 覆盖任务开始前取消、运行中取消、超时及忽略/延后响应中断的工作；通知发生时不清理另一线程，实际退出后清理。
+- [x] shutdown、shutdownNow、awaitTermination、close 与待执行任务处理遵循原 ExecutorService 契约；记录真实委托策略及验证，不隐式接管其他执行器。
+- [x] 显式 Bound 回调再经过执行器装饰时使用其原绑定身份；FutureTask 等嵌套安全，不反射拆解，也不承诺恰好一层包装。
+- [x] 提供公共消费者用法，说明“直接任务提交时捕获”不能替代“Future 回调注册时绑定”；依赖和生命周期说明随票完成。
 
 ## Verification
 
@@ -41,3 +41,16 @@ Test seams: T02、T03、T08、T09
 ## Comments
 
 - 2026-09-05：等待 03；无需等待或顺带实现 05。
+
+## Answer
+
+Implemented and integrated on 2026-09-06.
+
+- Base: `5e687cfdb21d2d9dc55be42a5ffb93a59b15c452`. Worker head: `269116daf70afb277913c3613ecadd1311a92231`.
+- Integrated commit: `8a61f7cafa9dc2c509a18818d9b8f867fb3e6d8e` on `codex/execution-context-20260905-integration`.
+- Worktree: `/private/tmp/execution-context-frontier-20260905/04`; branch: `codex/execution-context-20260905-04`.
+- Verification PASS: Worker Kernel verify passed 52 tests with Spotless, PMD and JaCoCo; public Notes consumer passed 1/1. Bulk propagation mutation failed as expected, restored implementation passed 9/9 executor tests. Kernel remains java.base only. Integrated core context, JDK executors, registered callbacks, Notes public consumer and AI Adapter/consumer test selection passed across 13 modules. All 3 ticket files and the allocated ADR section match the reviewed worker head.
+- Standards review completed clean and Spec review completed clean against the same base/worker head.
+- Acceptance mapping and exact commands: [worker report](../evidence/04/worker-report.md).
+- Review evidence: [Standards](../evidence/04/review-standards-closure-1.md) and [Spec](../evidence/04/review-spec-closure-1.md).
+- This ticket result is not final feature acceptance; parent spec/finding remain unchanged.

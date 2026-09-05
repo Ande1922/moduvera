@@ -6,7 +6,7 @@ Code base: ce1636f82f9652b2b14dd9e146e62c748fbf3233. Integration branch: codex/e
 
 ## Current frontier
 
-04, 05, 06, 07, 09, 10; claimed now: 04, 06, 07, 09, 10.
+05, 06, 07, 09, 10; claimed now: 06, 07, 09, 10.
 
 ## Evidence rules
 
@@ -40,3 +40,7 @@ Base `46ac0c4c189533ae0d13ddd79ba06a735657acf9`; worker head `a1b0aaccb421d81f78
 ## Ticket 08 integrated
 
 Base `46ac0c4c189533ae0d13ddd79ba06a735657acf9`; worker head `0e5c6dba5a8895173e66ac6d897c7c56a9bcb6b7`; integrated `5e80a8dcbdc44262098d2cef3771f1eeb813fa86`. Branch `codex/execution-context-20260905-08`, worktree `/private/tmp/execution-context-frontier-20260905/08`. Standards and Spec clean at the same fixed range. Verification PASS: Worker affected verify passed Kernel 37, AI Adapter 4 and independent consumer 5 tests with dependency convergence, Spotless and PMD. Six native carrier collisions reject before model calls; delayed and concurrent true streams restore complete context. Integrated Kernel 43, AI Adapter 4 and independent consumer 5 tests passed; all 10 ticket files and the allocated ADR section match the reviewed worker head. Resolved Spring AI 2.0.1, Reactor 3.8.7 and Spring Framework 7.0.9; Kernel/non-AI dependency boundaries verified. Evidence is under `evidence/08/`. Remaining frontier: 04, 05, 06, 07, 09, 10.
+
+## Ticket 04 integrated
+
+Base `5e687cfdb21d2d9dc55be42a5ffb93a59b15c452`; worker head `269116daf70afb277913c3613ecadd1311a92231`; integrated `8a61f7cafa9dc2c509a18818d9b8f867fb3e6d8e`. Branch `codex/execution-context-20260905-04`, worktree `/private/tmp/execution-context-frontier-20260905/04`. Standards and Spec clean at the same fixed range. Verification PASS: Worker Kernel verify passed 52 tests with Spotless, PMD and JaCoCo; public Notes consumer passed 1/1. Bulk propagation mutation failed as expected, restored implementation passed 9/9 executor tests. Kernel remains java.base only. Integrated core context, JDK executors, registered callbacks, Notes public consumer and AI Adapter/consumer test selection passed across 13 modules. All 3 ticket files and the allocated ADR section match the reviewed worker head. Evidence is under `evidence/04/`. Remaining frontier: 05, 06, 07, 09, 10.
