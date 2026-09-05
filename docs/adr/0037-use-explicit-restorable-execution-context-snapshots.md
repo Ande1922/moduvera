@@ -110,11 +110,31 @@ per-trusted-event long-lived listener example, using only the public Kernel API.
 
 ## JDK executors — ticket 04
 
-Status: planned.
+Status: verified for explicitly decorated JDK Executor and ExecutorService instances.
 
-Direct task submission captures present or absent context. Future, cancellation and shutdown semantics remain owned by the delegated executor.
+`ContextExecutors` creates reusable decorators without capturing their construction thread.
+Every direct `execute`, `submit`, `invokeAll` or `invokeAny` task captures the submitting
+thread's present or absent state, then opens that fixed snapshot only while the task actually
+runs. Platform threads, virtual threads, inline execution and `CallerRunsPolicy` use the same
+restoration path. The decorator does not intercept raw Threads, the common pool or any executor
+that the consumer did not explicitly decorate.
 
-Implementation and consumer evidence remain the responsibility of ticket 04.
+The ExecutorService decorator calls the corresponding delegate submission, bulk and lifecycle
+methods. It returns the delegate's Futures and the exact `shutdownNow` queued-task list; it
+forwards shutdown, termination waiting and close directly. Cancellation and timeout therefore
+remain notifications owned by the delegate: they do not clear another thread's context, and an
+interrupted task keeps its snapshot until its delegate actually exits. An already-bound callback
+may be submitted through the decorator safely; its inner fixed snapshot wins for the callback
+call, with ordinary nested restoration and no reflective task unwrapping.
+
+Evidence: Kernel tests compare original and decorated real JDK executors for values, failures,
+Future cancellation, rejection, bulk calls, timeout and lifecycle behavior. They also exercise a
+reused single platform worker with distinct tenants, same-tenant distinct identity, Platform and
+absence; a virtual-thread-per-task executor; inline and CallerRuns execution; cancellation before
+start and during delayed interruption; delegate-owned queued Future tasks; explicit Bound
+nesting; and restoration after actual exit. The independent `simple-notes-demo` consumer shows
+that executor submission capture covers the submitted task, while a Future callback still needs
+its own registration-time binding.
 
 ## Spring task executors — ticket 05
 
