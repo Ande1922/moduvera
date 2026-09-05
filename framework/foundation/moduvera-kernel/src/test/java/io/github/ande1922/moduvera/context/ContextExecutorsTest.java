@@ -138,6 +138,48 @@ class ContextExecutorsTest {
     }
 
     @Test
+    void propagatesAndRestoresContextForEveryBulkSubmissionOverload() throws Exception {
+        ExecutorService raw = newContextWorker();
+        ExecutorService decorated = ContextExecutors.propagating(raw);
+        try {
+            List<Future<ExecutionContext>> all;
+            try (var ignored = ExecutionContextHolder.open(REQUEST_A)) {
+                all = decorated.invokeAll(
+                        List.of(ExecutionContextHolder::require, ExecutionContextHolder::require));
+            }
+            assertThat(all.get(0).get(2, TimeUnit.SECONDS)).isSameAs(REQUEST_A);
+            assertThat(all.get(1).get(2, TimeUnit.SECONDS)).isSameAs(REQUEST_A);
+            assertWorkerRestored(raw);
+
+            List<Future<ExecutionContext>> timedAll;
+            try (var ignored = ExecutionContextHolder.open(PLATFORM)) {
+                timedAll = decorated.invokeAll(
+                        List.of(ExecutionContextHolder::require), 2, TimeUnit.SECONDS);
+            }
+            assertThat(timedAll).singleElement().satisfies(future -> {
+                assertThat(future.isCancelled()).isFalse();
+                assertThat(future.get(2, TimeUnit.SECONDS)).isSameAs(PLATFORM);
+            });
+            assertWorkerRestored(raw);
+
+            ExecutionContext any;
+            try (var ignored = ExecutionContextHolder.open(SAME_TENANT_OTHER_IDENTITY)) {
+                any = decorated.invokeAny(List.of(ExecutionContextHolder::require));
+            }
+            assertThat(any).isSameAs(SAME_TENANT_OTHER_IDENTITY);
+            assertWorkerRestored(raw);
+
+            Optional<ExecutionContext> absent = decorated.invokeAny(
+                    List.of(ExecutionContextHolder::current), 2, TimeUnit.SECONDS);
+            assertThat(absent).isEmpty();
+            assertWorkerRestored(raw);
+        } finally {
+            stop(raw);
+        }
+        assertThat(ExecutionContextHolder.current()).isEmpty();
+    }
+
+    @Test
     void cancellationBeforeStartNeverOpensTheCapturedScope() throws Exception {
         CountDownLatch workerStarted = new CountDownLatch(1);
         CountDownLatch releaseWorker = new CountDownLatch(1);
@@ -388,6 +430,11 @@ class ContextExecutorsTest {
     private static void stop(ExecutorService executor) throws InterruptedException {
         executor.shutdownNow();
         assertThat(executor.awaitTermination(2, TimeUnit.SECONDS)).isTrue();
+    }
+
+    private static void assertWorkerRestored(ExecutorService raw) throws Exception {
+        assertThat(raw.submit(ExecutionContextHolder::require).get(2, TimeUnit.SECONDS))
+                .isSameAs(WORKER);
     }
 
     private static ExecutionContext tenantContext(
