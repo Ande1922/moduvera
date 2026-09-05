@@ -1,5 +1,5 @@
 Type: issue
-Status: claimed
+Status: resolved
 Blocked by: 02
 
 # tenant-only 消息边界兼容
@@ -19,15 +19,15 @@ Test seams: T07、T08、T09
 
 ## Acceptance criteria
 
-- [ ] 既有 envelope 的 tenantid 继续必填且合法，kind/type/source/destination 及 provider-owned 常量不改变；不新增平台消息、权限字段或更强信任协议。
-- [ ] 从当前执行上下文构建租户业务消息的入口要求合法 Tenant；Platform/缺失在该入口拒绝，不形成空租户消息或 Outbox 记录，相关业务写入按既有事务契约无副作用。
-- [ ] 已合法构建/持久化的 tenant-only envelope 保持既有发布、恢复和投递契约；不给 Relay/Transport 额外增加原请求 Holder 前置，原请求结束或后台工作线程 Holder 为空不阻止合法消息投递。
-- [ ] 入站保留契约字段与可信生产者边界验证，每条消息重建 Tenant、Initiator、Correlation 及消费方本地 Actor/权限；不信任 payload/wire 权限或工作线程偶然身份。
-- [ ] 合法消息、消息契约/可信声明中的身份或租户缺失/冲突、重试/重复投递及错误退出后，上下文建立/恢复正确；工作线程旧身份与本条消息不同不是拒绝理由，不把长期监听器注册时的快照固定到全部事件。
-- [ ] 通过生产数据库/消息 Adapter 与真实 PostgreSQL/MySQL/Kafka 等适用接缝证明 Inbox/Outbox 原子性、租户隔离和 tenant-only 兼容；模型或序列化单测不替代基础设施证据。
-- [ ] 异步拒绝后的无业务副作用断言带消费完成屏障；测试若消息从未被消费必须不能“已通过”，不以发送前就成立的计数充当证据。
-- [ ] 复用现有共享契约 TCK 和消费者，保留异步-only 不新增同步 API、协议转换仅在语义有差异时引入模型的约束。
-- [ ] 必要兼容、tenant-only 接入说明、运行证据与架构/消费者回归随票交付；源码已兼容的部分记录验证，不为产生代码 diff 强行重构。
+- [x] 既有 envelope 的 tenantid 继续必填且合法，kind/type/source/destination 及 provider-owned 常量不改变；不新增平台消息、权限字段或更强信任协议。
+- [x] 从当前执行上下文构建租户业务消息的入口要求合法 Tenant；Platform/缺失在该入口拒绝，不形成空租户消息或 Outbox 记录，相关业务写入按既有事务契约无副作用。
+- [x] 已合法构建/持久化的 tenant-only envelope 保持既有发布、恢复和投递契约；不给 Relay/Transport 额外增加原请求 Holder 前置，原请求结束或后台工作线程 Holder 为空不阻止合法消息投递。
+- [x] 入站保留契约字段与可信生产者边界验证，每条消息重建 Tenant、Initiator、Correlation 及消费方本地 Actor/权限；不信任 payload/wire 权限或工作线程偶然身份。
+- [x] 合法消息、消息契约/可信声明中的身份或租户缺失/冲突、重试/重复投递及错误退出后，上下文建立/恢复正确；工作线程旧身份与本条消息不同不是拒绝理由，不把长期监听器注册时的快照固定到全部事件。
+- [x] 通过生产数据库/消息 Adapter 与真实 PostgreSQL/MySQL/Kafka 等适用接缝证明 Inbox/Outbox 原子性、租户隔离和 tenant-only 兼容；模型或序列化单测不替代基础设施证据。
+- [x] 异步拒绝后的无业务副作用断言带消费完成屏障；测试若消息从未被消费必须不能“已通过”，不以发送前就成立的计数充当证据。
+- [x] 复用现有共享契约 TCK 和消费者，保留异步-only 不新增同步 API、协议转换仅在语义有差异时引入模型的约束。
+- [x] 必要兼容、tenant-only 接入说明、运行证据与架构/消费者回归随票交付；源码已兼容的部分记录验证，不为产生代码 diff 强行重构。
 
 ## Verification
 
@@ -42,3 +42,16 @@ Test seams: T07、T08、T09
 ## Comments
 
 - 2026-09-05：等待 02；本票负责 US20 的消息部分，Job/Lock 由 02 验证。
+
+## Answer
+
+Implemented and integrated on 2026-09-06.
+
+- Base: `928e8f2ca1c86668dbbed699de4bd63bd97d1ed8`. Worker head: `73edf47d28ecb5b4e86af485684121635411f0ce`.
+- Integrated commit: `1f02a5d4ede11fc6ad6dc604cf0c1dd369a68190` on `codex/execution-context-20260905-integration`.
+- Worktree: `/private/tmp/execution-context-frontier-20260905/10`; branch: `codex/execution-context-20260905-10`.
+- Verification PASS: Worker real PostgreSQL Outbox6, PostgreSQL/Kafka Inventory8, MySQL8, Order7 and architecture20 tests passed. Documentation-only closure reused unchanged runtime evidence. Integrated message/order/inventory/auth focused verify passed15modules in17.462s, with unit suites and Enforcer/Spotless/PMD/JaCoCo. All11 ticket files and allocated ADR section match the reviewed head; log evidence/10/integrated-message-http-verify.log.
+- Standards review completed clean and Spec review completed clean against the same base/worker head.
+- Acceptance mapping and exact commands: [worker report](../evidence/10/worker-report.md).
+- Review evidence: [Standards](../evidence/10/review-standards-closure-1.md) and [Spec](../evidence/10/review-spec-closure-1.md).
+- This ticket result is not final feature acceptance; parent spec/finding remain unchanged.

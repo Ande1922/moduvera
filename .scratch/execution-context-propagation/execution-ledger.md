@@ -6,7 +6,7 @@ Code base: ce1636f82f9652b2b14dd9e146e62c748fbf3233. Integration branch: codex/e
 
 ## Current frontier
 
-05, 09, 10; claimed now: 05, 09, 10.
+05, 09; claimed now: 05, 09.
 
 ## Evidence rules
 
@@ -52,3 +52,13 @@ Base `46ac0c4c189533ae0d13ddd79ba06a735657acf9`; worker head `3eb2e5c3c9d5ad0780
 ## Ticket 07 integrated
 
 Base `f3ef17e028802d4072e943c167f9abea0aca5b3a`; worker head `77f93f0f468f0beec6e35b2c8f9ca9c385908c51`; integrated `8d7a7f3b8ac6aa6402f747a4e49673183d47b231`. Branch `codex/execution-context-20260905-07`, worktree `/private/tmp/execution-context-frontier-20260905/07`. Standards and Spec clean at the same fixed range. Verification PASS: Worker scoped verify passed Kernel43, Reactor Adapter8 and independent consumer2 with real Reactor3.8.7 schedulers and full context restoration; Kernel has no Reactor and Reactor-only consumer no AI. Integrated Kernel52, Reactor8/consumer2 and AI4/consumer5 tests passed across 6 modules. All 9 ticket files and allocated ADR section match the reviewed worker head. Final integration gate report wiring for external-parent consumers is tracked separately as coordinator build readiness. Evidence is under `evidence/07/`. Remaining frontier: 05, 09, 10.
+
+## Ticket 10 integrated
+
+Base `928e8f2ca1c86668dbbed699de4bd63bd97d1ed8`; worker head `73edf47d28ecb5b4e86af485684121635411f0ce`; integrated `1f02a5d4ede11fc6ad6dc604cf0c1dd369a68190`. Branch `codex/execution-context-20260905-10`, worktree `/private/tmp/execution-context-frontier-20260905/10`. Standards and Spec clean at the same fixed range. Verification PASS: Worker real PostgreSQL Outbox6, PostgreSQL/Kafka Inventory8, MySQL8, Order7 and architecture20 tests passed. Documentation-only closure reused unchanged runtime evidence. Integrated message/order/inventory/auth focused verify passed15modules in17.462s, with unit suites and Enforcer/Spotless/PMD/JaCoCo. All11 ticket files and allocated ADR section match the reviewed head; log evidence/10/integrated-message-http-verify.log. Evidence is under `evidence/10/`. Remaining frontier: 05, 09.
+
+## Integration reporting and historical reference maintenance
+
+Coordinator build-report wiring commit `e76da5ab2629196e267c24b88f47e4605661ad95` is recorded in [consumer report evidence](evidence/integration-consumer-report-wiring.md); final whole-range review and gate must include it. The draft had one link to the Filter removed by ticket06. Replaced only that dead link with its exact historical baseline/path/line, preserving the design and original gap. This nonsemantic reference repair is the sole exception to leaving the approved draft untouched; spec remains unchanged.
+
+The repository tracker checker requires a terminal parent when every child is terminal. Ticket11 explicitly preserves the parent spec/finding independent lifecycle. Therefore ticket11 will retain its nonterminal tracker state while its actual implementation, integration, reviews and checks are recorded; no parent closure or checker exemption is inferred. Final acceptance will assess the actual delivery evidence and disclose this lifecycle boundary.
