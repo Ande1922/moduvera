@@ -255,12 +255,17 @@ share.
 
 Evidence: a real streaming ChatClient and ToolCallingAdvisor loop driven by a
 test-source scripted model performs two tool rounds before the final response.
-The same wrapper isolates concurrent same-Tenant/different-identity and
-Platform requests across model, bounded-elastic tool, and response-worker
-threads; the final ChatClientResponse is consumed through the ticket 08
-response mapper. Missing/wrong native contexts stop before the delegate, a
-delegate failure remains the same exception, and bounded same-thread probes
-confirm the actual tool workers have no residual Holder binding after return.
+The same wrapper isolates four requests covering
+same-Tenant/different-identity, a different Tenant, and Platform. A bounded
+first-round barrier holds every actual delegate until all four have entered,
+so overlap is observed rather than inferred from scheduler timing. The loop
+crosses model, bounded-elastic tool, and response-worker threads; the final
+ChatClientResponse is consumed through the ticket 08 response mapper.
+Missing/wrong native contexts stop before the delegate and a delegate failure
+remains the same exception. A test-only outer callback records the Holder
+immediately before and after the production wrapper on the same actual tool
+thread, proving exact restoration after normal return and failure without
+resampling a shared scheduler.
 
 Custom Advisor code that creates internal asynchronous callbacks must still
 propagate context explicitly at those callback boundaries. Opening a Scope

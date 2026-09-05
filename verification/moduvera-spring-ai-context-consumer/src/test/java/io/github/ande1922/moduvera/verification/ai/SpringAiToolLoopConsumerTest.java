@@ -7,7 +7,9 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -57,11 +59,15 @@ class SpringAiToolLoopConsumerTest {
     void sharedWrapperIsolatesConcurrentRequestsThroughTwoToolRoundsAndFinalStream()
             throws Exception {
         List<RequestCase> requests = List.of(
-                new RequestCase("request-0", tenantContext("shared", "alice", "correlation-a")),
-                new RequestCase("request-1", tenantContext("shared", "bob", "correlation-b")),
-                new RequestCase("request-2", platformContext("operator", "correlation-platform")));
+                new RequestCase("request-0", tenantContext("tenant-a", "alice", "correlation-a")),
+                new RequestCase("request-1", tenantContext("tenant-a", "bob", "correlation-b")),
+                new RequestCase("request-2", tenantContext("tenant-b", "carol", "correlation-c")),
+                new RequestCase("request-3", platformContext("operator", "correlation-platform")));
         RecordingTool delegate = new RecordingTool();
-        ToolCallback sharedTool = SpringAiExecutionContexts.toolCallback(delegate);
+        FirstRoundBarrier firstRoundBarrier = new FirstRoundBarrier(requests.size());
+        ToolCallback contextAwareTool =
+                SpringAiExecutionContexts.toolCallback(firstRoundBarrier.wrap(delegate));
+        RestorationProbe sharedTool = new RestorationProbe(contextAwareTool);
         ConcurrentMap<String, AtomicInteger> rounds = new ConcurrentHashMap<>();
 
         try (ToolLoopRuntime runtime = new ToolLoopRuntime(
@@ -104,10 +110,18 @@ class SpringAiToolLoopConsumerTest {
                     }));
             }
 
-            runtime.releaseModelSignals();
-            List<FinalObservation> results = Flux.merge(streams)
-                .collectList()
-                .block(TIMEOUT);
+            CompletableFuture<List<FinalObservation>> resultsFuture;
+            try {
+                resultsFuture = Flux.merge(streams).collectList().toFuture();
+                runtime.releaseModelSignals();
+                assertThat(firstRoundBarrier.awaitAllEntered())
+                        .as("all four first-round delegates overlap")
+                        .isTrue();
+            } finally {
+                firstRoundBarrier.release();
+            }
+            List<FinalObservation> results =
+                    resultsFuture.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
 
             assertThat(results).isNotNull().hasSize(requests.size());
             for (RequestCase request : requests) {
@@ -131,6 +145,7 @@ class SpringAiToolLoopConsumerTest {
                     .allMatch(thread -> thread.startsWith("scripted-tool-loop-model-"));
             assertThat(delegate.allThreads())
                     .allMatch(thread -> thread.startsWith("boundedElastic-"));
+            assertRestoredOnSameThread(sharedTool.observations(), requests.size() * 2);
             assertThat(delegate.definition()).isSameAs(sharedTool.getToolDefinition());
             assertThat(delegate.metadata()).isSameAs(sharedTool.getToolMetadata());
             assertThat(sharedTool.getToolDefinition().name()).isEqualTo("context_lookup");
@@ -147,8 +162,12 @@ class SpringAiToolLoopConsumerTest {
                 assertThat(prompt.getContents())
                         .contains("system-without-identity", request.name())
                         .doesNotContain(SpringAiExecutionContexts.EXECUTION_CONTEXT_KEY)
-                        .doesNotContain("alice", "bob", "operator")
-                        .doesNotContain("correlation-a", "correlation-b", "correlation-platform");
+                        .doesNotContain("alice", "bob", "carol", "operator")
+                        .doesNotContain(
+                                "correlation-a",
+                                "correlation-b",
+                                "correlation-c",
+                                "correlation-platform");
                 ToolCallingChatOptions options = (ToolCallingChatOptions) prompt.getOptions();
                 assertThat(options.getTemperature()).isEqualTo(0.2);
                 assertThat(options.getToolCallbacks()).containsExactly(sharedTool);
@@ -162,11 +181,12 @@ class SpringAiToolLoopConsumerTest {
                     .allMatch(result -> !result.contains(SpringAiExecutionContexts.EXECUTION_CONTEXT_KEY))
                     .allMatch(result -> !result.contains("alice")
                             && !result.contains("bob")
+                            && !result.contains("carol")
                             && !result.contains("operator"))
                     .allMatch(result -> !result.contains("correlation-a")
                             && !result.contains("correlation-b")
+                            && !result.contains("correlation-c")
                             && !result.contains("correlation-platform"));
-            probeThreadsAreClear(delegate.allThreads());
         }
     }
 
@@ -176,7 +196,8 @@ class SpringAiToolLoopConsumerTest {
                 Map.<String, Object>of(),
                 Map.<String, Object>of(SpringAiExecutionContexts.EXECUTION_CONTEXT_KEY, "wrong"))) {
             RecordingTool delegate = new RecordingTool();
-            ToolCallback sharedTool = SpringAiExecutionContexts.toolCallback(delegate);
+            RestorationProbe sharedTool = new RestorationProbe(
+                    SpringAiExecutionContexts.toolCallback(delegate));
             try (ToolLoopRuntime runtime = new ToolLoopRuntime(
                     1, 1, prompt -> toolCallResponse("request-invalid", 1))) {
                 ChatClient client = ChatClient.builder(runtime.model())
@@ -197,6 +218,7 @@ class SpringAiToolLoopConsumerTest {
                         toolContext.isEmpty() ? "missing" : "wrong type");
                 assertThat(delegate.callCount()).isZero();
                 assertThat(runtime.model().modelCalls()).isOne();
+                assertRestoredOnSameThread(sharedTool.observations(), 1);
             }
         }
     }
@@ -205,7 +227,8 @@ class SpringAiToolLoopConsumerTest {
     void realToolLoopPreservesFailureAndClearsActualToolThread() throws Exception {
         ToolFailure expected = new ToolFailure();
         FailingTool delegate = new FailingTool(expected);
-        ToolCallback sharedTool = SpringAiExecutionContexts.toolCallback(delegate);
+        RestorationProbe sharedTool = new RestorationProbe(
+                SpringAiExecutionContexts.toolCallback(delegate));
         ExecutionContext request = tenantContext("failure", "carol", "correlation-failure");
 
         try (ToolLoopRuntime runtime = new ToolLoopRuntime(
@@ -228,7 +251,7 @@ class SpringAiToolLoopConsumerTest {
             assertThat(failure).isSameAs(expected);
             assertThat(delegate.observedContext()).isSameAs(request);
             assertThat(delegate.thread()).startsWith("boundedElastic-");
-            probeThreadsAreClear(Set.of(delegate.thread()));
+            assertRestoredOnSameThread(sharedTool.observations(), 1);
         }
     }
 
@@ -286,31 +309,16 @@ class SpringAiToolLoopConsumerTest {
         assertThat(actual.correlationId()).isEqualTo(expected.correlationId());
     }
 
-    private static void probeThreadsAreClear(Set<String> targetThreads) throws InterruptedException {
-        CountDownLatch observed = new CountDownLatch(targetThreads.size());
-        CountDownLatch probesFinished = new CountDownLatch(512);
-        Set<String> remaining = ConcurrentHashMap.newKeySet();
-        remaining.addAll(targetThreads);
-        AtomicReference<ExecutionContext> residue = new AtomicReference<>();
-        for (int index = 0; index < 512; index++) {
-            Schedulers.boundedElastic().schedule(() -> {
-                try {
-                    if (remaining.remove(Thread.currentThread().getName())) {
-                        ExecutionContextHolder.current().ifPresent(residue::set);
-                        observed.countDown();
-                    }
-                } finally {
-                    probesFinished.countDown();
-                }
-            });
-        }
-        assertThat(observed.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS))
-                .as("observe every actual tool thread after its callback returned")
-                .isTrue();
-        assertThat(probesFinished.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS))
-                .as("finish every bounded lifecycle probe")
-                .isTrue();
-        assertThat(residue.get()).isNull();
+    private static void assertRestoredOnSameThread(
+            List<RestorationObservation> observations, int expectedCalls) {
+        assertThat(observations).hasSize(expectedCalls).allSatisfy(observation -> {
+            assertThat(observation.afterThread()).isSameAs(observation.beforeThread());
+            assertThat(observation.afterThread().getName()).startsWith("boundedElastic-");
+            assertThat(observation.after().isPresent())
+                    .isEqualTo(observation.before().isPresent());
+            assertThat(observation.after().orElse(null))
+                    .isSameAs(observation.before().orElse(null));
+        });
     }
 
     private static ExecutionContext tenantContext(String tenant, String subject, String correlation) {
@@ -331,6 +339,116 @@ class SpringAiToolLoopConsumerTest {
     private record ToolObservation(String input, ExecutionContext context, String thread) {}
 
     private record FinalObservation(String content, ExecutionContext context, String thread) {}
+
+    private record RestorationObservation(
+            Optional<ExecutionContext> before,
+            Optional<ExecutionContext> after,
+            Thread beforeThread,
+            Thread afterThread) {}
+
+    private static final class RestorationProbe implements ToolCallback {
+
+        private final ToolCallback delegate;
+        private final List<RestorationObservation> observations = new CopyOnWriteArrayList<>();
+
+        private RestorationProbe(ToolCallback delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public ToolDefinition getToolDefinition() {
+            return delegate.getToolDefinition();
+        }
+
+        @Override
+        public ToolMetadata getToolMetadata() {
+            return delegate.getToolMetadata();
+        }
+
+        @Override
+        public String call(String input) {
+            return delegate.call(input);
+        }
+
+        @Override
+        public String call(String input, ToolContext toolContext) {
+            Optional<ExecutionContext> before = ExecutionContextHolder.current();
+            Thread beforeThread = Thread.currentThread();
+            try {
+                return delegate.call(input, toolContext);
+            } finally {
+                observations.add(new RestorationObservation(
+                        before,
+                        ExecutionContextHolder.current(),
+                        beforeThread,
+                        Thread.currentThread()));
+            }
+        }
+
+        private List<RestorationObservation> observations() {
+            return List.copyOf(observations);
+        }
+    }
+
+    private static final class FirstRoundBarrier {
+
+        private final CountDownLatch allEntered;
+        private final CountDownLatch release = new CountDownLatch(1);
+
+        private FirstRoundBarrier(int requestCount) {
+            allEntered = new CountDownLatch(requestCount);
+        }
+
+        private ToolCallback wrap(ToolCallback delegate) {
+            return new ToolCallback() {
+                @Override
+                public ToolDefinition getToolDefinition() {
+                    return delegate.getToolDefinition();
+                }
+
+                @Override
+                public ToolMetadata getToolMetadata() {
+                    return delegate.getToolMetadata();
+                }
+
+                @Override
+                public String call(String input) {
+                    return delegate.call(input);
+                }
+
+                @Override
+                public String call(String input, ToolContext toolContext) {
+                    if (input.endsWith("\"round\":1}")) {
+                        ExecutionContext expected = (ExecutionContext) toolContext.getContext()
+                            .get(SpringAiExecutionContexts.EXECUTION_CONTEXT_KEY);
+                        assertCompleteContext(expected);
+                        allEntered.countDown();
+                        awaitRelease();
+                    }
+                    return delegate.call(input, toolContext);
+                }
+            };
+        }
+
+        private boolean awaitAllEntered() throws InterruptedException {
+            return allEntered.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+        }
+
+        private void release() {
+            release.countDown();
+        }
+
+        private void awaitRelease() {
+            try {
+                if (!release.await(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
+                    throw new AssertionError("Timed out waiting to release first-round tool calls");
+                }
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError("Interrupted while waiting to release tool calls", exception);
+            }
+        }
+    }
 
     private static final class RecordingTool implements ToolCallback {
 
