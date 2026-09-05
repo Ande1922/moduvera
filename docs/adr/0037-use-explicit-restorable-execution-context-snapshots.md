@@ -138,11 +138,35 @@ its own registration-time binding.
 
 ## Spring task executors — ticket 05
 
-Status: planned.
+Status: verified for explicitly configured Spring TaskExecutor instances and Async proxy routes.
 
-Selected TaskExecutor instances use a reusable TaskDecorator. Actual Async proxy routing defines the propagation boundary.
+`ExecutionContextTaskDecorator` is a reusable, identity-free Spring `TaskDecorator`. Spring
+invokes it for each actual task submission, where it uses `captureAllowingAbsent()` and a named
+`BoundRunnable`; constructing the decorator or its containing Bean does not capture a request.
+The bound task installs the submitting thread's Tenant, Platform or explicit absent state only
+while the delegate actually runs, then restores the worker's full prior identity at actual exit.
 
-Implementation and consumer evidence remain the responsibility of ticket 05.
+Only TaskExecutor instances configured with the decorator are covered. An `@Async` invocation is
+covered only when the real proxy routes it through one of those selected executors. Other
+executors, raw Threads and the common pool remain unchanged. Future or SDK callbacks owned by a
+request still use registration-time Snapshot binding; task submission propagation does not bind
+callbacks registered later.
+
+The Spring executor retains ownership of values, Future exception observation, rejection,
+cancellation and lifecycle. Cancellation or timeout notification does not close another
+thread's Scope: a running task keeps its snapshot until its delegate exits. Spring may decorate
+an internal Future task, so failures from `submit` and Future-returning `@Async` methods are
+observed through the returned Future rather than assumed visible from `Runnable.run`.
+
+Evidence: Spring Framework 7.0.9 under Spring Boot 4.1.1 and Java 26; focused adapter tests; and
+an independent BOM-managed Spring consumer with a real ApplicationContext, single-worker
+`ThreadPoolTaskExecutor` reuse, selected and unselected executors, and an actual `@Async` proxy.
+The evidence covers Tenant, Platform, absence, same-tenant distinct full identities, a worker's
+pre-existing identity, delayed execution after parent-Scope exit, inline and CallerRuns behavior,
+values, Future failures, rejection, cancellation before start and during execution, timed Future
+observation, actual-exit cleanup and ApplicationContext-owned shutdown. Dependency closure
+contains Spring Core/Context and the Kernel without Reactor or Spring AI. Usage and limits are
+documented in the adapter README.
 
 ## HTTP execution boundaries — ticket 06
 

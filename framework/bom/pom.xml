@@ -88,6 +88,11 @@
       </dependency>
       <dependency>
         <groupId>${project.groupId}</groupId>
+        <artifactId>moduvera-spring-task-context</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>${project.groupId}</groupId>
         <artifactId>moduvera-spring-ai-context</artifactId>
         <version>${project.version}</version>
       </dependency>
