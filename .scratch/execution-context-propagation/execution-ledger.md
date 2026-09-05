@@ -6,7 +6,7 @@ Code base: ce1636f82f9652b2b14dd9e146e62c748fbf3233. Integration branch: codex/e
 
 ## Current frontier
 
-05, 09; claimed now: 05, 09.
+05; claimed now: 05.
 
 ## Evidence rules
 
@@ -62,3 +62,7 @@ Base `928e8f2ca1c86668dbbed699de4bd63bd97d1ed8`; worker head `73edf47d28ecb5b4e8
 Coordinator build-report wiring commit `e76da5ab2629196e267c24b88f47e4605661ad95` is recorded in [consumer report evidence](evidence/integration-consumer-report-wiring.md); final whole-range review and gate must include it. The draft had one link to the Filter removed by ticket06. Replaced only that dead link with its exact historical baseline/path/line, preserving the design and original gap. This nonsemantic reference repair is the sole exception to leaving the approved draft untouched; spec remains unchanged.
 
 The repository tracker checker requires a terminal parent when every child is terminal. Ticket11 explicitly preserves the parent spec/finding independent lifecycle. Therefore ticket11 will retain its nonterminal tracker state while its actual implementation, integration, reviews and checks are recorded; no parent closure or checker exemption is inferred. Final acceptance will assess the actual delivery evidence and disclose this lifecycle boundary.
+
+## Ticket 09 integrated
+
+Base `f3ef17e028802d4072e943c167f9abea0aca5b3a`; worker head `c8f9669f230b0b446378eba3b9667f47d2eab093`; integrated `c3ac8c7a2444f51d75c8f9add995e810e3921b9e`. Branch `codex/execution-context-20260905-09`, worktree `/private/tmp/execution-context-frontier-20260905/09`. Standards and Spec clean at the same fixed range. Verification PASS: Original worker focused3 and affected57 tests passed. Four concurrent requests include TenantA twoidentities, TenantB and Platform; bounded first-round overlap and same actual thread restoration close independent Standards2P2 and Spec1P1 findings. Integrated Kernel52, Reactor8/consumer2, AI6/consumer8 tests passed across6modules in5.681s with normal scoped verify checks; log evidence/09/integrated-ai-reactor-verify.log. All4 ticket files and allocated ADR section match the reviewed head. Evidence is under `evidence/09/`. Remaining frontier: 05.
