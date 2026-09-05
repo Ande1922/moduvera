@@ -1,5 +1,5 @@
 Type: issue
-Status: claimed
+Status: resolved
 Blocked by: 02
 
 # HTTP 租户与平台入口闭环
@@ -19,15 +19,15 @@ Test seams: T04、T08、T09
 
 ## Acceptance criteria
 
-- [ ] App 配置显式选择受管 Controller/处理器及非业务排除项；模式为方法 > 类 > 默认 TENANT，不因未声明而全量扫描后拒绝启动。
-- [ ] permitAll、JWT/Tenant-Id 有无不充当隐式受管选择器；排除只影响此上下文接入，不绕过认证、授权或租户资源检查。
-- [ ] 认证映射允许可信且无 tenant 断言的 USER，保持合法 Actor/Initiator；同一身份在 PLATFORM 可执行获授权用例，在 TENANT 拒绝且不降级。
-- [ ] TENANT 保留租户断言/目标冲突拒绝；SERVICE 指定租户不自动获得权限；PLATFORM 不因 Header 自动切换，不创建新的模拟租户协议。
-- [ ] 受保护入口缺失/无效认证为 401；已认证但不满足 TENANT 范围为 403；下游缺上下文编码错误不一律变为 401，沿用既有 HTTP Problem 形状。
-- [ ] 在用例前完成处理器模式解析与安装，不先由旧 Filter 强制 tenant 再由 Controller 修正；认证/授权不能仅依赖 MVC 拦截器。
-- [ ] 在平台线程、虚拟线程及必要同步/async/error dispatch 上按实际线程开关 Scope；成功、异常和拒绝后不泄漏，也不保存一个跨线程可关闭 Scope。
-- [ ] 签名有效但无 tenant 的 JWT 访问已排除的非业务处理器时不误触发 TENANT 要求；平台/租户声明组合及未授权调用均有负向证据。
-- [ ] 真实消费者公共接入、配置迁移、线程/dispatch 支持边界和传播 ADR 更新随票交付；不为了测试增加生产业务端点。
+- [x] App 配置显式选择受管 Controller/处理器及非业务排除项；模式为方法 > 类 > 默认 TENANT，不因未声明而全量扫描后拒绝启动。
+- [x] permitAll、JWT/Tenant-Id 有无不充当隐式受管选择器；排除只影响此上下文接入，不绕过认证、授权或租户资源检查。
+- [x] 认证映射允许可信且无 tenant 断言的 USER，保持合法 Actor/Initiator；同一身份在 PLATFORM 可执行获授权用例，在 TENANT 拒绝且不降级。
+- [x] TENANT 保留租户断言/目标冲突拒绝；SERVICE 指定租户不自动获得权限；PLATFORM 不因 Header 自动切换，不创建新的模拟租户协议。
+- [x] 受保护入口缺失/无效认证为 401；已认证但不满足 TENANT 范围为 403；下游缺上下文编码错误不一律变为 401，沿用既有 HTTP Problem 形状。
+- [x] 在用例前完成处理器模式解析与安装，不先由旧 Filter 强制 tenant 再由 Controller 修正；认证/授权不能仅依赖 MVC 拦截器。
+- [x] 在平台线程、虚拟线程及必要同步/async/error dispatch 上按实际线程开关 Scope；成功、异常和拒绝后不泄漏，也不保存一个跨线程可关闭 Scope。
+- [x] 签名有效但无 tenant 的 JWT 访问已排除的非业务处理器时不误触发 TENANT 要求；平台/租户声明组合及未授权调用均有负向证据。
+- [x] 真实消费者公共接入、配置迁移、线程/dispatch 支持边界和传播 ADR 更新随票交付；不为了测试增加生产业务端点。
 
 ## Verification
 
@@ -43,3 +43,16 @@ Test seams: T04、T08、T09
 ## Comments
 
 - 2026-09-05：等待 02；HTTP Problem 复用既有接缝，不把相邻未完成 topic 自动变成技术前置。
+
+## Answer
+
+Implemented and integrated on 2026-09-06.
+
+- Base: `46ac0c4c189533ae0d13ddd79ba06a735657acf9`. Worker head: `3eb2e5c3c9d5ad07806a94925670deea166598ef`.
+- Integrated commit: `28d0644cec7dd263843113386fe06f560b502055` on `codex/execution-context-20260905-integration`.
+- Worktree: `/private/tmp/execution-context-frontier-20260905/06`; branch: `codex/execution-context-20260905-06`.
+- Verification PASS: Worker final Resource Server verify passed 18 unit tests and 5 real signed-JWT Servlet ITs; Catalog virtual-thread consumer passed 8 ITs. Regression-first generated-correlation mismatch is closed, with full REQUEST/ASYNC/selected ERROR identity and actual-thread cleanup. Prior Notes 2 ITs and both public reference topologies passed on this ticket; final combined Scenario remains a later requirement. Integrated auth/Catalog/Notes verify passed all affected units, quality checks and 15 selected real ITs (5+8+2) in 39.521 seconds. All 22 ticket files and allocated ADR section match the reviewed worker head.
+- Standards review completed clean and Spec review completed clean against the same base/worker head.
+- Acceptance mapping and exact commands: [worker report](../evidence/06/worker-report.md).
+- Review evidence: [Standards](../evidence/06/review-standards-closure-1.md) and [Spec](../evidence/06/review-spec-closure-1.md).
+- This ticket result is not final feature acceptance; parent spec/finding remain unchanged.

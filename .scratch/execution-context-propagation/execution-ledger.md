@@ -6,7 +6,7 @@ Code base: ce1636f82f9652b2b14dd9e146e62c748fbf3233. Integration branch: codex/e
 
 ## Current frontier
 
-05, 06, 07, 09, 10; claimed now: 06, 07, 09, 10.
+05, 07, 09, 10; claimed now: 07, 09, 10.
 
 ## Evidence rules
 
@@ -44,3 +44,7 @@ Base `46ac0c4c189533ae0d13ddd79ba06a735657acf9`; worker head `0e5c6dba5a8895173e
 ## Ticket 04 integrated
 
 Base `5e687cfdb21d2d9dc55be42a5ffb93a59b15c452`; worker head `269116daf70afb277913c3613ecadd1311a92231`; integrated `8a61f7cafa9dc2c509a18818d9b8f867fb3e6d8e`. Branch `codex/execution-context-20260905-04`, worktree `/private/tmp/execution-context-frontier-20260905/04`. Standards and Spec clean at the same fixed range. Verification PASS: Worker Kernel verify passed 52 tests with Spotless, PMD and JaCoCo; public Notes consumer passed 1/1. Bulk propagation mutation failed as expected, restored implementation passed 9/9 executor tests. Kernel remains java.base only. Integrated core context, JDK executors, registered callbacks, Notes public consumer and AI Adapter/consumer test selection passed across 13 modules. All 3 ticket files and the allocated ADR section match the reviewed worker head. Evidence is under `evidence/04/`. Remaining frontier: 05, 06, 07, 09, 10.
+
+## Ticket 06 integrated
+
+Base `46ac0c4c189533ae0d13ddd79ba06a735657acf9`; worker head `3eb2e5c3c9d5ad07806a94925670deea166598ef`; integrated `28d0644cec7dd263843113386fe06f560b502055`. Branch `codex/execution-context-20260905-06`, worktree `/private/tmp/execution-context-frontier-20260905/06`. Standards and Spec clean at the same fixed range. Verification PASS: Worker final Resource Server verify passed 18 unit tests and 5 real signed-JWT Servlet ITs; Catalog virtual-thread consumer passed 8 ITs. Regression-first generated-correlation mismatch is closed, with full REQUEST/ASYNC/selected ERROR identity and actual-thread cleanup. Prior Notes 2 ITs and both public reference topologies passed on this ticket; final combined Scenario remains a later requirement. Integrated auth/Catalog/Notes verify passed all affected units, quality checks and 15 selected real ITs (5+8+2) in 39.521 seconds. All 22 ticket files and allocated ADR section match the reviewed worker head. Evidence is under `evidence/06/`. Remaining frontier: 05, 07, 09, 10.
