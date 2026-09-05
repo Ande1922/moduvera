@@ -1,5 +1,5 @@
 Type: issue
-Status: ready-for-agent
+Status: claimed
 Blocked by: None
 
 # 安全 Scope 与完整快照恢复

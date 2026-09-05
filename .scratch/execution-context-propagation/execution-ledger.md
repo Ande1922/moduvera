@@ -6,7 +6,7 @@ Code base: ce1636f82f9652b2b14dd9e146e62c748fbf3233. Integration branch: codex/e
 
 ## Current frontier
 
-01 ready; no ticket writer dispatched yet. 02–11 remain blocked by their declared prerequisites.
+01 claimed for worker t01 in worktree 01; baseline commit ac86dff0a0dbc41d64316357a4c262ec815b0d2b. Dispatch base will include this claim. 02–11 remain blocked by their declared prerequisites.
 
 ## Evidence rules
 
