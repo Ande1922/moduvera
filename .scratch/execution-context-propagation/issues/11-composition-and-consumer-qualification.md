@@ -1,5 +1,5 @@
 Type: issue
-Status: blocked
+Status: claimed
 Blocked by: 04, 05, 06, 07, 09, 10
 
 # 跨边界组合与消费者资格验收

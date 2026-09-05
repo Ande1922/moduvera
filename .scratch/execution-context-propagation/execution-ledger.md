@@ -6,7 +6,7 @@ Code base: ce1636f82f9652b2b14dd9e146e62c748fbf3233. Integration branch: codex/e
 
 ## Current frontier
 
-05; claimed now: 05.
+11; claimed now: 11.
 
 ## Evidence rules
 
@@ -66,3 +66,7 @@ The repository tracker checker requires a terminal parent when every child is te
 ## Ticket 09 integrated
 
 Base `f3ef17e028802d4072e943c167f9abea0aca5b3a`; worker head `c8f9669f230b0b446378eba3b9667f47d2eab093`; integrated `c3ac8c7a2444f51d75c8f9add995e810e3921b9e`. Branch `codex/execution-context-20260905-09`, worktree `/private/tmp/execution-context-frontier-20260905/09`. Standards and Spec clean at the same fixed range. Verification PASS: Original worker focused3 and affected57 tests passed. Four concurrent requests include TenantA twoidentities, TenantB and Platform; bounded first-round overlap and same actual thread restoration close independent Standards2P2 and Spec1P1 findings. Integrated Kernel52, Reactor8/consumer2, AI6/consumer8 tests passed across6modules in5.681s with normal scoped verify checks; log evidence/09/integrated-ai-reactor-verify.log. All4 ticket files and allocated ADR section match the reviewed head. Evidence is under `evidence/09/`. Remaining frontier: 05.
+
+## Ticket 05 integrated
+
+Base `e76da5ab2629196e267c24b88f47e4605661ad95`; worker head `42ac607ee40d56a6aeb164771fa0b4328feb3931`; integrated `1893acfe2aec90cc833285e68a559318f2e2045a`. Branch `codex/execution-context-20260905-05`, worktree `/private/tmp/execution-context-frontier-20260905/05`. Standards and Spec clean at the same fixed range. Verification PASS: Worker scoped verify passed62tests Kernel52/adapter4/consumer6 with real selectedTaskExecutor and Async proxies, full identity/absence/restoration/native lifecycle. Resolved Spring7.0.9/Boot4.1.1/Java26 without Reactor or AI or ticket04 dependency. Integrated all context consumers plus real Notes2IT verify passed in30.744s; log evidence/05/integrated-all-context-consumers-verify.log. All10 files and allocated ADR section match reviewed worker head. Evidence is under `evidence/05/`. Remaining frontier: 11.

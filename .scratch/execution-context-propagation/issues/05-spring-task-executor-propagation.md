@@ -1,5 +1,5 @@
 Type: issue
-Status: claimed
+Status: resolved
 Blocked by: 03
 
 # Spring TaskExecutor 接入
@@ -19,13 +19,13 @@ Test seams: T02、T08、T09
 
 ## Acceptance criteria
 
-- [ ] TaskDecorator 在每次实际任务装饰/提交时允许缺失捕获，复用具名绑定与统一 Scope；不在 Bean 创建时捕获请求身份。
-- [ ] 显式配置选定 TaskExecutor，真实 @Async 调用经过该执行器时传播完整上下文；非选定执行器不被全局劫持，也不被文档误称支持。
-- [ ] Platform/Tenant/缺失以及同租户不同请求在复用线程上正确隔离；原来有身份的 inline/CallerRuns 路径退出后恢复。
-- [ ] 原 Spring 任务返回、异常、拒绝、取消与生命周期行为保持；Future 包装造成的观察差异按实际公开接缝验证，不假定装饰器能捕获所有异常。
-- [ ] 父 Scope 退出不自动使已提交任务失效；真实退出处清理，不能由另一线程的完成监听器清理 worker。
-- [ ] 配置与 public consumer 测试证明无需 04；Kernel 不引入 Spring，使用方不被迫引入 Reactor/AI。
-- [ ] 接入说明明确 TaskDecorator 与显式回调绑定的分工、@Async 实际执行器前提及状态缺失规则，随票提供消费者证据。
+- [x] TaskDecorator 在每次实际任务装饰/提交时允许缺失捕获，复用具名绑定与统一 Scope；不在 Bean 创建时捕获请求身份。
+- [x] 显式配置选定 TaskExecutor，真实 @Async 调用经过该执行器时传播完整上下文；非选定执行器不被全局劫持，也不被文档误称支持。
+- [x] Platform/Tenant/缺失以及同租户不同请求在复用线程上正确隔离；原来有身份的 inline/CallerRuns 路径退出后恢复。
+- [x] 原 Spring 任务返回、异常、拒绝、取消与生命周期行为保持；Future 包装造成的观察差异按实际公开接缝验证，不假定装饰器能捕获所有异常。
+- [x] 父 Scope 退出不自动使已提交任务失效；真实退出处清理，不能由另一线程的完成监听器清理 worker。
+- [x] 配置与 public consumer 测试证明无需 04；Kernel 不引入 Spring，使用方不被迫引入 Reactor/AI。
+- [x] 接入说明明确 TaskDecorator 与显式回调绑定的分工、@Async 实际执行器前提及状态缺失规则，随票提供消费者证据。
 
 ## Verification
 
@@ -40,3 +40,16 @@ Test seams: T02、T08、T09
 ## Comments
 
 - 2026-09-05：等待 03，与 04 无功能依赖；共享文档/POM 如有写入冲突由集成协调。
+
+## Answer
+
+Implemented and integrated on 2026-09-06.
+
+- Base: `e76da5ab2629196e267c24b88f47e4605661ad95`. Worker head: `42ac607ee40d56a6aeb164771fa0b4328feb3931`.
+- Integrated commit: `1893acfe2aec90cc833285e68a559318f2e2045a` on `codex/execution-context-20260905-integration`.
+- Worktree: `/private/tmp/execution-context-frontier-20260905/05`; branch: `codex/execution-context-20260905-05`.
+- Verification PASS: Worker scoped verify passed62tests Kernel52/adapter4/consumer6 with real selectedTaskExecutor and Async proxies, full identity/absence/restoration/native lifecycle. Resolved Spring7.0.9/Boot4.1.1/Java26 without Reactor or AI or ticket04 dependency. Integrated all context consumers plus real Notes2IT verify passed in30.744s; log evidence/05/integrated-all-context-consumers-verify.log. All10 files and allocated ADR section match reviewed worker head.
+- Standards review completed clean and Spec review completed clean against the same base/worker head.
+- Acceptance mapping and exact commands: [worker report](../evidence/05/worker-report.md).
+- Review evidence: [Standards](../evidence/05/review-standards.md) and [Spec](../evidence/05/review-spec.md).
+- This ticket result is not final feature acceptance; parent spec/finding remain unchanged.

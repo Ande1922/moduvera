@@ -104,3 +104,5 @@ AI 08/09 不以 07 为阻塞项：原生 Reactor 库依赖不等于依赖本项�
 - 2026-09-06 implementation: ticket 10 integrated at `1f02a5d4ede11fc6ad6dc604cf0c1dd369a68190`, both review axes clean; verification PASS. Current open frontier: 05, 09. Claims: none. See [ticket evidence](issues/10-tenant-only-message-compatibility.md#answer). Historical publication states above remain the original snapshot.
 
 - 2026-09-06 implementation: ticket 09 integrated at `c3ac8c7a2444f51d75c8f9add995e810e3921b9e`, both review axes clean; verification PASS. Current open frontier: 05. Claims: none. See [ticket evidence](issues/09-ai-tool-loop-context.md#answer). Historical publication states above remain the original snapshot.
+
+- 2026-09-06 implementation: ticket 05 integrated at `1893acfe2aec90cc833285e68a559318f2e2045a`, both review axes clean; verification PASS. Current open frontier: 11. Claims: 11. See [ticket evidence](issues/05-spring-task-executor-propagation.md#answer). Historical publication states above remain the original snapshot.
