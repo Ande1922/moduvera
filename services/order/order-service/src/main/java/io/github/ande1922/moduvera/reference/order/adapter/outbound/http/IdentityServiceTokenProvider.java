@@ -36,7 +36,7 @@ public final class IdentityServiceTokenProvider implements InternalAccessTokenPr
         var key = new ServiceTokenCache.Key(
                 serviceId,
                 audience,
-                context.tenantId().value(),
+                context.requireTenantId().value(),
                 context.initiator().type(),
                 context.initiator().subjectId());
         return tokens.accessToken(key, () -> requestToken(key));

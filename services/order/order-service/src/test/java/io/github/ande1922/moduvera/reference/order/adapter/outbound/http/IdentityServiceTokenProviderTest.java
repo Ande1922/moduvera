@@ -11,6 +11,7 @@ import io.github.ande1922.moduvera.context.Actor;
 import io.github.ande1922.moduvera.context.ActorType;
 import io.github.ande1922.moduvera.context.ExecutionContext;
 import io.github.ande1922.moduvera.context.ExecutionContextHolder;
+import io.github.ande1922.moduvera.context.ExecutionScope;
 import io.github.ande1922.moduvera.context.TenantId;
 import java.io.IOException;
 import java.time.Clock;
@@ -99,6 +100,20 @@ class IdentityServiceTokenProviderTest {
                 .isInstanceOf(CatalogCallException.class)
                 .hasMessage("Identity service token request failed")
                 .hasCauseInstanceOf(org.springframework.web.client.ResourceAccessException.class);
+        identity.verify();
+    }
+
+    @Test
+    void rejectsPlatformWithoutCallingIdentity() {
+        RestClient.Builder builder = RestClient.builder().baseUrl("https://identity.test");
+        MockRestServiceServer identity = MockRestServiceServer.bindTo(builder).build();
+        var provider = provider(builder);
+        var platform = ExecutionContext.initiatedBy(
+                ExecutionScope.platform(), new Actor(ActorType.USER, "operator"), "corr-platform-identity");
+
+        assertThatThrownBy(() -> ExecutionContextHolder.call(platform, provider::accessToken))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("tenant execution scope is required at this boundary");
         identity.verify();
     }
 

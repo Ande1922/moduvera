@@ -10,6 +10,7 @@ import io.github.ande1922.moduvera.context.Actor;
 import io.github.ande1922.moduvera.context.ActorType;
 import io.github.ande1922.moduvera.context.ExecutionContext;
 import io.github.ande1922.moduvera.context.ExecutionContextHolder;
+import io.github.ande1922.moduvera.context.ExecutionScope;
 import io.github.ande1922.moduvera.context.TenantId;
 import io.github.ande1922.moduvera.reference.catalog.api.GetProductQuery;
 import java.io.IOException;
@@ -104,6 +105,28 @@ class CatalogHttpClientTest {
                 .isInstanceOf(CatalogCallException.class)
                 .hasMessage("Catalog product lookup failed")
                 .hasCauseInstanceOf(org.springframework.web.client.ResourceAccessException.class);
+        catalog.verify();
+    }
+
+    @Test
+    void rejectsPlatformBeforeRequestingATokenOrCallingCatalog() {
+        RestClient.Builder builder = RestClient.builder().baseUrl("https://catalog.test");
+        MockRestServiceServer catalog = MockRestServiceServer.bindTo(builder).build();
+        RestClient restClient = builder.build();
+        var transport = HttpServiceProxyFactory.builderFor(RestClientAdapter.create(restClient))
+                .build()
+                .createClient(CatalogLookupTransport.class);
+        CatalogHttpClient client = new CatalogHttpClient(
+                transport, () -> {
+                    throw new AssertionError("token provider must not run for Platform scope");
+                });
+        var platform = ExecutionContext.initiatedBy(
+                ExecutionScope.platform(), new Actor(ActorType.USER, "operator"), "corr-platform-catalog");
+
+        assertThatThrownBy(() -> ExecutionContextHolder.call(
+                        platform, () -> client.getProduct(new GetProductQuery(100))))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("tenant execution scope is required at this boundary");
         catalog.verify();
     }
 

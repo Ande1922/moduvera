@@ -21,7 +21,7 @@ public final class MybatisOrderRepository implements OrderRepository {
 
     @Override
     public Optional<Order> findById(long orderId) {
-        String tenantId = ExecutionContextHolder.require().tenantId().value();
+        String tenantId = ExecutionContextHolder.require().requireTenantId().value();
         OrderHeaderRow header = mapper.findHeader(tenantId, orderId);
         if (header == null) {
             return Optional.empty();
@@ -42,7 +42,7 @@ public final class MybatisOrderRepository implements OrderRepository {
     @Override
     public void save(Order order) {
         var context = ExecutionContextHolder.require();
-        String tenantId = context.tenantId().value();
+        String tenantId = context.requireTenantId().value();
         String actor = context.actor().subjectId();
         var now = clock.instant();
         if (!order.isPersisted()) {

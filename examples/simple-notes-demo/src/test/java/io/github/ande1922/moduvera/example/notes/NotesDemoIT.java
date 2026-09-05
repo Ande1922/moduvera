@@ -6,13 +6,18 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.baomidou.mybatisplus.extension.plugins.MybatisPlusInterceptor;
 import com.baomidou.mybatisplus.extension.plugins.inner.InnerInterceptor;
 import com.baomidou.mybatisplus.extension.plugins.inner.TenantLineInnerInterceptor;
-import io.github.ande1922.moduvera.data.TransactionBoundary;
-import io.github.ande1922.moduvera.data.mybatis.ExecutionContextTenantLineHandler;
-import io.github.ande1922.moduvera.testing.Eventually;
 import io.github.ande1922.moduvera.context.Actor;
 import io.github.ande1922.moduvera.context.ActorType;
+import io.github.ande1922.moduvera.context.ExecutionContext;
+import io.github.ande1922.moduvera.context.ExecutionContextHolder;
+import io.github.ande1922.moduvera.context.ExecutionScope;
 import io.github.ande1922.moduvera.context.Initiator;
+import io.github.ande1922.moduvera.context.MissingExecutionContextException;
 import io.github.ande1922.moduvera.context.TenantId;
+import io.github.ande1922.moduvera.data.TransactionBoundary;
+import io.github.ande1922.moduvera.data.mybatis.ExecutionContextTenantLineHandler;
+import io.github.ande1922.moduvera.example.notes.domain.Note;
+import io.github.ande1922.moduvera.example.notes.infrastructure.persistence.MybatisPlusNoteRepository;
 import io.github.ande1922.moduvera.message.Destination;
 import io.github.ande1922.moduvera.message.InboundMessageContract;
 import io.github.ande1922.moduvera.message.MessageDescriptor;
@@ -23,20 +28,22 @@ import io.github.ande1922.moduvera.message.SerializedMessage;
 import io.github.ande1922.moduvera.message.outbox.MessageTransport;
 import io.github.ande1922.moduvera.message.outbox.OutboxStore;
 import io.github.ande1922.moduvera.message.outbox.OutboxWorker;
-import io.github.ande1922.moduvera.message.publication.DurablePublication;
 import io.github.ande1922.moduvera.message.outbox.PublicationObserver;
+import io.github.ande1922.moduvera.message.publication.DurablePublication;
 import io.github.ande1922.moduvera.migration.MigrationDefinition;
 import io.github.ande1922.moduvera.messaging.kafka.KafkaMessageMapper;
 import io.github.ande1922.moduvera.messaging.kafka.OutboxRelay;
 import io.github.ande1922.moduvera.messaging.kafka.ReliableInboundEndpoint;
 import io.github.ande1922.moduvera.messaging.kafka.ReliableMessageConsumerFactory;
-import java.time.Clock;
-import java.time.Instant;
+import io.github.ande1922.moduvera.testing.Eventually;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.sql.Timestamp;
+import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Properties;
@@ -46,15 +53,15 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.common.errors.TimeoutException;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.apache.kafka.common.serialization.StringDeserializer;
-import org.apache.kafka.common.errors.TimeoutException;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
-import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.cloud.stream.function.StreamOperations;
@@ -135,6 +142,9 @@ class NotesDemoIT {
 
     @Autowired
     private JdbcTemplate jdbc;
+
+    @Autowired
+    private MybatisPlusNoteRepository notes;
 
     @Autowired
     private StreamOperations streams;
@@ -326,6 +336,66 @@ class NotesDemoIT {
 
         HttpResponse<String> anonymous = send("GET", "/api/v1/notes/" + id, null, null, "corr-anonymous");
         assertThat(anonymous.statusCode()).isEqualTo(401);
+    }
+
+    @Test
+    void rejectsPlatformAndMissingScopesBeforeTenantReadsAndWritesOnPostgresql() {
+        long existingId = 9_000_001;
+        long rejectedId = 9_000_002;
+        jdbc.update(
+                "INSERT INTO demo_note(id, tenant_id, content, created_at) VALUES (?, ?, ?, ?)",
+                existingId,
+                "tenant-a",
+                "guarded note",
+                Timestamp.from(Instant.parse("2026-09-05T00:00:00Z")));
+        int rowsBeforeRejectedWrites = count("demo_note");
+        var platform = platformContext("postgres-platform");
+        var rejectedNote = new Note(rejectedId, "must not persist", Instant.parse("2026-09-05T00:01:00Z"));
+        try {
+            assertThatThrownBy(() -> ExecutionContextHolder.call(
+                            platform, () -> notes.findById(existingId)))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage("tenant execution scope is required at this boundary");
+            assertThatThrownBy(() -> notes.findById(existingId))
+                    .isInstanceOf(MissingExecutionContextException.class);
+
+            assertThatThrownBy(() -> ExecutionContextHolder.run(
+                            platform, () -> notes.save(rejectedNote)))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage("tenant execution scope is required at this boundary");
+            assertThatThrownBy(() -> notes.save(rejectedNote))
+                    .isInstanceOf(MissingExecutionContextException.class);
+            assertThat(count("demo_note")).isEqualTo(rowsBeforeRejectedWrites);
+            assertThat(jdbc.queryForObject(
+                            "SELECT COUNT(*) FROM demo_note WHERE id = ?", Integer.class, rejectedId))
+                    .isZero();
+
+            assertThat(ExecutionContextHolder.call(
+                            tenantContext("tenant-a", "postgres-tenant-a"),
+                            () -> notes.findById(existingId)))
+                    .isPresent();
+            assertThat(ExecutionContextHolder.call(
+                            tenantContext("tenant-b", "postgres-tenant-b"),
+                            () -> notes.findById(existingId)))
+                    .isEmpty();
+        } finally {
+            jdbc.update("DELETE FROM demo_note WHERE id IN (?, ?)", existingId, rejectedId);
+        }
+        assertThat(ExecutionContextHolder.current()).isEmpty();
+    }
+
+    private static ExecutionContext platformContext(String correlationId) {
+        return ExecutionContext.initiatedBy(
+                ExecutionScope.platform(),
+                new Actor(ActorType.SYSTEM, "notes-platform-probe"),
+                correlationId);
+    }
+
+    private static ExecutionContext tenantContext(String tenantId, String correlationId) {
+        return ExecutionContext.initiatedBy(
+                new TenantId(tenantId),
+                new Actor(ActorType.USER, "notes-tenant-probe"),
+                correlationId);
     }
 
     private static String topic() {

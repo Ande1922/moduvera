@@ -20,11 +20,12 @@ public final class CatalogHttpClient implements CatalogApi {
     @Override
     public ProductSnapshot getProduct(GetProductQuery query) {
         var context = ExecutionContextHolder.require();
+        var tenantId = context.requireTenantId();
         try {
             ProductSnapshot snapshot = catalog.getProduct(
                     query.productId(),
                     "Bearer " + requireToken(),
-                    context.tenantId().value(),
+                    tenantId.value(),
                     context.correlationId());
             if (snapshot == null) {
                 throw new CatalogCallException("Catalog returned an empty product snapshot");

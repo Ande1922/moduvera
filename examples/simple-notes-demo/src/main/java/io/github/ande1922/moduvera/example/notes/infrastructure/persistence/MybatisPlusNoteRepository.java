@@ -18,7 +18,7 @@ public class MybatisPlusNoteRepository implements NoteRepository {
 
     @Override
     public void save(Note note) {
-        String tenantId = ExecutionContextHolder.require().tenantId().value();
+        String tenantId = ExecutionContextHolder.require().requireTenantId().value();
         NoteRow row = new NoteRow(
                 note.id(),
                 tenantId,
@@ -31,7 +31,7 @@ public class MybatisPlusNoteRepository implements NoteRepository {
 
     @Override
     public Optional<Note> findById(long id) {
-        ExecutionContextHolder.require();
+        ExecutionContextHolder.require().requireTenantId();
         return Optional.ofNullable(mapper.selectById(id)).map(MybatisPlusNoteRepository::toDomain);
     }
 

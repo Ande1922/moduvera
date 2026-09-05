@@ -26,7 +26,7 @@ public final class MybatisInventoryStore implements InventoryStore {
     public ReservationExecution reserve(
             ReserveInventoryCommand request, Instant now, ReservationPolicy policy) {
         var context = ExecutionContextHolder.require();
-        String tenantId = context.tenantId().value();
+        String tenantId = context.requireTenantId().value();
         InventoryResultRow previous = mapper.findResult(tenantId, request.commandId());
         if (previous != null) {
             return toExecution(previous, false);

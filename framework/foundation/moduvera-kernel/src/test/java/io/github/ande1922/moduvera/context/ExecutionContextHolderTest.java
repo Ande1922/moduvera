@@ -8,8 +8,57 @@ import org.junit.jupiter.api.Test;
 
 class ExecutionContextHolderTest {
 
+    private static final ExecutionContext PLATFORM = new ExecutionContext(
+            ExecutionScope.platform(),
+            new Actor(ActorType.SERVICE, "platform-service"),
+            new Initiator(ActorType.USER, "operator"),
+            "corr-platform");
     private static final ExecutionContext OUTER = context("tenant-a", "alice", "corr-a");
     private static final ExecutionContext INNER = context("tenant-b", "inventory", "corr-b");
+    private static final ExecutionContext SAME_TENANT_OTHER_EXECUTION = new ExecutionContext(
+            new TenantId("tenant-a"),
+            new Actor(ActorType.SERVICE, "catalog"),
+            new Initiator(ActorType.USER, "bob"),
+            "corr-a-2");
+
+    @Test
+    void distinguishesPlatformTenantAndAbsentWhileRestoringTheCompleteIdentity() {
+        assertThat(ExecutionContextHolder.current()).isEmpty();
+
+        ExecutionContextHolder.run(PLATFORM, () -> {
+            assertThat(ExecutionContextHolder.require()).isSameAs(PLATFORM);
+            ExecutionContextHolder.run(OUTER, () -> {
+                assertThat(ExecutionContextHolder.require()).isSameAs(OUTER);
+                ExecutionContextHolder.run(SAME_TENANT_OTHER_EXECUTION, () -> {
+                    assertThat(ExecutionContextHolder.require()).isSameAs(SAME_TENANT_OTHER_EXECUTION);
+                    try (var ignored = ExecutionContextSnapshot.absent().openScope()) {
+                        assertThat(ExecutionContextHolder.current()).isEmpty();
+                    }
+                    assertThat(ExecutionContextHolder.require()).isSameAs(SAME_TENANT_OTHER_EXECUTION);
+                });
+                assertThat(ExecutionContextHolder.require()).isSameAs(OUTER);
+            });
+            assertThat(ExecutionContextHolder.require()).isSameAs(PLATFORM);
+        });
+
+        assertThat(ExecutionContextHolder.current()).isEmpty();
+    }
+
+    @Test
+    void restoresPlatformAfterExceptionalTenantExecution() {
+        var failure = new IllegalStateException("failed tenant execution");
+
+        ExecutionContextHolder.run(PLATFORM, () -> {
+            assertThatThrownBy(() -> ExecutionContextHolder.run(INNER, () -> {
+                        assertThat(ExecutionContextHolder.require()).isSameAs(INNER);
+                        throw failure;
+                    }))
+                    .isSameAs(failure);
+            assertThat(ExecutionContextHolder.require()).isSameAs(PLATFORM);
+        });
+
+        assertThat(ExecutionContextHolder.current()).isEmpty();
+    }
 
     @Test
     void restoresNestedContextAndClearsAfterTheBoundary() {

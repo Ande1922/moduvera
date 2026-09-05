@@ -19,7 +19,7 @@ public final class MybatisCatalogProductRepository implements ProductRepository 
 
     @Override
     public Optional<Product> findById(long productId) {
-        String tenantId = ExecutionContextHolder.require().tenantId().value();
+        String tenantId = ExecutionContextHolder.require().requireTenantId().value();
         return Optional.ofNullable(mapper.findById(tenantId, productId))
                 .map(MybatisCatalogProductRepository::toDomain);
     }
@@ -29,7 +29,7 @@ public final class MybatisCatalogProductRepository implements ProductRepository 
         var context = ExecutionContextHolder.require();
         var now = clock.instant();
         var row = new CatalogProductRow();
-        row.setTenantId(context.tenantId().value());
+        row.setTenantId(context.requireTenantId().value());
         row.setProductId(product.id());
         row.setName(product.name());
         row.setUnitPrice(product.price());

@@ -10,6 +10,7 @@ import io.github.ande1922.moduvera.context.Actor;
 import io.github.ande1922.moduvera.context.ActorType;
 import io.github.ande1922.moduvera.context.ExecutionContext;
 import io.github.ande1922.moduvera.context.ExecutionContextHolder;
+import io.github.ande1922.moduvera.context.ExecutionScope;
 import io.github.ande1922.moduvera.context.MissingExecutionContextException;
 import io.github.ande1922.moduvera.context.TenantId;
 import io.github.ande1922.moduvera.data.TransactionBoundary;
@@ -170,6 +171,47 @@ class MySqlBusinessRepositoriesIT {
                 .isInstanceOf(IllegalStateException.class);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM order_header WHERE order_id = 99", Integer.class))
                 .isZero();
+    }
+
+    @Test
+    void rejectsPlatformAndMissingScopesBeforeTenantReadsAndWritesOnMySql() {
+        var existing = new Product(
+                901, "Existing", new BigDecimal("19.00"), Currency.getInstance("CNY"), 0);
+        var rejected = new Product(
+                902, "Rejected", new BigDecimal("29.00"), Currency.getInstance("CNY"), 0);
+        ExecutionContextHolder.run(context("tenant-a"), () -> catalog.save(existing));
+        int rowsBeforeRejectedWrites = catalogRowCount();
+        var platform = platformContext();
+
+        assertThatThrownBy(() -> ExecutionContextHolder.call(
+                        platform, () -> catalog.findById(existing.id())))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("tenant execution scope is required at this boundary");
+        assertThatThrownBy(() -> catalog.findById(existing.id()))
+                .isInstanceOf(MissingExecutionContextException.class);
+
+        assertThatThrownBy(() -> ExecutionContextHolder.run(platform, () -> catalog.save(rejected)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("tenant execution scope is required at this boundary");
+        assertThatThrownBy(() -> catalog.save(rejected))
+                .isInstanceOf(MissingExecutionContextException.class);
+        assertThat(catalogRowCount()).isEqualTo(rowsBeforeRejectedWrites);
+        assertThat(catalogRowCount(rejected.id())).isZero();
+
+        assertThat(ExecutionContextHolder.call(
+                        context("tenant-a"), () -> catalog.findById(existing.id())))
+                .get()
+                .satisfies(found -> {
+                    assertThat(found.id()).isEqualTo(existing.id());
+                    assertThat(found.name()).isEqualTo(existing.name());
+                    assertThat(found.price()).isEqualByComparingTo(existing.price());
+                    assertThat(found.currency()).isEqualTo(existing.currency());
+                    assertThat(found.version()).isEqualTo(existing.version());
+                });
+        assertThat(ExecutionContextHolder.call(
+                        context("tenant-b"), () -> catalog.findById(existing.id())))
+                .isEmpty();
+        assertThat(ExecutionContextHolder.current()).isEmpty();
     }
 
     @Test
@@ -419,6 +461,15 @@ class MySqlBusinessRepositoriesIT {
                 product);
     }
 
+    private int catalogRowCount() {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM catalog_product", Integer.class);
+    }
+
+    private int catalogRowCount(long productId) {
+        return jdbc.queryForObject(
+                "SELECT COUNT(*) FROM catalog_product WHERE product_id = ?", Integer.class, productId);
+    }
+
     private ReservationExecution reserve(
             String tenant, ReserveInventoryCommand command, Instant now) {
         return ExecutionContextHolder.call(
@@ -437,6 +488,13 @@ class MySqlBusinessRepositoriesIT {
     private static ExecutionContext context(String tenant) {
         return ExecutionContext.initiatedBy(
                 new TenantId(tenant), new Actor(ActorType.USER, "mysql-tck"), "mysql-" + tenant);
+    }
+
+    private static ExecutionContext platformContext() {
+        return ExecutionContext.initiatedBy(
+                ExecutionScope.platform(),
+                new Actor(ActorType.SYSTEM, "mysql-platform-probe"),
+                "mysql-platform");
     }
 
     @SpringBootConfiguration

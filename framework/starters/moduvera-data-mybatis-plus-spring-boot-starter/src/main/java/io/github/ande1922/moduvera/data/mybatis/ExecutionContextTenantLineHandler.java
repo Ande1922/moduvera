@@ -9,6 +9,6 @@ public final class ExecutionContextTenantLineHandler implements TenantLineHandle
 
     @Override
     public Expression getTenantId() {
-        return new StringValue(ExecutionContextHolder.require().tenantId().value());
+        return new StringValue(ExecutionContextHolder.require().requireTenantId().value());
     }
 }

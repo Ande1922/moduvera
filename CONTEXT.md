@@ -76,6 +76,14 @@ _Avoid_: 私有 Java 方法、隐藏的公共端点
 在系统入口把外部或参考认证实现提供的身份断言转换为可信 Actor 和租户声明的接入契约；它不定义用户目录、凭证生命周期或认证产品。
 _Avoid_: 用户体系、内建身份中心、复制外部 Token
 
+**执行上下文（Execution Context）**:
+一次逻辑执行中不可变的可信 Actor、Initiator、Correlation 与 Execution Scope 整体；缺失上下文是独立状态，不代表 Platform。安装可信目标上下文只执行入口已经作出的信任和授权决定，不能自行取得权限。
+_Avoid_: 授权令牌、可变请求容器、缺失即平台
+
+**执行范围（Execution Scope）**:
+Execution Context 中显式的 Platform 或 Tenant(id) 资源范围。Platform 表示未绑定单个租户，不表示平台管理员、全局权限或跨租户数据访问；Job 的 GLOBAL 锁竞争范围也不改变执行范围。Tenant 范围必须持有合法 Tenant ID。
+_Avoid_: 角色层级、经销商树、GLOBAL 锁、魔法租户
+
 **租户（Tenant）**:
 身份、数据、消息、任务和权限的隔离边界；在验证业务中运营公司或品牌是租户，门店不是租户。
 _Avoid_: 门店、Schema、客户账号
@@ -89,8 +97,12 @@ _Avoid_: 租户表自增主键、带业务含义的租户编码、任意扩展�
 _Avoid_: 租户、数据库分区
 
 **租户上下文（Tenant Context）**:
-请求、消息或任务进入应用用例前建立、由基础设施能力统一消费并在执行结束时清理的可信当前租户。普通业务用例、领域对象和 Repository 接口默认不携带只为技术隔离服务的 Tenant ID；只有租户身份参与业务规则时才进入业务接口。
-_Avoid_: 普通业务方法里的 tenant ID、业务代码直接读取上下文、只用于日志的租户字段
+Execution Context 中具体的 Tenant(id) 范围，由租户入口在应用用例前建立、由基础设施能力统一消费并在执行结束时清理。普通业务用例、领域对象和 Repository 接口默认不携带只为技术隔离服务的 Tenant ID；租户资源在上下文缺失或为 Platform 时都必须 fail closed，跨租户管理使用独立、显式授权的接口。
+_Avoid_: 普通业务方法里的 tenant ID、Platform、通用忽略租户开关
+
+**执行上下文快照（Execution Context Snapshot）**:
+为一个逻辑执行固定的存在或明确缺失状态，只在实际同步回调期间安装并恢复完整 Execution Context。它不携带事务或连接，也不得按租户或跨请求缓存复用。
+_Avoid_: 长生命周期 Scope、租户缓存键、事务传播器
 
 **发起主体（Actor）**:
 应用用例代表其执行的、已经认证的用户或系统主体。

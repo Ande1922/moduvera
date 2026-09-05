@@ -7,6 +7,7 @@ import io.github.ande1922.moduvera.context.Actor;
 import io.github.ande1922.moduvera.context.ActorType;
 import io.github.ande1922.moduvera.context.ExecutionContext;
 import io.github.ande1922.moduvera.context.ExecutionContextHolder;
+import io.github.ande1922.moduvera.context.ExecutionScope;
 import io.github.ande1922.moduvera.context.MissingExecutionContextException;
 import io.github.ande1922.moduvera.context.TenantId;
 import net.sf.jsqlparser.expression.StringValue;
@@ -31,5 +32,16 @@ class ExecutionContextTenantLineHandlerTest {
     void failsBeforeSqlWhenTheExecutionContextIsMissing() {
         assertThatThrownBy(handler::getTenantId)
                 .isInstanceOf(MissingExecutionContextException.class);
+    }
+
+    @Test
+    void failsBeforeSqlWhenTheExecutionContextHasPlatformScope() {
+        Actor actor = new Actor(ActorType.SERVICE, "platform-service");
+        ExecutionContext context =
+                ExecutionContext.initiatedBy(ExecutionScope.platform(), actor, "corr-platform-data");
+
+        assertThatThrownBy(() -> ExecutionContextHolder.call(context, handler::getTenantId))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("tenant execution scope is required at this boundary");
     }
 }

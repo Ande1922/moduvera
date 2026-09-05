@@ -36,13 +36,44 @@ does not depend on the lifetime of its parent Scope and may be reused only for
 callbacks belonging to that same logical execution; it must not be cached by
 tenant or shared across requests.
 
-This decision establishes only the existing Tenant-model recovery kernel.
-Platform scope, tenant-resource guards, named callback binding types, JDK and
-Spring executors, HTTP, Reactor, Spring AI, message and job adapters, and
-cross-boundary composition remain planned work in the approved ExecutionContext
-ticket graph. This ADR does not claim transparent propagation, zero allocation,
-transaction or connection propagation, or support for those future adapters.
+Execution Context is one immutable value containing an explicit Execution
+Scope, Actor, Initiator and correlation identifier. The scope is either
+Platform or Tenant with a valid non-null Tenant ID; absence remains the third
+Holder state. `require()` accepts either present scope, while
+`requireTenantId()` and the legacy `tenantId()` alias reject Platform. Scope
+nesting and snapshots restore the full value, including transitions between
+Platform, different tenants, same-tenant executions with different identity or
+correlation, and absence. Installing a trusted context does not authorize its
+scope.
 
-Evidence: Kernel tests for null rejection, unique binding order, cross-thread
-and out-of-order failure atomicity, present/absent restoration, exception
-transparency, legacy wrappers, and post-parent-lifetime Snapshot execution.
+Ordinary tenant persistence and tenant-only direct HTTP clients require a
+Tenant scope before issuing SQL or a remote request. PostgreSQL and MySQL
+runtime Adapter tests prove Platform and absence reject reads and writes
+without persisting the rejected change, while normal tenant isolation remains.
+Job execution retains its caller-supplied context independently of lock scope:
+a GLOBAL lock is global competition only, and a TENANT lock still requires a
+Tenant execution.
+
+Changing the first `ExecutionContext` record component from `tenantId` to
+`scope` is a structural compatibility change. The former
+`ExecutionContext(TenantId, Actor, Initiator, String)` constructor,
+`initiatedBy(TenantId, ...)`, `tenantId()`, Holder run/call and Snapshot
+Runnable/Callable wrappers remain callable and tenant-strict. Their method
+descriptors preserve ordinary precompiled tenant callers, but record-component
+reflection, record-pattern source, generated `toString` and serializers that
+derive shape from record components now observe `scope`. The type does not
+implement Java serialization, is not a network DTO, and repository consumers
+do not serialize or reflectively destructure it; message wire contracts remain
+separate and tenant-only.
+
+Named callback binding types, JDK and Spring executors, HTTP entry mapping,
+Reactor, Spring AI, message adaptation and cross-boundary composition remain
+planned work in the approved ExecutionContext ticket graph. This ADR does not
+claim transparent propagation, zero allocation, transaction or connection
+propagation, or support for those future adapters.
+
+Evidence: Kernel tests for the three states, strict tenant reads, full-value
+restoration, null rejection, unique binding order, cross-thread and out-of-order
+failure atomicity, exception transparency, legacy calls, and post-parent-lifetime
+Snapshot execution; production Adapter tests against PostgreSQL and MySQL;
+focused tenant-only HTTP and Job/Lock tests; and an independent Maven consumer.

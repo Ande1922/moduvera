@@ -17,7 +17,7 @@ public final class JobRunner {
 
     public JobOutcome run(JobDefinition definition, ExecutionContext context, Runnable applicationUseCase) {
         LockKey key = definition.scope() == JobDefinition.Scope.TENANT
-                ? LockKey.tenant(context.tenantId(), "job", definition.name())
+                ? LockKey.tenant(context.requireTenantId(), "job", definition.name())
                 : LockKey.global("job", definition.name());
         try {
             return locks.execute(
