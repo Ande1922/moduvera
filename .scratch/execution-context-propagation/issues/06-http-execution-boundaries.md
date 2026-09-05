@@ -1,5 +1,5 @@
 Type: issue
-Status: blocked
+Status: claimed
 Blocked by: 02
 
 # HTTP 租户与平台入口闭环

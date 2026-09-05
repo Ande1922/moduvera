@@ -66,14 +66,85 @@ implement Java serialization, is not a network DTO, and repository consumers
 do not serialize or reflectively destructure it; message wire contracts remain
 separate and tenant-only.
 
-Named callback binding types, JDK and Spring executors, HTTP entry mapping,
-Reactor, Spring AI, message adaptation and cross-boundary composition remain
-planned work in the approved ExecutionContext ticket graph. This ADR does not
-claim transparent propagation, zero allocation, transaction or connection
-propagation, or support for those future adapters.
+Scenario-specific contracts and implementation evidence are recorded in the
+owned sections below. A planned section is an approved design boundary, not
+runtime support evidence. This ADR does not claim transparent propagation,
+zero allocation, or transaction or connection propagation.
 
 Evidence: Kernel tests for the three states, strict tenant reads, full-value
 restoration, null rejection, unique binding order, cross-thread and out-of-order
 failure atomicity, exception transparency, legacy calls, and post-parent-lifetime
 Snapshot execution; production Adapter tests against PostgreSQL and MySQL;
 focused tenant-only HTTP and Job/Lock tests; and an independent Maven consumer.
+
+## Request-bound callbacks — ticket 03
+
+Status: planned.
+
+Registration captures the full logical execution. Ordinary functions may be shared; fixed request snapshots may not be reused across requests.
+
+Implementation and consumer evidence remain the responsibility of ticket 03.
+
+## JDK executors — ticket 04
+
+Status: planned.
+
+Direct task submission captures present or absent context. Future, cancellation and shutdown semantics remain owned by the delegated executor.
+
+Implementation and consumer evidence remain the responsibility of ticket 04.
+
+## Spring task executors — ticket 05
+
+Status: planned.
+
+Selected TaskExecutor instances use a reusable TaskDecorator. Actual Async proxy routing defines the propagation boundary.
+
+Implementation and consumer evidence remain the responsibility of ticket 05.
+
+## HTTP execution boundaries — ticket 06
+
+Status: planned.
+
+Managed handler selection is independent of authentication. Method, class and default Tenant declarations determine the execution range.
+
+Implementation and consumer evidence remain the responsibility of ticket 06.
+
+## Reactor context templates — ticket 07
+
+Status: planned.
+
+Subscription Context is the native carrier. Selected synchronous callbacks restore the Holder without global hooks or thread-identity fallback.
+
+Implementation and consumer evidence remain the responsibility of ticket 07.
+
+## AI request and streaming response context — ticket 08
+
+Status: planned.
+
+Each request injects one context into both native carriers. Response processing reads the current ChatClientResponse during real stream consumption.
+
+Implementation and consumer evidence remain the responsibility of ticket 08.
+
+## AI tool loop context — ticket 09
+
+Status: planned.
+
+Each synchronous tool invocation reads its own ToolContext. The shared adapter retains no request snapshot and preserves real multi-round loop behavior.
+
+Implementation and consumer evidence remain the responsibility of ticket 09.
+
+## Tenant-only message compatibility — ticket 10
+
+Status: planned.
+
+Business message construction requires Tenant. Trusted persisted messages remain deliverable by a background relay without the original request Holder.
+
+Implementation and consumer evidence remain the responsibility of ticket 10.
+
+## Composition and consumer qualification — ticket 11
+
+Status: planned.
+
+Cross-boundary consumer evidence and dependency closure determine support claims. Planned or unverified behavior is never promoted by this summary.
+
+Implementation and consumer evidence remain the responsibility of ticket 11.

@@ -1,5 +1,5 @@
 Type: issue
-Status: claimed
+Status: resolved
 Blocked by: 01
 
 # Platform/Tenant 模型与租户资源保护
@@ -19,14 +19,14 @@ Test seams: T01、T07、T08
 
 ## Acceptance criteria
 
-- [ ] ExecutionContext 保持不可变整体，Scope 为 Platform 或合法非空 Tenant；Actor、Initiator、Correlation 的既有合法性保持。
-- [ ] Holder.require 在 Platform/Tenant 成功，缺失失败；requireTenantId 与旧 tenantId 别名在 Platform 失败，不返回 null 或魔法租户。
-- [ ] Platform↔Tenant、Tenant↔Tenant 及嵌套空状态切换后恢复全部原信息；无论同步成功或异常，子范围不回写父范围。
-- [ ] 保留 Tenant 构造、initiatedBy、旧读取与 run/call/wrap 调用兼容；检查真实 record component、反射、序列化及二进制消费面，记录实际迁移而非宣称完全兼容。
-- [ ] 通过生产租户持久化 Adapter 和真实数据库证明 Platform/缺失不能读写普通租户资源或退化为无过滤 SQL；拒绝写入无业务副作用，既有 Tenant 隔离仍成立。
-- [ ] 租户专用的现有直接出站调用仍严格要求 Tenant，不因新模型变成无租户远程调用；无需修改的消费者也记录兼容依据。
-- [ ] 既有 JobRunner/Lock 接缝保持 frozen：显式 context 的进入与退出正确，GLOBAL 锁范围不被转换成 Platform 授权，不新增调度/锁产品接口。
-- [ ] 同步 CONTEXT.md、ADR 0003/0035 与传播 ADR 的已确认定义；保留普通业务接口租户透明、跨租户管理独立授权、无 IAM/经销商树建模的边界。
+- [x] ExecutionContext 保持不可变整体，Scope 为 Platform 或合法非空 Tenant；Actor、Initiator、Correlation 的既有合法性保持。
+- [x] Holder.require 在 Platform/Tenant 成功，缺失失败；requireTenantId 与旧 tenantId 别名在 Platform 失败，不返回 null 或魔法租户。
+- [x] Platform↔Tenant、Tenant↔Tenant 及嵌套空状态切换后恢复全部原信息；无论同步成功或异常，子范围不回写父范围。
+- [x] 保留 Tenant 构造、initiatedBy、旧读取与 run/call/wrap 调用兼容；检查真实 record component、反射、序列化及二进制消费面，记录实际迁移而非宣称完全兼容。
+- [x] 通过生产租户持久化 Adapter 和真实数据库证明 Platform/缺失不能读写普通租户资源或退化为无过滤 SQL；拒绝写入无业务副作用，既有 Tenant 隔离仍成立。
+- [x] 租户专用的现有直接出站调用仍严格要求 Tenant，不因新模型变成无租户远程调用；无需修改的消费者也记录兼容依据。
+- [x] 既有 JobRunner/Lock 接缝保持 frozen：显式 context 的进入与退出正确，GLOBAL 锁范围不被转换成 Platform 授权，不新增调度/锁产品接口。
+- [x] 同步 CONTEXT.md、ADR 0003/0035 与传播 ADR 的已确认定义；保留普通业务接口租户透明、跨租户管理独立授权、无 IAM/经销商树建模的边界。
 
 ## Verification
 
@@ -42,3 +42,16 @@ Test seams: T01、T07、T08
 ## Comments
 
 - 2026-09-05：等待 01 的恢复契约；本票覆盖 US20 的 Job/Lock 部分，消息由 10 承担。
+
+## Answer
+
+Implemented and integrated on 2026-09-05.
+
+- Base: `4b7baf1904ae34bb63525939b8afef60bc74c8a1`. Worker head: `dbb2a1ade64f1d6bb8ddb31cf52822f5f6e453e7`.
+- Integrated commit: `4313748aac07b06943072f7d00f71ce8af5751d0` on `codex/execution-context-20260905-integration`.
+- Worktree: `/private/tmp/execution-context-frontier-20260905/02`; branch: `codex/execution-context-20260905-02`.
+- Verification PASS: Kernel 37, MySQL production IT 5 and independent PostgreSQL consumer IT 2 passed with no skips; affected unit reactor passed; old-API compiled consumer ran against new classes; jdeps java.base only. Integrated 16-module focused model/Holder/Snapshot/MyBatis/Job/HTTP test reactor passed. Integrated source tree equals reviewed worker tree.
+- Standards review completed clean and Spec review completed clean against the same base/worker head.
+- Acceptance mapping and exact commands: [worker report](../evidence/02/worker-report.md).
+- Review evidence: [Standards](../evidence/02/review-standards.md) and [Spec](../evidence/02/review-spec.md).
+- This ticket result is not final feature acceptance; parent spec/finding remain unchanged.

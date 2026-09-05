@@ -1,5 +1,5 @@
 Type: issue
-Status: blocked
+Status: claimed
 Blocked by: 02
 
 # 请求归属的具名回调绑定

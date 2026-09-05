@@ -86,3 +86,5 @@ AI 08/09 不以 07 为阻塞项：原生 Reactor 库依赖不等于依赖本项�
 - 2026-09-05：只读复核后明确 08 必须验证真实流式订阅，并将 10 的当前上下文要求限定到业务消息构建入口；后台 Relay 继续可在没有原请求 Holder 时投递合法持久化消息。未改变批准 DAG 或首期边界，未运行功能测试。
 
 - 2026-09-05 implementation: ticket 01 integrated at `0226e17cfbc48fdd2af42a2b132f438f5eb94177`, both review axes clean; verification PASS. Current open frontier: 02. Claims: 02. See [ticket evidence](issues/01-safe-scope-and-snapshots.md#answer). Historical publication states above remain the original snapshot.
+
+- 2026-09-05 implementation: ticket 02 integrated at `4313748aac07b06943072f7d00f71ce8af5751d0`, both review axes clean; verification PASS. Current open frontier: 03, 06, 07, 08, 10. Claims: 03, 06, 08. See [ticket evidence](issues/02-platform-tenant-and-resource-guards.md#answer). Historical publication states above remain the original snapshot.

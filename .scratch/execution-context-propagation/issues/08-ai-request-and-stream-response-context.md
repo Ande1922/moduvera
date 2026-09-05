@@ -1,5 +1,5 @@
 Type: issue
-Status: blocked
+Status: claimed
 Blocked by: 02
 
 # AI 请求注入与流式响应消费
