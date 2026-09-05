@@ -105,7 +105,8 @@ Evidence: Kernel tests exercise all seven public JDK shapes, original outcomes, 
 absent restoration, completed/externally completed/async CompletableFuture callbacks,
 parent-Scope exit, retries, same-tenant distinct identities and the `thenCompose` boundary.
 The independent `simple-notes-demo` consumer compiles and runs per-request function binding
-and per-trusted-event long-lived listener examples using only the public Kernel API.
+through an SDK-shaped callback registration/later-trigger driver, plus a separate
+per-trusted-event long-lived listener example, using only the public Kernel API.
 
 ## JDK executors — ticket 04
 

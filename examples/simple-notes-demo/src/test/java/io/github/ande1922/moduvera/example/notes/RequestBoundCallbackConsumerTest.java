@@ -7,11 +7,14 @@ import io.github.ande1922.moduvera.context.ActorType;
 import io.github.ande1922.moduvera.context.ExecutionContext;
 import io.github.ande1922.moduvera.context.ExecutionContextHolder;
 import io.github.ande1922.moduvera.context.ExecutionContextSnapshot;
+import io.github.ande1922.moduvera.context.ExecutionContextSnapshot.BoundFunction;
 import io.github.ande1922.moduvera.context.ExecutionScope;
 import io.github.ande1922.moduvera.context.Initiator;
 import io.github.ande1922.moduvera.context.TenantId;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import org.junit.jupiter.api.Test;
@@ -27,21 +30,23 @@ class RequestBoundCallbackConsumerTest {
             "worker-corr");
 
     @Test
-    void reusesBusinessFunctionButCreatesOneBindingForEachRequest() {
+    void sdkDriverRetainsSeparateRequestCallbacksUntilLaterTrigger() {
         Function<String, Observation> processor =
                 value -> new Observation(value, ExecutionContextHolder.require());
-        var first = ExecutionContextHolder.call(
-                FIRST_REQUEST,
-                () -> ExecutionContextSnapshot.capture().bindFunction(processor));
-        var second = ExecutionContextHolder.call(
-                SECOND_REQUEST,
-                () -> ExecutionContextSnapshot.capture().bindFunction(processor));
+        CallbackSdkDriver sdk = new CallbackSdkDriver();
+
+        ExecutionContextHolder.run(FIRST_REQUEST, () -> sdk.register(
+                "first", ExecutionContextSnapshot.capture().bindFunction(processor)));
+        ExecutionContextHolder.run(SECOND_REQUEST, () -> sdk.register(
+                "second", ExecutionContextSnapshot.capture().bindFunction(processor)));
+        assertThat(ExecutionContextHolder.current()).isEmpty();
 
         ExecutionContextHolder.run(WORKER, () -> {
-            assertThat(first.apply("first"))
-                    .isEqualTo(new Observation("first", FIRST_REQUEST));
-            assertThat(second.apply("second"))
-                    .isEqualTo(new Observation("second", SECOND_REQUEST));
+            assertThat(sdk.trigger("first", "first-payload"))
+                    .isEqualTo(new Observation("first-payload", FIRST_REQUEST));
+            assertThat(ExecutionContextHolder.require()).isSameAs(WORKER);
+            assertThat(sdk.trigger("second", "second-payload"))
+                    .isEqualTo(new Observation("second-payload", SECOND_REQUEST));
             assertThat(ExecutionContextHolder.require()).isSameAs(WORKER);
         });
         assertThat(ExecutionContextHolder.current()).isEmpty();
@@ -78,6 +83,19 @@ class RequestBoundCallbackConsumerTest {
     private record TrustedEvent(ExecutionContext context, String payload) {}
 
     private record Observation(String payload, ExecutionContext context) {}
+
+    private static final class CallbackSdkDriver {
+
+        private final Map<String, BoundFunction<String, Observation>> callbacks = new HashMap<>();
+
+        private void register(String requestId, BoundFunction<String, Observation> callback) {
+            callbacks.put(requestId, callback);
+        }
+
+        private Observation trigger(String requestId, String payload) {
+            return callbacks.get(requestId).apply(payload);
+        }
+    }
 
     private static final class LongLivedListener {
 
