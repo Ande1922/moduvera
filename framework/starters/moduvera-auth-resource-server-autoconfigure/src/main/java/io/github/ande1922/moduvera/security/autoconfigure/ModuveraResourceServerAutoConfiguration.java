@@ -3,7 +3,8 @@ package io.github.ande1922.moduvera.security.autoconfigure;
 import io.github.ande1922.moduvera.security.jwt.JwtExecutionContextFactory;
 import io.github.ande1922.moduvera.security.jwt.ModuveraJwtAuthenticationConverter;
 import io.github.ande1922.moduvera.security.web.DefaultRequestCorrelationIdResolver;
-import io.github.ande1922.moduvera.security.web.ExecutionContextFilter;
+import io.github.ande1922.moduvera.security.web.ExecutionContextHandlerInterceptor;
+import io.github.ande1922.moduvera.security.web.ExecutionContextHandlerSelection;
 import io.github.ande1922.moduvera.security.web.RequestCorrelationIdResolver;
 import io.github.ande1922.moduvera.security.web.SecurityProblemWriter;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
@@ -20,6 +21,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 import tools.jackson.databind.ObjectMapper;
 
 @AutoConfiguration(
@@ -49,9 +52,24 @@ public class ModuveraResourceServerAutoConfiguration {
     }
 
     @Bean
+    @ConditionalOnBean(ExecutionContextHandlerSelection.class)
     @ConditionalOnMissingBean
-    ExecutionContextFilter moduveraExecutionContextFilter(RequestCorrelationIdResolver correlationIds) {
-        return new ExecutionContextFilter(correlationIds);
+    ExecutionContextHandlerInterceptor moduveraExecutionContextHandlerInterceptor(
+            ExecutionContextHandlerSelection handlers,
+            RequestCorrelationIdResolver correlationIds) {
+        return new ExecutionContextHandlerInterceptor(handlers, correlationIds);
+    }
+
+    @Bean
+    @ConditionalOnBean(ExecutionContextHandlerInterceptor.class)
+    WebMvcConfigurer moduveraExecutionContextWebMvcConfigurer(
+            ExecutionContextHandlerInterceptor interceptor) {
+        return new WebMvcConfigurer() {
+            @Override
+            public void addInterceptors(InterceptorRegistry registry) {
+                registry.addInterceptor(interceptor);
+            }
+        };
     }
 
     @Bean
@@ -65,9 +83,8 @@ public class ModuveraResourceServerAutoConfiguration {
     @ConditionalOnMissingBean
     ModuveraResourceServerConfigurer moduveraResourceServerConfigurer(
             ModuveraJwtAuthenticationConverter jwtConverter,
-            ExecutionContextFilter contextFilter,
             SecurityProblemWriter problemWriter) {
-        return new ModuveraResourceServerConfigurer(jwtConverter, contextFilter, problemWriter);
+        return new ModuveraResourceServerConfigurer(jwtConverter, problemWriter);
     }
 
     @Bean

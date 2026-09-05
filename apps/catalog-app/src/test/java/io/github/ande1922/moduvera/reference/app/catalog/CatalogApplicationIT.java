@@ -18,6 +18,7 @@ import io.github.ande1922.moduvera.reference.catalog.catalog.adapter.outbound.pe
 import io.github.ande1922.moduvera.reference.catalog.catalog.domain.Product;
 import io.github.ande1922.moduvera.reference.catalog.catalog.domain.ProductRepository;
 import io.github.ande1922.moduvera.reference.catalog.migration.CatalogMigrationConfiguration;
+import io.github.ande1922.moduvera.security.web.ExecutionContextHandlerSelection;
 import javax.sql.DataSource;
 import java.math.BigDecimal;
 import java.net.URI;
@@ -41,6 +42,7 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -350,6 +352,16 @@ class CatalogApplicationIT {
                 case "catalog-no-permission" -> service(token, List.of());
                 default -> throw new JwtException("unknown test token");
             };
+        }
+
+        @Bean
+        @Primary
+        ExecutionContextHandlerSelection catalogTestHttpExecutionHandlers() {
+            return ExecutionContextHandlerSelection.builder()
+                    .manageHandlers(CatalogHttpController.class, VirtualThreadProbe.class)
+                    .excludePackage("org.springframework.boot.actuate")
+                    .excludePackage("org.springframework.boot.autoconfigure.web.servlet.error")
+                    .build();
         }
 
         private static Jwt service(String token, List<String> permissions) {

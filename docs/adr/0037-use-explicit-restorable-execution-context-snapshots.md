@@ -146,11 +146,38 @@ Implementation and consumer evidence remain the responsibility of ticket 05.
 
 ## HTTP execution boundaries — ticket 06
 
-Status: planned.
+Status: implemented and verified.
 
-Managed handler selection is independent of authentication. Method, class and default Tenant declarations determine the execution range.
+Each Servlet App explicitly supplies an `ExecutionContextHandlerSelection` for
+its managed Controller types or packages and may name excluded non-business
+handlers. Selection is independent of `permitAll`, JWT presence, tenant claims
+and `Tenant-Id`; exclusion only disables this context adapter and does not
+change Spring Security authentication or authorization.
 
-Implementation and consumer evidence remain the responsibility of ticket 06.
+After the security filter chain authenticates and authorizes the request,
+Spring MVC resolves the actual `HandlerMethod`. The context interceptor then
+resolves `@ExecutionBoundary` at method, class and default-Tenant precedence
+and opens the full Actor, Initiator, Scope and correlation context before the
+Controller invokes its use case. A valid USER JWT may omit `tenant_id`:
+Platform handlers accept it, while Tenant handlers reject it with 403 before
+the Controller. Tenant handlers retain SERVICE target-header requirements and
+asserted/requested tenant conflict rejection. Platform handlers ignore a
+client `Tenant-Id` for scope selection.
+
+One Scope belongs to one actual dispatch thread. Synchronous completion and
+error unwinding close it in `afterCompletion`; an asynchronous handoff closes
+it in `afterConcurrentHandlingStarted`; an ASYNC redispatch opens a new Scope
+after resolving its handler. Error handlers receive a context only if the App
+selects them. The first phase does not transparently propagate context into an
+MVC `Callable`, `DeferredResult` producer or arbitrary asynchronous callback.
+
+Evidence: focused resolver/interceptor tests; embedded Tomcat with RSA-signed
+JWTs, virtual request threads, real Security and MVC chains, method/class/default
+selection, 401/403 Problem responses, side-effect guards, excluded handlers,
+same-tenant distinct identities and REQUEST/ASYNC/ERROR cleanup; Catalog App
+consumer IT and the applicable reference-product HTTP scenarios. Usage and
+the supported lifecycle are documented in
+[`HTTP-EXECUTION-BOUNDARIES.md`](../implementation/HTTP-EXECUTION-BOUNDARIES.md).
 
 ## Reactor context templates — ticket 07
 

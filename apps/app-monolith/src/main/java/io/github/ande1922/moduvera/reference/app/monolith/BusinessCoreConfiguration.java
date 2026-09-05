@@ -5,6 +5,7 @@ import io.github.ande1922.moduvera.identifier.IdentifierGenerator;
 import io.github.ande1922.moduvera.identifier.SnowflakeIdentifierGenerator;
 import io.github.ande1922.moduvera.messaging.kafka.migration.ModuveraMessagingMigrationConfiguration;
 import io.github.ande1922.moduvera.reference.catalog.catalog.CatalogModuleConfiguration;
+import io.github.ande1922.moduvera.reference.catalog.catalog.adapter.inbound.http.CatalogHttpController;
 import io.github.ande1922.moduvera.reference.catalog.catalog.adapter.inbound.http.CatalogInternalHttpInboundConfiguration;
 import io.github.ande1922.moduvera.reference.catalog.catalog.adapter.outbound.persistence.CatalogPersistenceOutboundConfiguration;
 import io.github.ande1922.moduvera.reference.catalog.migration.CatalogMigrationConfiguration;
@@ -20,6 +21,7 @@ import io.github.ande1922.moduvera.reference.order.adapter.inbound.messaging.Inv
 import io.github.ande1922.moduvera.reference.order.adapter.outbound.messaging.ReserveInventoryPublicationConfiguration;
 import io.github.ande1922.moduvera.reference.order.adapter.outbound.persistence.OrderPersistenceConfiguration;
 import io.github.ande1922.moduvera.reference.order.migration.OrderMigrationConfiguration;
+import io.github.ande1922.moduvera.security.web.ExecutionContextHandlerSelection;
 import java.time.Clock;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -71,6 +73,15 @@ class BusinessCoreConfiguration {
     @Bean
     UseCaseAuthorizer businessAuthorizer() {
         return new UseCaseAuthorizer();
+    }
+
+    @Bean
+    ExecutionContextHandlerSelection businessHttpExecutionHandlers() {
+        return ExecutionContextHandlerSelection.builder()
+                .manageHandlers(CatalogHttpController.class, OrderHttpController.class)
+                .excludePackage("org.springframework.boot.actuate")
+                .excludePackage("org.springframework.boot.autoconfigure.web.servlet.error")
+                .build();
     }
 
     @Bean

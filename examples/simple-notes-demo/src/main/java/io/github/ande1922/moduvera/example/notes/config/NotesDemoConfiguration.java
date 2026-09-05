@@ -14,6 +14,7 @@ import io.github.ande1922.moduvera.message.MessageType;
 import io.github.ande1922.moduvera.message.NonRetryableMessageException;
 import io.github.ande1922.moduvera.messaging.kafka.ReliableInboundEndpoint;
 import io.github.ande1922.moduvera.messaging.kafka.ReliableMessageConsumerFactory;
+import io.github.ande1922.moduvera.security.web.ExecutionContextHandlerSelection;
 import io.github.ande1922.moduvera.web.ProblemStatusContributor;
 import java.sql.Timestamp;
 import java.net.URI;
@@ -37,6 +38,15 @@ class NotesDemoConfiguration {
     @Bean
     UseCaseAuthorizer useCaseAuthorizer() {
         return new UseCaseAuthorizer();
+    }
+
+    @Bean
+    ExecutionContextHandlerSelection notesHttpExecutionHandlers() {
+        return ExecutionContextHandlerSelection.builder()
+                .managePackage("io.github.ande1922.moduvera.example.notes.interfaces.http")
+                .excludePackage("org.springframework.boot.actuate")
+                .excludePackage("org.springframework.boot.autoconfigure.web.servlet.error")
+                .build();
     }
 
     @Bean

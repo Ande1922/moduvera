@@ -15,9 +15,6 @@ public record TrustedJwtPrincipal(Actor actor, Initiator initiator, TenantId ass
         if (actor.type() == ActorType.SYSTEM) {
             throw new IllegalArgumentException("SYSTEM actors cannot enter through the HTTP resource server");
         }
-        if (actor.type() == ActorType.USER && assertedTenantId == null) {
-            throw new IllegalArgumentException("USER tokens must assert tenant_id");
-        }
     }
 
     public Optional<TenantId> assertedTenant() {

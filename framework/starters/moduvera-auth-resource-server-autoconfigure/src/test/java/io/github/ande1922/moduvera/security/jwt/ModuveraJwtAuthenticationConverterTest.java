@@ -1,13 +1,11 @@
 package io.github.ande1922.moduvera.security.jwt;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.ande1922.moduvera.context.ActorType;
 import java.time.Instant;
 import java.util.List;
 import org.junit.jupiter.api.Test;
-import org.springframework.security.oauth2.core.OAuth2AuthenticationException;
 import org.springframework.security.oauth2.jwt.Jwt;
 
 class ModuveraJwtAuthenticationConverterTest {
@@ -34,12 +32,15 @@ class ModuveraJwtAuthenticationConverterTest {
     }
 
     @Test
-    void rejectsAUserTokenWithoutATenantClaim() {
+    void authenticatesAUserTokenWithoutATenantClaim() {
         Jwt jwt = jwt(ActorType.USER, "user-42").build();
 
-        assertThatThrownBy(() -> converter.convert(jwt))
-                .isInstanceOf(OAuth2AuthenticationException.class)
-                .hasMessageContaining("invalid platform claims");
+        var authentication = (ModuveraJwtAuthenticationToken) converter.convert(jwt);
+
+        assertThat(authentication.isAuthenticated()).isTrue();
+        assertThat(authentication.trustedPrincipal().actor().subjectId()).isEqualTo("user-42");
+        assertThat(authentication.trustedPrincipal().initiator().subjectId()).isEqualTo("user-42");
+        assertThat(authentication.trustedPrincipal().assertedTenant()).isEmpty();
     }
 
     @Test
