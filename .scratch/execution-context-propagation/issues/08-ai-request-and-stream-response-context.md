@@ -1,5 +1,5 @@
 Type: issue
-Status: claimed
+Status: resolved
 Blocked by: 02
 
 # AI 请求注入与流式响应消费
@@ -19,15 +19,15 @@ Test seams: T06、T08、T09
 
 ## Acceptance criteria
 
-- [ ] 每次 AI 请求严格捕获同一个可信 ExecutionContext，分别写入 Advisor request context 与 ToolContext 对应选项；保留其他键、调用参数和配置。
-- [ ] 保留键已有不同上下文时拒绝误复用，不静默覆盖；共享 ChatClient 默认状态不保存某次请求身份，捕获缺失在调用前失败。
-- [ ] 上下文不进入 prompt、模型输入、工具参数 schema 或结果；两个原生通道的键与值契约作为 09 可直接复用的公共适配输出。
-- [ ] 保留 ChatClientResponse 直至完成需上下文的处理；响应适配器每次严格读取当前响应的保留键，缺失/错误类型先拒绝，不回退工作线程 Holder。
-- [ ] 仅在实际同步处理期间开 Scope，成功、异常退出均恢复；不同线程完成、并发不同请求及同租户不同身份不串上下文。
-- [ ] 响应适配器不在创建时捕获身份，满足委托线程安全前提时可共享；与固定快照 Bound 对象的跨请求禁用规则明确区分。
-- [ ] 通过真实 ChatClient 的流式 ChatClientResponse 订阅路径与测试源码脚本化 ChatModel 驱动消费，证明订阅后信号换线程及并发请求下的原生通道和处理回调；仅同步 call 或手工构造响应不能替代流式证据。不调用付费模型，不把脚本模型发布为生产适配器。
-- [ ] 锁定与仓库 Java/Boot 基线兼容的实际依赖，证明 Kernel 与非 AI 消费者不被迫引入 AI；协议无关 Service API 不增加 ChatClientResponse 参数。
-- [ ] 本场景公共消费者、配置/保留键冲突与响应生命周期说明、依赖检查随票交付；说明仅剩内容字符串后不能自动恢复原生响应上下文。
+- [x] 每次 AI 请求严格捕获同一个可信 ExecutionContext，分别写入 Advisor request context 与 ToolContext 对应选项；保留其他键、调用参数和配置。
+- [x] 保留键已有不同上下文时拒绝误复用，不静默覆盖；共享 ChatClient 默认状态不保存某次请求身份，捕获缺失在调用前失败。
+- [x] 上下文不进入 prompt、模型输入、工具参数 schema 或结果；两个原生通道的键与值契约作为 09 可直接复用的公共适配输出。
+- [x] 保留 ChatClientResponse 直至完成需上下文的处理；响应适配器每次严格读取当前响应的保留键，缺失/错误类型先拒绝，不回退工作线程 Holder。
+- [x] 仅在实际同步处理期间开 Scope，成功、异常退出均恢复；不同线程完成、并发不同请求及同租户不同身份不串上下文。
+- [x] 响应适配器不在创建时捕获身份，满足委托线程安全前提时可共享；与固定快照 Bound 对象的跨请求禁用规则明确区分。
+- [x] 通过真实 ChatClient 的流式 ChatClientResponse 订阅路径与测试源码脚本化 ChatModel 驱动消费，证明订阅后信号换线程及并发请求下的原生通道和处理回调；仅同步 call 或手工构造响应不能替代流式证据。不调用付费模型，不把脚本模型发布为生产适配器。
+- [x] 锁定与仓库 Java/Boot 基线兼容的实际依赖，证明 Kernel 与非 AI 消费者不被迫引入 AI；协议无关 Service API 不增加 ChatClientResponse 参数。
+- [x] 本场景公共消费者、配置/保留键冲突与响应生命周期说明、依赖检查随票交付；说明仅剩内容字符串后不能自动恢复原生响应上下文。
 
 ## Verification
 
@@ -42,3 +42,16 @@ Test seams: T06、T08、T09
 ## Comments
 
 - 2026-09-05：等待 02；09 复用本票请求注入和原生键契约，而非将响应 mapper 当作工具执行依赖。
+
+## Answer
+
+Implemented and integrated on 2026-09-06.
+
+- Base: `46ac0c4c189533ae0d13ddd79ba06a735657acf9`. Worker head: `0e5c6dba5a8895173e66ac6d897c7c56a9bcb6b7`.
+- Integrated commit: `5e80a8dcbdc44262098d2cef3771f1eeb813fa86` on `codex/execution-context-20260905-integration`.
+- Worktree: `/private/tmp/execution-context-frontier-20260905/08`; branch: `codex/execution-context-20260905-08`.
+- Verification PASS: Worker affected verify passed Kernel 37, AI Adapter 4 and independent consumer 5 tests with dependency convergence, Spotless and PMD. Six native carrier collisions reject before model calls; delayed and concurrent true streams restore complete context. Integrated Kernel 43, AI Adapter 4 and independent consumer 5 tests passed; all 10 ticket files and the allocated ADR section match the reviewed worker head. Resolved Spring AI 2.0.1, Reactor 3.8.7 and Spring Framework 7.0.9; Kernel/non-AI dependency boundaries verified.
+- Standards review completed clean and Spec review completed clean against the same base/worker head.
+- Acceptance mapping and exact commands: [worker report](../evidence/08/worker-report.md).
+- Review evidence: [Standards](../evidence/08/review-standards-closure-1.md) and [Spec](../evidence/08/review-spec-closure-1.md).
+- This ticket result is not final feature acceptance; parent spec/finding remain unchanged.

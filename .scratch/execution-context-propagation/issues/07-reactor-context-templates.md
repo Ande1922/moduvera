@@ -1,5 +1,5 @@
 Type: issue
-Status: ready-for-agent
+Status: claimed
 Blocked by: 02
 
 # Reactor 订阅上下文模板

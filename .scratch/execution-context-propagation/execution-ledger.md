@@ -6,7 +6,7 @@ Code base: ce1636f82f9652b2b14dd9e146e62c748fbf3233. Integration branch: codex/e
 
 ## Current frontier
 
-04, 05, 06, 07, 08, 10; claimed now: 04, 06, 08, 10.
+04, 05, 06, 07, 09, 10; claimed now: 04, 06, 07, 09, 10.
 
 ## Evidence rules
 
@@ -36,3 +36,7 @@ Base `46ac0c4c189533ae0d13ddd79ba06a735657acf9`; worker head `a1b0aaccb421d81f78
 ## Ticket 10 dispatch preparation
 
 2026-09-06: claimed ready ticket 10 for the next available worker slot. Prerequisite 02 is integrated. Its message Adapter/TCK/runtime evidence and ADR ticket 10 section are disjoint from active 04 and 08; root POM/BOM remains owned by 08.
+
+## Ticket 08 integrated
+
+Base `46ac0c4c189533ae0d13ddd79ba06a735657acf9`; worker head `0e5c6dba5a8895173e66ac6d897c7c56a9bcb6b7`; integrated `5e80a8dcbdc44262098d2cef3771f1eeb813fa86`. Branch `codex/execution-context-20260905-08`, worktree `/private/tmp/execution-context-frontier-20260905/08`. Standards and Spec clean at the same fixed range. Verification PASS: Worker affected verify passed Kernel 37, AI Adapter 4 and independent consumer 5 tests with dependency convergence, Spotless and PMD. Six native carrier collisions reject before model calls; delayed and concurrent true streams restore complete context. Integrated Kernel 43, AI Adapter 4 and independent consumer 5 tests passed; all 10 ticket files and the allocated ADR section match the reviewed worker head. Resolved Spring AI 2.0.1, Reactor 3.8.7 and Spring Framework 7.0.9; Kernel/non-AI dependency boundaries verified. Evidence is under `evidence/08/`. Remaining frontier: 04, 05, 06, 07, 09, 10.

@@ -1,5 +1,5 @@
 Type: issue
-Status: blocked
+Status: claimed
 Blocked by: 08
 
 # AI 多轮工具调用隔离
