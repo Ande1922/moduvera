@@ -1,5 +1,5 @@
 Type: issue
-Status: ready-for-agent
+Status: claimed
 Blocked by: 02
 
 # tenant-only 消息边界兼容

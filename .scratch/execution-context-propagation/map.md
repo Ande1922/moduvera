@@ -90,3 +90,5 @@ AI 08/09 不以 07 为阻塞项：原生 Reactor 库依赖不等于依赖本项�
 - 2026-09-05 implementation: ticket 02 integrated at `4313748aac07b06943072f7d00f71ce8af5751d0`, both review axes clean; verification PASS. Current open frontier: 03, 06, 07, 08, 10. Claims: 03, 06, 08. See [ticket evidence](issues/02-platform-tenant-and-resource-guards.md#answer). Historical publication states above remain the original snapshot.
 
 - 2026-09-06 implementation: ticket 03 integrated at `8f4cace9078dcb55b737d61ff7ec830f68fe3c6f`, both review axes clean; verification PASS. Current open frontier: 04, 05, 06, 07, 08, 10. Claims: 04. See [ticket evidence](issues/03-request-bound-callbacks.md#answer). Historical publication states above remain the original snapshot.
+
+- 2026-09-06: ticket 10 claimed for isolated message compatibility work; no new dependency edge.

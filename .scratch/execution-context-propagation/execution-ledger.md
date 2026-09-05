@@ -6,7 +6,7 @@ Code base: ce1636f82f9652b2b14dd9e146e62c748fbf3233. Integration branch: codex/e
 
 ## Current frontier
 
-04, 05, 06, 07, 08, 10; claimed now: 04, 06, 08.
+04, 05, 06, 07, 08, 10; claimed now: 04, 06, 08, 10.
 
 ## Evidence rules
 
@@ -32,3 +32,7 @@ Base `4b7baf1904ae34bb63525939b8afef60bc74c8a1`; worker head `dbb2a1ade64f1d6bb8
 ## Ticket 03 integrated
 
 Base `46ac0c4c189533ae0d13ddd79ba06a735657acf9`; worker head `a1b0aaccb421d81f7871c571bba3c5a8704d1351`; integrated `8f4cace9078dcb55b737d61ff7ec830f68fe3c6f`. Branch `codex/execution-context-20260905-03`, worktree `/private/tmp/execution-context-frontier-20260905/03`. Standards and Spec clean at the same fixed range. Verification PASS: Worker Kernel verify 43 tests passed; independent public consumer 2 tests passed before/after SDK driver cleanup; java.base-only dependencies. Integrated core context, callback and public-consumer test selection passed across the 11-module reactor. Integrated source tree equals the reviewed worker tree. Evidence is under `evidence/03/`. Remaining frontier: 04, 05, 06, 07, 08, 10.
+
+## Ticket 10 dispatch preparation
+
+2026-09-06: claimed ready ticket 10 for the next available worker slot. Prerequisite 02 is integrated. Its message Adapter/TCK/runtime evidence and ADR ticket 10 section are disjoint from active 04 and 08; root POM/BOM remains owned by 08.
