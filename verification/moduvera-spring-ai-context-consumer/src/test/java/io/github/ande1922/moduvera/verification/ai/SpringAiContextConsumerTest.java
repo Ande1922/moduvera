@@ -1,6 +1,7 @@
 package io.github.ande1922.moduvera.verification.ai;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -26,6 +27,7 @@ import io.github.ande1922.moduvera.context.TenantId;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.ChatClientResponse;
+import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import reactor.core.publisher.Flux;
@@ -36,7 +38,151 @@ import reactor.core.scheduler.Schedulers;
 class SpringAiContextConsumerTest {
 
     private static final Duration TIMEOUT = Duration.ofSeconds(10);
+    private static final ExecutionContext REQUEST = tenantContext("request", "alice", "request-0");
     private static final ExecutionContext WORKER = tenantContext("worker", "worker", "worker-0");
+    private static final ExecutionContext FOREIGN = tenantContext("foreign", "mallory", "foreign-0");
+
+    @Test
+    void rejectsEveryEffectiveReservedContextCollisionBeforeModelDelegation() {
+        List<CollisionScenario> scenarios = List.of(
+                new CollisionScenario("default Advisor", model -> ChatClient.builder(model)
+                    .defaultAdvisors(advisors -> advisors.param(
+                            SpringAiExecutionContexts.EXECUTION_CONTEXT_KEY, FOREIGN))
+                    .build()
+                    .prompt()
+                    .user("default-advisor")),
+                new CollisionScenario("request Advisor", model -> ChatClient.create(model)
+                    .prompt()
+                    .user("request-advisor")
+                    .advisors(advisors -> advisors.param(
+                            SpringAiExecutionContexts.EXECUTION_CONTEXT_KEY, FOREIGN))),
+                new CollisionScenario("default ToolContext", model -> ChatClient.builder(model)
+                    .defaultToolContext(Map.of(SpringAiExecutionContexts.EXECUTION_CONTEXT_KEY, FOREIGN))
+                    .build()
+                    .prompt()
+                    .user("default-tool-context")),
+                new CollisionScenario("request ToolContext", model -> ChatClient.create(model)
+                    .prompt()
+                    .user("request-tool-context")
+                    .toolContext(Map.of(SpringAiExecutionContexts.EXECUTION_CONTEXT_KEY, FOREIGN))),
+                new CollisionScenario("request ToolCallingChatOptions", model -> ChatClient.create(model)
+                    .prompt()
+                    .user("request-options")
+                    .options(ToolCallingChatOptions.builder()
+                        .toolContext(Map.of(SpringAiExecutionContexts.EXECUTION_CONTEXT_KEY, FOREIGN)))),
+                new CollisionScenario("default ToolCallingChatOptions", model -> ChatClient.builder(model)
+                    .defaultOptions(ToolCallingChatOptions.builder()
+                        .toolContext(Map.of(SpringAiExecutionContexts.EXECUTION_CONTEXT_KEY, FOREIGN)))
+                    .build()
+                    .prompt()
+                    .user("default-options")));
+
+        for (CollisionScenario scenario : scenarios) {
+            Scheduler modelScheduler = Schedulers.newSingle("collision-model");
+            try {
+                ScriptedChatModel model = new ScriptedChatModel(1, modelScheduler);
+                model.releaseSignals();
+                SpringAiExecutionContexts.RequestContext captured =
+                        ExecutionContextHolder.call(REQUEST, SpringAiExecutionContexts::captureRequest);
+
+                assertThatThrownBy(() -> captured
+                                .applyTo(scenario.requestFactory().apply(model))
+                                .stream()
+                                .chatClientResponse()
+                                .blockLast(TIMEOUT))
+                        .as(scenario.name())
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("reserved execution context");
+                assertThat(model.modelCalls()).as(scenario.name()).isZero();
+            } finally {
+                modelScheduler.dispose();
+            }
+        }
+    }
+
+    @Test
+    void retainsSameNativeContextAndNonReservedEffectiveConfiguration() {
+        try (TestRuntime runtime = new TestRuntime(1)) {
+            runtime.releaseModelSignals();
+            ChatClient client = ChatClient.builder(runtime.model())
+                .defaultAdvisors(advisors -> advisors
+                    .param(SpringAiExecutionContexts.EXECUTION_CONTEXT_KEY, REQUEST)
+                    .param("default-advisor", "kept"))
+                .defaultToolContext(Map.of(
+                        SpringAiExecutionContexts.EXECUTION_CONTEXT_KEY,
+                        REQUEST,
+                        "default-tool",
+                        "kept"))
+                .build();
+            SpringAiExecutionContexts.RequestContext captured = ExecutionContextHolder.call(
+                    REQUEST,
+                    () -> SpringAiExecutionContexts.captureRequest(
+                            Map.of("adapter-advisor", "kept"), Map.of("adapter-tool", "kept")));
+
+            ChatClientResponse response = captured
+                .applyTo(client.prompt()
+                    .system("configured-system")
+                    .user("same-context")
+                    .advisors(advisors -> advisors
+                        .param(SpringAiExecutionContexts.EXECUTION_CONTEXT_KEY, REQUEST)
+                        .param("request-advisor", "kept"))
+                    .toolContext(Map.of(
+                            SpringAiExecutionContexts.EXECUTION_CONTEXT_KEY,
+                            REQUEST,
+                            "request-tool",
+                            "kept"))
+                    .options(ToolCallingChatOptions.builder()
+                        .temperature(0.35)
+                        .toolContext(Map.of(
+                                SpringAiExecutionContexts.EXECUTION_CONTEXT_KEY,
+                                REQUEST,
+                                "options-tool",
+                                "kept"))))
+                .stream()
+                .chatClientResponse()
+                .blockLast(TIMEOUT);
+
+            assertThat(runtime.model().modelCalls()).isOne();
+            assertThat(response).isNotNull();
+            assertThat(response.context())
+                    .containsEntry(SpringAiExecutionContexts.EXECUTION_CONTEXT_KEY, REQUEST)
+                    .containsEntry("default-advisor", "kept")
+                    .containsEntry("request-advisor", "kept")
+                    .containsEntry("adapter-advisor", "kept");
+            Prompt prompt = runtime.model().prompt("same-context");
+            assertThat(prompt.getContents()).isEqualTo("configured-systemsame-context");
+            ToolCallingChatOptions options = (ToolCallingChatOptions) prompt.getOptions();
+            assertThat(options.getTemperature()).isEqualTo(0.35);
+            assertThat(options.getToolContext())
+                    .containsEntry(SpringAiExecutionContexts.EXECUTION_CONTEXT_KEY, REQUEST)
+                    .containsEntry("default-tool", "kept")
+                    .containsEntry("request-tool", "kept")
+                    .containsEntry("options-tool", "kept")
+                    .containsEntry("adapter-tool", "kept");
+        }
+    }
+
+    @Test
+    void rejectsRequestWithoutNativeToolContextCarrierBeforeModelDelegation() {
+        Scheduler modelScheduler = Schedulers.newSingle("missing-tool-context-model");
+        try {
+            ScriptedChatModel model =
+                    new ScriptedChatModel(1, modelScheduler, ChatOptions.builder().build());
+            SpringAiExecutionContexts.RequestContext captured =
+                    ExecutionContextHolder.call(REQUEST, SpringAiExecutionContexts::captureRequest);
+
+            assertThatThrownBy(() -> captured
+                            .applyTo(ChatClient.create(model).prompt().user("missing-tool-carrier"))
+                            .stream()
+                            .chatClientResponse()
+                            .blockLast(TIMEOUT))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("does not expose ToolCallingChatOptions");
+            assertThat(model.modelCalls()).isZero();
+        } finally {
+            modelScheduler.dispose();
+        }
+    }
 
     @Test
     void consumesRealDelayedStreamsWithNativeRequestContextsAndConcurrentIsolation()
@@ -193,6 +339,9 @@ class SpringAiContextConsumerTest {
     }
 
     private record Observation(String request, ExecutionContext context, String callbackThread) {}
+
+    private record CollisionScenario(
+            String name, Function<ScriptedChatModel, ChatClient.ChatClientRequestSpec> requestFactory) {}
 
     private static final class ResponseFailure extends RuntimeException {}
 

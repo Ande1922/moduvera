@@ -5,7 +5,8 @@ Spring AI and Reactor types outside `moduvera-kernel` and protocol-neutral
 Service APIs.
 
 Capture one request context while a trusted `ExecutionContext` is installed,
-then apply both native maps to the per-request `ChatClientRequestSpec`:
+then install its native request boundary on the per-request
+`ChatClientRequestSpec`:
 
 ```java
 var requestContext = SpringAiExecutionContexts.captureRequest(
@@ -19,11 +20,21 @@ Flux<Result> results = requestContext
         .map(SpringAiExecutionContexts.responseMapper(this::handleResponse));
 ```
 
-Both maps reserve `SpringAiExecutionContexts.EXECUTION_CONTEXT_KEY`. Pass all
-existing Advisor and tool context entries to `captureRequest` so it can retain
-them and reject a different value already assigned to the reserved key. Do not
-put a captured `RequestContext` in `ChatClient` defaults or reuse it across
-logical requests.
+Both public output maps reserve
+`SpringAiExecutionContexts.EXECUTION_CONTEXT_KEY`. `applyTo` adds the supplied
+non-reserved entries and a request-scoped Advisor. At execution time that
+Advisor inspects the fully assembled `ChatClientRequest` and concrete
+`ToolCallingChatOptions`, including client defaults, direct request context and
+request options. It rejects either effective carrier when the reserved key has
+a different value, then injects the same captured object while preserving the
+other entries and concrete provider options. A supported request must expose
+`ToolCallingChatOptions`; without that native ToolContext carrier the request
+fails before model delegation.
+
+Do not put a captured `RequestContext` in `ChatClient` defaults or reuse it
+across logical requests. Existing context maps may also be supplied to
+`captureRequest`; a different reserved value is rejected immediately and a
+matching captured value is retained.
 
 The response mapper is stateless: each invocation reads the current
 `ChatClientResponse`, opens a Holder scope only for the synchronous delegate,

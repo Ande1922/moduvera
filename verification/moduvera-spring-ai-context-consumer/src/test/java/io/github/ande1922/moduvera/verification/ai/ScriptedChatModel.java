@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -25,23 +26,38 @@ final class ScriptedChatModel implements ChatModel {
     private final CountDownLatch releaseSignals = new CountDownLatch(1);
     private final Scheduler signalScheduler;
     private final Function<Prompt, ChatResponse> responseScript;
+    private final ChatOptions options;
     private final List<Prompt> prompts = new CopyOnWriteArrayList<>();
     private final List<String> signalThreads = new CopyOnWriteArrayList<>();
+    private final AtomicInteger modelCalls = new AtomicInteger();
 
     ScriptedChatModel(int expectedCalls, Scheduler signalScheduler) {
-        this(
-                expectedCalls,
-                signalScheduler,
-                prompt -> new ChatResponse(List.of(new Generation(
-                        new AssistantMessage(prompt.getUserMessage().getText())))));
+        this(expectedCalls, signalScheduler, ToolCallingChatOptions.builder().build());
+    }
+
+    ScriptedChatModel(int expectedCalls, Scheduler signalScheduler, ChatOptions options) {
+        this(expectedCalls, signalScheduler, options, ScriptedChatModel::echoResponse);
     }
 
     ScriptedChatModel(
             int expectedCalls,
             Scheduler signalScheduler,
             Function<Prompt, ChatResponse> responseScript) {
+        this(
+                expectedCalls,
+                signalScheduler,
+                ToolCallingChatOptions.builder().build(),
+                responseScript);
+    }
+
+    ScriptedChatModel(
+            int expectedCalls,
+            Scheduler signalScheduler,
+            ChatOptions options,
+            Function<Prompt, ChatResponse> responseScript) {
         this.expectedCalls = new CountDownLatch(expectedCalls);
         this.signalScheduler = signalScheduler;
+        this.options = options;
         this.responseScript = responseScript;
     }
 
@@ -53,6 +69,7 @@ final class ScriptedChatModel implements ChatModel {
     @Override
     public Flux<ChatResponse> stream(Prompt prompt) {
         return Flux.defer(() -> {
+            modelCalls.incrementAndGet();
             prompts.add(prompt);
             expectedCalls.countDown();
             return Mono.fromCallable(() -> {
@@ -65,7 +82,7 @@ final class ScriptedChatModel implements ChatModel {
 
     @Override
     public ChatOptions getOptions() {
-        return ToolCallingChatOptions.builder().build();
+        return options;
     }
 
     boolean awaitExpectedCalls(Duration timeout) throws InterruptedException {
@@ -89,6 +106,15 @@ final class ScriptedChatModel implements ChatModel {
 
     List<String> signalThreads() {
         return List.copyOf(signalThreads);
+    }
+
+    int modelCalls() {
+        return modelCalls.get();
+    }
+
+    private static ChatResponse echoResponse(Prompt prompt) {
+        return new ChatResponse(List.of(
+                new Generation(new AssistantMessage(prompt.getUserMessage().getText()))));
     }
 
     private static void await(CountDownLatch latch, Duration timeout, String operation) {

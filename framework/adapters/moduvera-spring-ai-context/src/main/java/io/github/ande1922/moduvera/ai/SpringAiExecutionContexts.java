@@ -9,7 +9,16 @@ import java.util.function.Function;
 import io.github.ande1922.moduvera.context.ExecutionContext;
 import io.github.ande1922.moduvera.context.ExecutionContextHolder;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
+import org.springframework.ai.chat.client.advisor.api.CallAdvisor;
+import org.springframework.ai.chat.client.advisor.api.CallAdvisorChain;
+import org.springframework.ai.chat.client.advisor.api.StreamAdvisor;
+import org.springframework.ai.chat.client.advisor.api.StreamAdvisorChain;
+import org.springframework.ai.chat.prompt.ChatOptions;
+import org.springframework.ai.model.tool.ToolCallingChatOptions;
+import org.springframework.core.Ordered;
+import reactor.core.publisher.Flux;
 
 /** Explicit request and synchronous response boundaries for Spring AI execution context. */
 public final class SpringAiExecutionContexts {
@@ -30,8 +39,8 @@ public final class SpringAiExecutionContexts {
 
     /**
      * Strictly captures the current trusted context once and prepares both native Spring AI
-     * request channels. Callers must supply existing Advisor and tool context entries here so a
-     * reserved-key collision can be rejected before the request is delegated.
+     * request channels. Additional Advisor and tool context entries supplied here are retained;
+     * effective defaults and direct request configuration are validated when the request runs.
      *
      * <p>The returned object is fixed to this logical request and must not be stored in shared
      * defaults or reused across requests.
@@ -93,12 +102,20 @@ public final class SpringAiExecutionContexts {
         return Collections.unmodifiableMap(combined);
     }
 
+    private static Map<String, Object> withoutReservedContext(Map<String, Object> context) {
+        Map<String, Object> configuration = new LinkedHashMap<>(context);
+        configuration.remove(EXECUTION_CONTEXT_KEY);
+        return Collections.unmodifiableMap(configuration);
+    }
+
     /** Fixed request-scoped output containing both native context channels. */
     public static final class RequestContext {
 
         private final ExecutionContext executionContext;
         private final Map<String, Object> advisorContext;
         private final Map<String, Object> toolContext;
+        private final Map<String, Object> advisorConfiguration;
+        private final Map<String, Object> toolConfiguration;
 
         private RequestContext(
                 ExecutionContext executionContext,
@@ -107,6 +124,8 @@ public final class SpringAiExecutionContexts {
             this.executionContext = executionContext;
             this.advisorContext = advisorContext;
             this.toolContext = toolContext;
+            this.advisorConfiguration = withoutReservedContext(advisorContext);
+            this.toolConfiguration = withoutReservedContext(toolContext);
         }
 
         public ExecutionContext executionContext() {
@@ -121,11 +140,81 @@ public final class SpringAiExecutionContexts {
             return toolContext;
         }
 
-        /** Applies both captured maps to this request while retaining its other configuration. */
+        /**
+         * Adds the non-reserved configuration and a request-scoped native boundary Advisor. The
+         * Advisor validates the fully assembled request before it injects the captured value.
+         */
         public ChatClient.ChatClientRequestSpec applyTo(ChatClient.ChatClientRequestSpec request) {
             Objects.requireNonNull(request, "request");
-            return request.advisors(advisors -> advisors.params(advisorContext))
-                .toolContext(toolContext);
+            ChatClient.ChatClientRequestSpec configured = request;
+            if (!advisorConfiguration.isEmpty()) {
+                configured = configured.advisors(advisors -> advisors.params(advisorConfiguration));
+            }
+            if (!toolConfiguration.isEmpty()) {
+                configured = configured.toolContext(toolConfiguration);
+            }
+            return configured.advisors(new NativeExecutionContextAdvisor(executionContext));
+        }
+    }
+
+    private static final class NativeExecutionContextAdvisor implements CallAdvisor, StreamAdvisor {
+
+        private final ExecutionContext captured;
+
+        private NativeExecutionContextAdvisor(ExecutionContext captured) {
+            this.captured = captured;
+        }
+
+        @Override
+        public ChatClientResponse adviseCall(
+                ChatClientRequest request, CallAdvisorChain advisorChain) {
+            return advisorChain.nextCall(bind(request));
+        }
+
+        @Override
+        public Flux<ChatClientResponse> adviseStream(
+                ChatClientRequest request, StreamAdvisorChain advisorChain) {
+            return advisorChain.nextStream(bind(request));
+        }
+
+        @Override
+        public String getName() {
+            return "Moduvera Execution Context";
+        }
+
+        @Override
+        public int getOrder() {
+            return Ordered.HIGHEST_PRECEDENCE;
+        }
+
+        private ChatClientRequest bind(ChatClientRequest request) {
+            Map<String, Object> advisorContext = new LinkedHashMap<>(request.context());
+            rejectDifferentContext(advisorContext, "Advisor request context");
+
+            ChatOptions options = request.prompt().getOptions();
+            if (!(options instanceof ToolCallingChatOptions toolOptions)) {
+                throw new IllegalStateException(
+                        "Spring AI request does not expose ToolCallingChatOptions for ToolContext");
+            }
+            rejectDifferentContext(toolOptions.getToolContext(), "ToolContext");
+
+            advisorContext.put(EXECUTION_CONTEXT_KEY, captured);
+            ToolCallingChatOptions boundOptions = toolOptions.mutate()
+                .toolContext(Map.of(EXECUTION_CONTEXT_KEY, captured))
+                .build();
+            return request.mutate()
+                .context(advisorContext)
+                .prompt(request.prompt().mutate().chatOptions(boundOptions).build())
+                .build();
+        }
+
+        private void rejectDifferentContext(Map<String, ?> context, String channel) {
+            if (context != null
+                    && context.containsKey(EXECUTION_CONTEXT_KEY)
+                    && context.get(EXECUTION_CONTEXT_KEY) != captured) {
+                throw new IllegalStateException(
+                        channel + " contains a different reserved execution context");
+            }
         }
     }
 }

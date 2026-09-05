@@ -145,10 +145,13 @@ Implementation and consumer evidence remain the responsibility of ticket 07.
 Status: implemented.
 
 The optional `moduvera-spring-ai-context` Adapter captures one trusted context
-per request and supplies the same value under one public reserved key in both
-Advisor request context and ToolContext. Existing channel entries are retained;
-a different reserved value is rejected before delegation. The captured request
-object is fixed to one logical request and is never a shared ChatClient default.
+per request. A request-scoped Advisor validates the fully assembled Advisor
+request context and concrete ToolCallingChatOptions, then supplies the same
+value under one public reserved key in both native carriers. Existing defaults,
+direct entries and provider options are retained; a different effective
+reserved value is rejected before model or tool delegation. The captured
+request object is fixed to one logical request and is never a shared ChatClient
+default.
 
 The response mapper is stateless and reads every current ChatClientResponse. It
 rejects a missing or wrongly typed reserved value before its delegate, opens a
