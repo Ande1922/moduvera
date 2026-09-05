@@ -142,11 +142,25 @@ Implementation and consumer evidence remain the responsibility of ticket 07.
 
 ## AI request and streaming response context — ticket 08
 
-Status: planned.
+Status: implemented.
 
-Each request injects one context into both native carriers. Response processing reads the current ChatClientResponse during real stream consumption.
+The optional `moduvera-spring-ai-context` Adapter captures one trusted context
+per request and supplies the same value under one public reserved key in both
+Advisor request context and ToolContext. Existing channel entries are retained;
+a different reserved value is rejected before delegation. The captured request
+object is fixed to one logical request and is never a shared ChatClient default.
 
-Implementation and consumer evidence remain the responsibility of ticket 08.
+The response mapper is stateless and reads every current ChatClientResponse. It
+rejects a missing or wrongly typed reserved value before its delegate, opens a
+Scope only for the synchronous response function, and restores the prior Holder
+after success or failure. Response consumers must retain ChatClientResponse;
+content strings do not carry its native context.
+
+Evidence: Spring AI 2.0.1 with Spring Boot 4.1.1 and Java 26; Adapter unit tests;
+and an independent consumer using a delayed, thread-shifting real
+`ChatClient.stream().chatClientResponse()` subscription with concurrent Tenant,
+same-Tenant/different-identity, and Platform requests. Tool callback wrapping
+and multi-round tool-loop evidence remain owned by ticket 09.
 
 ## AI tool loop context — ticket 09
 

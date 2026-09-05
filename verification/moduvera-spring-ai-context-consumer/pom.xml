@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-parent</artifactId>
+    <version>4.1.1</version>
+    <relativePath />
+  </parent>
+
+  <groupId>io.github.ande1922.moduvera.verification</groupId>
+  <artifactId>moduvera-spring-ai-context-consumer</artifactId>
+  <version>0.1.0-SNAPSHOT</version>
+  <name>Moduvera :: Verification :: Spring AI Context Consumer</name>
+  <description>Independent public API consumer for Spring AI execution context</description>
+
+  <properties>
+    <java.version>26</java.version>
+    <moduvera.version>0.1.0-SNAPSHOT</moduvera.version>
+  </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>io.github.ande1922.moduvera</groupId>
+        <artifactId>moduvera-bom</artifactId>
+        <version>${moduvera.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <dependencies>
+    <dependency>
+      <groupId>io.github.ande1922.moduvera</groupId>
+      <artifactId>moduvera-spring-ai-context</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.assertj</groupId>
+      <artifactId>assertj-core</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+</project>
