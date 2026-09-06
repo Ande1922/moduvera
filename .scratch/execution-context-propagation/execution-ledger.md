@@ -74,3 +74,7 @@ Base `e76da5ab2629196e267c24b88f47e4605661ad95`; worker head `42ac607ee40d56a6ae
 ## Ticket 11 integrated
 
 Base `04c66e84e4b05814e462ba4999759b571109e9cf`; worker head `e055adb0148d8be69b42e2874a38641efa512e04`; integrated `297432f9f749c09b8d0cbc1dbd7bf3cf8fe14a5e`; full tree `3eafab29e06b9f901c07070bace13f2b1d86f538` equals the actual consumer/Scenario-tested tree. Worktree `/private/tmp/execution-context-frontier-20260905/11`, branch `codex/execution-context-20260905-11`. Standards and Spec clean. Verification PASS:237 common-baseline tests, real four-family dependency/artifact evidence, and both public topologies with Kafka recovery. [Qualification evidence](evidence/11/qualification-scenario.md). Tracker remains claimed solely for the independently controlled parent lifecycle; no code frontier remains. Final whole-range review/gate/Scenario remain separate.
+
+## Final preflight report-format correction
+
+The full base-to-104fafb `git diff --check` detected15 Markdown hard-break lines with trailing spaces in the committed ticket05 and ticket11 Spec report copies. Initial final reviewers did not report this preflight failure. The coordinator preserved the original external reports and changed only their committed copies to equivalent backslash hard breaks, retaining every review judgment and fixed ticket identifier. This formatting correction creates a new final fixed point; both final axes and the official Normal gate must use it. Earlier 104fafb Scenario evidence remains historical and does not substitute for the final-head Scenario.

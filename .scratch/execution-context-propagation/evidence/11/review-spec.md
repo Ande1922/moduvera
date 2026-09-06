@@ -1,13 +1,13 @@
 # Ticket 11 Spec review
 
-Axis: Spec only  
-Ticket: `.scratch/execution-context-propagation/issues/11-composition-and-consumer-qualification.md`  
-Worktree: `/private/tmp/execution-context-frontier-20260905/11`  
-Branch: `codex/execution-context-20260905-11`  
-Fixed base: `04c66e84e4b05814e462ba4999759b571109e9cf`  
-Reviewed head: `e055adb0148d8be69b42e2874a38641efa512e04`  
-Reviewed tree: `3eafab29e06b9f901c07070bace13f2b1d86f538`  
-Result: PASS — 0 findings; worst severity: none  
+Axis: Spec only\
+Ticket: `.scratch/execution-context-propagation/issues/11-composition-and-consumer-qualification.md`\
+Worktree: `/private/tmp/execution-context-frontier-20260905/11`\
+Branch: `codex/execution-context-20260905-11`\
+Fixed base: `04c66e84e4b05814e462ba4999759b571109e9cf`\
+Reviewed head: `e055adb0148d8be69b42e2874a38641efa512e04`\
+Reviewed tree: `3eafab29e06b9f901c07070bace13f2b1d86f538`\
+Result: PASS — 0 findings; worst severity: none\
 Requested reviewer profile: `gpt-5.6-sol/high`; effective runtime profile was not exposed and remains unverified.
 
 ## Range integrity

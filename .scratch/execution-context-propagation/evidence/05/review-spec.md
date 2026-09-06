@@ -1,12 +1,12 @@
 # Ticket 05 Spec review
 
-Axis: Spec only  
-Ticket: `.scratch/execution-context-propagation/issues/05-spring-task-executor-propagation.md`  
-Worktree: `/private/tmp/execution-context-frontier-20260905/05`  
-Branch: `codex/execution-context-20260905-05`  
-Fixed base: `e76da5ab2629196e267c24b88f47e4605661ad95`  
-Reviewed head: `42ac607ee40d56a6aeb164771fa0b4328feb3931`  
-Result: PASS — 0 findings; worst severity: none  
+Axis: Spec only\
+Ticket: `.scratch/execution-context-propagation/issues/05-spring-task-executor-propagation.md`\
+Worktree: `/private/tmp/execution-context-frontier-20260905/05`\
+Branch: `codex/execution-context-20260905-05`\
+Fixed base: `e76da5ab2629196e267c24b88f47e4605661ad95`\
+Reviewed head: `42ac607ee40d56a6aeb164771fa0b4328feb3931`\
+Result: PASS — 0 findings; worst severity: none\
 Requested reviewer profile: `gpt-5.6-sol/high`; effective runtime profile was not exposed and remains unverified.
 
 ## Range integrity
