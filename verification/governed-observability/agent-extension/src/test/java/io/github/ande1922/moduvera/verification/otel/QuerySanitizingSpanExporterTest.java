@@ -19,6 +19,7 @@ import io.opentelemetry.sdk.trace.export.SpanExporter;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 class QuerySanitizingSpanExporterTest {
@@ -27,6 +28,7 @@ class QuerySanitizingSpanExporterTest {
 
     @Test
     void stripsEveryQueryAndFragmentWhilePreservingSpanIdentityAndBatching() {
+        String privateQuery = "alpha=" + UUID.randomUUID();
         try (CapturingExporter delegate = new CapturingExporter();
                 QuerySanitizingSpanExporter exporter = new QuerySanitizingSpanExporter(delegate)) {
             List<LinkData> links = List.of(LinkData.create(SpanContext.create(
@@ -42,8 +44,8 @@ class QuerySanitizingSpanExporterTest {
                     status,
                     Attributes.builder()
                             .put(QuerySanitizingSpanExporter.URL_FULL,
-                                    "https://example.test/search?alpha=1&password=a%2Fb#private")
-                            .put(QuerySanitizingSpanExporter.URL_QUERY, "alpha=1&password=a%2Fb")
+                                    "https://example.test/search?" + privateQuery + "#private")
+                            .put(QuerySanitizingSpanExporter.URL_QUERY, privateQuery)
                             .put(QuerySanitizingSpanExporter.HTTP_URL,
                                     "http://example.test/legacy?anything=%3F")
                             .put(SAFE, "retained")
@@ -83,11 +85,12 @@ class QuerySanitizingSpanExporterTest {
 
     @Test
     void dropsMalformedUrlAttributesInsteadOfExportingTheirOriginalValues() {
+        String privateQuery = "alpha=" + UUID.randomUUID();
         Attributes sanitized = QuerySanitizingSpanExporter.sanitize(
                 Attributes.builder()
-                        .put(QuerySanitizingSpanExporter.URL_FULL, "http://[invalid?secret=value")
-                        .put(QuerySanitizingSpanExporter.HTTP_URL, "https://example.test/%ZZ?secret=value")
-                        .put(QuerySanitizingSpanExporter.URL_QUERY, "secret=value")
+                        .put(QuerySanitizingSpanExporter.URL_FULL, "http://[invalid?" + privateQuery)
+                        .put(QuerySanitizingSpanExporter.HTTP_URL, "https://example.test/%ZZ?" + privateQuery)
+                        .put(QuerySanitizingSpanExporter.URL_QUERY, privateQuery)
                         .put(SAFE, "retained")
                         .build());
 
@@ -99,10 +102,12 @@ class QuerySanitizingSpanExporterTest {
 
     @Test
     void stripsUrlUserInfoWhilePreservingEncodedPaths() {
+        String syntheticUserInfo = UUID.randomUUID() + ":" + UUID.randomUUID();
         Attributes sanitized = QuerySanitizingSpanExporter.sanitize(
                 Attributes.builder()
                         .put(QuerySanitizingSpanExporter.URL_FULL,
-                                "https://alice:p%40ss@example.test/path%2Fsegment?secret=value#fragment")
+                                "https://" + syntheticUserInfo
+                                        + "@example.test/path%2Fsegment?alpha=1#fragment")
                         .build());
 
         assertThat(sanitized.get(QuerySanitizingSpanExporter.URL_FULL))

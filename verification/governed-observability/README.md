@@ -37,13 +37,23 @@ and a byte-preflight-approved JAR whose SPI registration is deliberately
 broken.
 
 Run the complete qualification with dedicated external evidence and Maven
-cache directories:
+cache directories. Supply the local seeded login fixture through environment
+variables whose values come from the caller's local test credential source:
 
 ```bash
+MODUVERA_OBSERVABILITY_LOGIN_USERNAME="${LOCAL_FIXTURE_USERNAME}" \
+MODUVERA_OBSERVABILITY_LOGIN_CREDENTIAL="${LOCAL_FIXTURE_CREDENTIAL}" \
+MODUVERA_OBSERVABILITY_LOGIN_TENANT="${LOCAL_FIXTURE_TENANT}" \
 MODUVERA_OBSERVABILITY_EVIDENCE_DIR=/private/tmp/moduvera-otel-evidence \
 MODUVERA_OBSERVABILITY_MAVEN_REPO=/private/tmp/moduvera-otel-m2 \
 verification/governed-observability/verify.sh
 ```
+
+All three login variables are required and an empty or missing value exits 64
+before downloads, builds, or runtime startup. `verify.sh` removes them from its
+inherited environment and supplies them only to the two `probe.py` login
+processes. Their values are not command arguments, log output, or evidence
+fields.
 
 The scenario downloads the exact release asset, verifies both runtime artifact
 digests, builds and inspects the public images, mounts the Agent and extension

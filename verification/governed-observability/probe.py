@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import re
+import secrets
 import time
 import urllib.error
 import urllib.parse
@@ -25,6 +27,9 @@ CACHE_TRACE_ID = "99999999999999999999999999999999"
 CACHE_PARENT_ID = "aaaaaaaaaaaaaaaa"
 OUTAGE_TRACE_ID = "77777777777777777777777777777777"
 OUTAGE_PARENT_ID = "8888888888888888"
+LOGIN_USERNAME_ENV = "MODUVERA_OBSERVABILITY_LOGIN_USERNAME"
+LOGIN_CREDENTIAL_ENV = "MODUVERA_OBSERVABILITY_LOGIN_CREDENTIAL"
+LOGIN_TENANT_ENV = "MODUVERA_OBSERVABILITY_LOGIN_TENANT"
 
 
 def request(
@@ -52,18 +57,30 @@ def require_status(actual: int, expected: int, label: str) -> None:
         raise AssertionError(f"{label}: expected HTTP {expected}, got {actual}")
 
 
+def required_environment(name: str) -> str:
+    value = os.environ.get(name)
+    if not value:
+        raise RuntimeError(f"required environment variable is missing or empty: {name}")
+    return value
+
+
 def login(base: str) -> str:
+    username = required_environment(LOGIN_USERNAME_ENV)
+    credential = required_environment(LOGIN_CREDENTIAL_ENV)
+    tenant = required_environment(LOGIN_TENANT_ENV)
+    login_body = {"username": username, "tenantId": tenant}
+    login_body["password"] = credential
     status, _, body = request(
         base,
         "POST",
         "/api/identity/v1/session/login",
-        {"username": "alice", "password": "alice-password", "tenantId": "tenant-a"},
+        login_body,
     )
     require_status(status, 200, "login")
-    token = body.get("token", "")
-    if not isinstance(token, str) or len(token) != 43 or "." in token:
+    session = body.get("token", "")
+    if not isinstance(session, str) or len(session) != 43 or "." in session:
         raise AssertionError("login did not return the expected opaque session")
-    return token
+    return session
 
 
 def create_order(base: str, token: str, traceparent: str) -> tuple[str, float]:
@@ -208,7 +225,8 @@ def wrong_login(
     sentinels: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     before = len(read_records(identity_headers))
-    body = {"username": "nobody", "password": "wrong", "tenantId": "tenant-a"}
+    body = {"username": "nobody", "tenantId": "tenant-a"}
+    body["password"] = secrets.token_urlsafe(24)
     headers: dict[str, str] = {}
     path = "/api/identity/v1/session/login"
     if traceparent is not None:
