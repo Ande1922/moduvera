@@ -35,21 +35,42 @@ public class LoggingFixtureApplication {
     public static void main(String[] arguments) throws Exception {
         SpringApplication application = new SpringApplication(LoggingFixtureApplication.class);
         application.setWebApplicationType(WebApplicationType.NONE);
-        ConfigurableApplicationContext applicationContext = application.run(arguments);
-        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-        server.createContext("/info", exchange -> handle(exchange, false));
-        server.createContext("/error", exchange -> handle(exchange, true));
-        server.start();
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            server.stop(0);
-            applicationContext.close();
-        }));
-        Files.writeString(
+        runUntilReleased(
+                application,
+                arguments,
                 requiredPath("FIXTURE_PORT_FILE"),
-                server.getAddress().getPort() + System.lineSeparator(),
-                StandardCharsets.UTF_8);
-        LOGGER.info("governed logging fixture ready");
-        new CountDownLatch(1).await();
+                new CountDownLatch(1));
+    }
+
+    static void runUntilReleased(
+            SpringApplication application,
+            String[] arguments,
+            Path portFile,
+            CountDownLatch lifetime)
+            throws Exception {
+        try (ConfigurableApplicationContext applicationContext = application.run(arguments)) {
+            HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+            server.createContext("/info", exchange -> handle(exchange, false));
+            server.createContext("/error", exchange -> handle(exchange, true));
+            server.start();
+            Thread shutdownHook = new Thread(() -> {
+                server.stop(0);
+                applicationContext.close();
+            });
+            Runtime runtime = Runtime.getRuntime();
+            runtime.addShutdownHook(shutdownHook);
+            try {
+                Files.writeString(
+                        portFile,
+                        server.getAddress().getPort() + System.lineSeparator(),
+                        StandardCharsets.UTF_8);
+                LOGGER.info("governed logging fixture ready");
+                lifetime.await();
+            } finally {
+                server.stop(0);
+                runtime.removeShutdownHook(shutdownHook);
+            }
+        }
     }
 
     private static void handle(HttpExchange exchange, boolean fail) throws IOException {
