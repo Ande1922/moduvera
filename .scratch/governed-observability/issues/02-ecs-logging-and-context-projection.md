@@ -71,3 +71,7 @@ Blocked by: 01
 - 最终 formatter 13、Kernel 52、Starter 22 tests，Spotless/PMD/JaCoCo、原始探针及当前 extension/fixture package 均通过。实际 Agent 2.31.1/API 1.65.0 回放的十组随机哨兵在 stdout/stderr/原始 Span 中零匹配，含新增 apiKey2；14 的受控 metrics 观察保持 Trace 1、metrics 0、logs 0、500 ms 周期和两秒窗口。
 - 修复证据：`/private/tmp/governed-observability-wave2-20260906/evidence/02/aggregate-repair-round3-worker-report.md`、`aggregate-repair-round3-preflight-current-clean.log/.exit`；原票双轴复审：在 B0..aacd487 上均 CLEAN，原作者分别关闭各自发现，报告为 `aggregate-repair-round3-review-standards.md` 与 `aggregate-repair-round3-review-spec.md`。聚合作者复审、Normal Gate 和最终当前提交的运行回放仍须继续，旧最终证据只属于原提交。
 - 上述最终修复已快进纳入隔离 integration，无冲突；集成后 Logging/Messaging Starter 的 `-am test` 通过，回执为 `/private/tmp/governed-observability-wave2-20260906/evidence/integration-repair-cross-check.out/.exit`。
+
+- 后续正式 Normal Gate 在 `76059639bc93cd95ca1be0e7aef13fb8dd663a0d` 的 sensitive-content 阶段失败；95 项门禁自测及 diff/链接/Skill 检查通过，Maven 未运行。正式失败证据保留在 `/private/tmp/governed-observability-wave2-20260906/integration/.quality-gate/runs/20260906T153925.077469Z-56305`，未跳过或削弱扫描。
+- 原 writer 追加普通提交 `cae819b30c58b172bb82694256afe863e7c4b670`，仅调整三处测试/夹具的动态输入表达式。生产 formatter、规则及断言均不变；保留十类随机哨兵、原查询/转义引号和 Basic 输入覆盖。原 Standards/Spec 在 B0..cae819b 均 CLEAN；报告为 `/private/tmp/governed-observability-wave2-20260906/evidence/02/gate-fix-worker-report.md`、`gate-fix-review-standards.md`、`gate-fix-review-spec.md`。
+- 完整 B0..cae819b 独立敏感检查、聚焦/模块测试、静态契约和实际 Agent 运行均通过，真实干净工作区预检 PASS。补丁已无冲突快进集成，集成敏感检查也通过；回执 `integration-gate-fix-sensitive.out/.exit`。最终新提交的聚合双轴与完整 Normal Gate 仍须完成，单独敏感检查不替代正式 Gate。

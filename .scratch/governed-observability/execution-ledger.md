@@ -96,3 +96,13 @@ Worker/fixer、Standards/Spec reviewer 请求 `gpt-5.6-sol` / `high` / `fork_tur
 - `git merge --ff-only -- codex/governed-observability-wave2-20260906-02` 从 6a3e9f0 无冲突快进至 aacd487；集成后的 Logging/Messaging Starter `-am test` 通过，回执为 `/private/tmp/governed-observability-wave2-20260906/evidence/integration-repair-cross-check.out/.exit`。
 - 本次 tracker 普通提交后冻结新的最终 head，沿用同一 integration 工作区和原两位聚合作者重新评审完整 B0..head。STDS-W2-001 的正式关闭由原聚合 Standards 作者负责；之后才运行 Normal Gate、最终当前产物的 Agent 夹具和最终验收，结果外置在同批 evidence 中。6a3e9f0 上旧运行结果只属于旧提交，不能替代新最终结果。
 - 当前仍仅 01、02、07、14 resolved，后继 ready 前沿没有认领或实施。父 Spec、finding、Product Surface、主分支代码和其他未提交工作保持原范围；未合入 main、未 push、未部署、未清理 worktree。日志同步 Boot 控制台的资格边界及 ADR 0038 单体运行非本批范围均不变。
+
+
+## 第二批阶段 4 — 正式 Gate 夹具输入发现修复
+
+- 2026-09-07：本轮聚合双轴在 `76059639bc93cd95ca1be0e7aef13fb8dd663a0d` 均 CLEAN，原 Standards 作者正式关闭 STDS-W2-001。随后 Normal Gate 的 sensitive-content 检查标记三处测试/夹具源码；95 项自测和 diff/Markdown/Skill 检查通过，Maven 未运行。原始正式 FAIL 保留在 `/private/tmp/governed-observability-wave2-20260906/integration/.quality-gate/runs/20260906T153925.077469Z-56305`，不得改称已通过。
+- 原 02 writer 在原工作区追加普通 `cae819b30c58b172bb82694256afe863e7c4b670`：查询/转义赋值测试输入通过完整 key 与动态 value 构造；既有动态环境读取使用同一方法的限定调用；十类随机哨兵改用标签序列统一生成。没有硬编码凭据、扫描 suppression/allowlist、Gate 规则变更或断言削弱，生产 formatter 完全未变。Basic 哨兵前缀虽缩短，但仍使用同一新生成的 128-bit 随机值、同一 Basic 输入路径和精确缺失检查。
+- 原票 Standards `/root/wave2_review02_standards` 与 Spec `/root/wave2_review02_spec` 在 B0..cae819b 均 CLEAN。证据目录 `/private/tmp/governed-observability-wave2-20260906/evidence/02/` 中的 `gate-fix-worker-report.md`、`gate-fix-review-standards.md`、`gate-fix-review-spec.md` 记录完整 delta 与判断；`gate-fix-preflight-current-clean.log/.exit` 对当前干净工作区 PASS。独立完整范围 sensitive 检查有 760 上 RED 与 cae 上 GREEN。
+- 聚焦 13 项 formatter、Starter 22 项及 Spotless/PMD/JaCoCo、当前 extension/fixture package、14 项 Python 与 shell 静态契约、原泄漏探针和实际 Agent 回放通过；回放保留 6 ECS、1 SERVER Span、10 哨兵零泄漏，14 的 500 ms/两秒 Trace 1、metrics/logs 0 观察不变。最初静态检查的沙箱端口失败保留，允许本地测试端口后的同命令通过。
+- `git merge --ff-only -- codex/governed-observability-wave2-20260906-02` 从 760 无冲突快进至 cae；集成完整 B0..cae 敏感检查 PASS，回执 `integration-gate-fix-sensitive.out/.exit`。仅本票和本台账同步源主目录，20 项本专题内容保护均核对通过。
+- 本次 tracker 普通提交后冻结新的最终比较点，由同一 integration 工作区的原聚合双轴再次复核；然后重新运行完整 Normal Gate 和最终当前产物的适用运行检查。结果保留在新的外部证据目录，旧 760 回执和正式 FAIL 均不覆盖。源代码不合入 main、不 push、不清理工作区；02/14 之外的票仍不启动，父 Spec 和其他未提交工作不扩大范围。
