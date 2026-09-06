@@ -106,3 +106,10 @@ Worker/fixer、Standards/Spec reviewer 请求 `gpt-5.6-sol` / `high` / `fork_tur
 - 聚焦 13 项 formatter、Starter 22 项及 Spotless/PMD/JaCoCo、当前 extension/fixture package、14 项 Python 与 shell 静态契约、原泄漏探针和实际 Agent 回放通过；回放保留 6 ECS、1 SERVER Span、10 哨兵零泄漏，14 的 500 ms/两秒 Trace 1、metrics/logs 0 观察不变。最初静态检查的沙箱端口失败保留，允许本地测试端口后的同命令通过。
 - `git merge --ff-only -- codex/governed-observability-wave2-20260906-02` 从 760 无冲突快进至 cae；集成完整 B0..cae 敏感检查 PASS，回执 `integration-gate-fix-sensitive.out/.exit`。仅本票和本台账同步源主目录，20 项本专题内容保护均核对通过。
 - 本次 tracker 普通提交后冻结新的最终比较点，由同一 integration 工作区的原聚合双轴再次复核；然后重新运行完整 Normal Gate 和最终当前产物的适用运行检查。结果保留在新的外部证据目录，旧 760 回执和正式 FAIL 均不覆盖。源代码不合入 main、不 push、不清理工作区；02/14 之外的票仍不启动，父 Spec 和其他未提交工作不扩大范围。
+
+### 第二批 Gate2 资源修复闭环
+
+- 第二次正式 Normal Gate 在 `b4b0b548c514c1b4d1a63aa32afb3d6885015514` 的 logging fixture 模块因 PMD `CloseResource` 失败；全部前置检查及前 37 个 Maven 模块通过，OrderApplicationIT 为 8 tests、零失败/错误/跳过。原失败保留在 `/private/tmp/governed-observability-wave2-20260906/integration/.quality-gate/runs/20260906T160810.382725Z-78536`，该次未取得最终 PASS。
+- 原 writer 在原工作区追加普通修复 `9b892458a294992678b07d6b2f570d487e57512d`：夹具以 try-with-resources 持有 Spring 上下文，退出时关闭 HTTP server 并移除 hook，保留 SIGTERM 关闭路径；增加仅 test-scope JUnit 和两个真实生命周期测试，验证 ContextClosedEvent、端口关闭及端口文件写入异常后的上下文关闭。
+- 聚焦 RED 复现原 PMD 问题；最终 Agent extension/logging fixture 的 `-am clean verify` 通过，新增夹具 2 tests、Agent extension 4 tests，当前 JaCoCo XML 包含 LoggingFixtureApplication。实际 Agent 2.31.1 回放通过六条 ECS、一个 SERVER Span、十类随机敏感哨兵零匹配，以及 14 的受控 metrics 观察；SIGTERM 后端口关闭检查通过。证据与原失败均保留在 `/private/tmp/governed-observability-wave2-20260906/evidence/02/pmd-fix-worker-report.md` 及其链接回执。
+- 原 Ticket 02 Standards/Spec 在完整 B0..9b892458 复审均 CLEAN、零未关闭发现，报告为 `pmd-fix-review-standards.md` 与 `pmd-fix-review-spec.md`。已无冲突快进纳入隔离 integration；集成后 fixture 及依赖 `-am test` 通过，回执为 `/private/tmp/governed-observability-wave2-20260906/evidence/integration-pmd-fix-test.out/.exit`。最终新提交的整批双轴、完整 Normal Gate 与受影响运行回放仍须继续，旧提交回执不冒充当前通过证据。
