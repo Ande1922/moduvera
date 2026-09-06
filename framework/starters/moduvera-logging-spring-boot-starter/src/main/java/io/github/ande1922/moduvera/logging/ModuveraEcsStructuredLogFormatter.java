@@ -34,6 +34,7 @@ public final class ModuveraEcsStructuredLogFormatter
     private static final int MAX_TEXT_LENGTH = 2048;
     private static final int MAX_CAUSE_DEPTH = 8;
     private static final int MAX_STACK_FRAMES_PER_CAUSE = 64;
+    private static final String API_KEY_NAME = "apikey";
     private static final Pattern FIELD_NAME =
             Pattern.compile("[A-Za-z_][A-Za-z0-9_-]*(?:\\.[A-Za-z_][A-Za-z0-9_-]*)*");
     private static final Pattern ERROR_CODE =
@@ -199,6 +200,9 @@ public final class ModuveraEcsStructuredLogFormatter
         if (SAFE_SIZE_FIELDS.contains(name)) {
             return false;
         }
+        if (containsApiKey(name)) {
+            return true;
+        }
         List<String> parts = nameParts(name);
         for (int index = 0; index < parts.size(); index++) {
             String part = parts.get(index);
@@ -231,19 +235,40 @@ public final class ModuveraEcsStructuredLogFormatter
                 continue;
             }
             char previous = name.charAt(index - 1);
+            boolean numericBoundary = Character.isDigit(current) != Character.isDigit(previous);
             boolean lowerToUpper = Character.isUpperCase(current)
                     && (Character.isLowerCase(previous) || Character.isDigit(previous));
             boolean acronymToWord = Character.isUpperCase(current)
                     && Character.isUpperCase(previous)
                     && index + 1 < name.length()
                     && Character.isLowerCase(name.charAt(index + 1));
-            if (lowerToUpper || acronymToWord) {
+            if (numericBoundary || lowerToUpper || acronymToWord) {
                 addNamePart(parts, name, partStart, index);
                 partStart = index;
             }
         }
         addNamePart(parts, name, partStart, name.length());
         return parts;
+    }
+
+    private static boolean containsApiKey(String name) {
+        int matched = 0;
+        for (int index = 0; index < name.length(); index++) {
+            char current = name.charAt(index);
+            if (current == '.' || current == '_' || current == '-') {
+                continue;
+            }
+            current = Character.toLowerCase(current);
+            if (current == API_KEY_NAME.charAt(matched)) {
+                matched++;
+                if (matched == API_KEY_NAME.length()) {
+                    return true;
+                }
+            } else {
+                matched = current == API_KEY_NAME.charAt(0) ? 1 : 0;
+            }
+        }
+        return false;
     }
 
     private static void addNamePart(List<String> parts, String name, int start, int end) {

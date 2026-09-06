@@ -109,7 +109,7 @@ def main() -> None:
         records,
         "fixture ordinary secret=[REDACTED], api_key=[REDACTED], "
         "X-Api-Key=[REDACTED], api.key=[REDACTED], "
-        "accessToken=[REDACTED], clientSecret=[REDACTED]",
+        "apiKey2=[REDACTED], accessToken=[REDACTED], clientSecret=[REDACTED]",
     )
     assert info["log"]["level"] == "INFO"
     assert info["event"] == {"action": "fixture_observed"}
@@ -120,7 +120,7 @@ def main() -> None:
     assert info["retry"]["attempt"] == 2
     assert info["http"]["request"]["body"]["bytes"] == 64
     assert not (
-        {"accessToken", "api", "api.key", "api_key", "clientSecret", "X-Api-Key"}
+        {"accessToken", "api", "api.key", "apiKey2", "api_key", "clientSecret", "X-Api-Key"}
         & info.keys()
     )
     assert_trace(info, SAMPLED_TRACE_ID)

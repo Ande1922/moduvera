@@ -59,6 +59,7 @@ public class LoggingFixtureApplication {
         String apiKey = requiredEnvironment("FIXTURE_API_KEY");
         String xApiKey = requiredEnvironment("FIXTURE_X_API_KEY");
         String dottedApiKey = requiredEnvironment("FIXTURE_DOTTED_API_KEY");
+        String numericApiKey = requiredEnvironment("FIXTURE_NUMERIC_API_KEY");
         String camelAccessToken = requiredEnvironment("FIXTURE_CAMEL_ACCESS_TOKEN");
         String camelClientSecret = requiredEnvironment("FIXTURE_CAMEL_CLIENT_SECRET");
         String basicCredential = requiredEnvironment("FIXTURE_BASIC_CREDENTIAL");
@@ -102,17 +103,19 @@ public class LoggingFixtureApplication {
                             .addKeyValue("retry.attempt", 2)
                             .addKeyValue("api_key", apiKey)
                             .addKeyValue("api.key", dottedApiKey)
+                            .addKeyValue("apiKey2", numericApiKey)
                             .addKeyValue("accessToken", camelAccessToken)
                             .addKeyValue("authorization", secret)
                             .addKeyValue("session_id", "safe-session")
                             .addKeyValue("http.request.body.bytes", 64)
                             .addKeyValue("tenant_id", "forged-tenant")
                             .log(
-                                    "fixture ordinary secret={}, api_key={}, X-Api-Key: {}, api.key={}, accessToken={}, clientSecret={}",
+                                    "fixture ordinary secret={}, api_key={}, X-Api-Key: {}, api.key={}, apiKey2={}, accessToken={}, clientSecret={}",
                                     secret,
                                     apiKey,
                                     xApiKey,
                                     dottedApiKey,
+                                    numericApiKey,
                                     camelAccessToken,
                                     camelClientSecret);
                 }

@@ -309,7 +309,25 @@ class ModuveraEcsStructuredLogFormatterTest {
                         "clientsecret",
                         "refresh_token",
                         "pass.word",
-                        "requestBody")) {
+                        "requestBody",
+                        "apiKey2",
+                        "myapikey",
+                        "XAPIKey",
+                        "backupApiKey2",
+                        "apiKEY2",
+                        "xapiKey",
+                        "XapiKey",
+                        "api_key2",
+                        "API.KEY.2",
+                        "my-api-key-version2",
+                        "password2",
+                        "PASSWORD2",
+                        "token2",
+                        "refresh_token2",
+                        "clientSecret2",
+                        "client_secret_2",
+                        "pass.word2",
+                        "requestBody2")) {
             String fluentSentinel = "fluent-sensitive-" + java.util.UUID.randomUUID();
             LoggingEvent fluentEvent = event(Level.INFO, "fluent sensitive field", null);
             fluentEvent.setMDCPropertyMap(Map.of());
@@ -388,7 +406,12 @@ class ModuveraEcsStructuredLogFormatterTest {
                         "tokenizerName",
                         "bodyguard_id",
                         "queryable",
-                        "headerless")) {
+                        "headerless",
+                        "secretary_id2",
+                        "tokenizerName2",
+                        "bodyguard_id2",
+                        "queryable2",
+                        "headerless2")) {
             String fluentValue = "fluent-ordinary-" + java.util.UUID.randomUUID();
             LoggingEvent fluentEvent = event(Level.INFO, "fluent ordinary field", null);
             fluentEvent.setMDCPropertyMap(Map.of());
