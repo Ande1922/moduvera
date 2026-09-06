@@ -2,21 +2,26 @@ package io.github.ande1922.moduvera.example.notes;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 import com.baomidou.mybatisplus.extension.plugins.MybatisPlusInterceptor;
 import com.baomidou.mybatisplus.extension.plugins.inner.InnerInterceptor;
 import com.baomidou.mybatisplus.extension.plugins.inner.TenantLineInnerInterceptor;
 import io.github.ande1922.moduvera.context.Actor;
 import io.github.ande1922.moduvera.context.ActorType;
+import io.github.ande1922.moduvera.context.ContextExecutors;
 import io.github.ande1922.moduvera.context.ExecutionContext;
 import io.github.ande1922.moduvera.context.ExecutionContextHolder;
+import io.github.ande1922.moduvera.context.ExecutionContextSnapshot;
 import io.github.ande1922.moduvera.context.ExecutionScope;
 import io.github.ande1922.moduvera.context.Initiator;
 import io.github.ande1922.moduvera.context.MissingExecutionContextException;
 import io.github.ande1922.moduvera.context.TenantId;
 import io.github.ande1922.moduvera.data.TransactionBoundary;
 import io.github.ande1922.moduvera.data.mybatis.ExecutionContextTenantLineHandler;
+import io.github.ande1922.moduvera.example.notes.application.NoteApplicationService;
 import io.github.ande1922.moduvera.example.notes.domain.Note;
+import io.github.ande1922.moduvera.example.notes.domain.NoteNotFoundException;
 import io.github.ande1922.moduvera.example.notes.infrastructure.persistence.MybatisPlusNoteRepository;
 import io.github.ande1922.moduvera.message.Destination;
 import io.github.ande1922.moduvera.message.InboundMessageContract;
@@ -47,8 +52,13 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Properties;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
@@ -88,6 +98,11 @@ class NotesDemoIT {
             .build();
     private static final String CONSUMER_GROUP = "notes-demo-" + UUID.randomUUID();
     private static final String FAILURE_GROUP = "notes-failure-" + UUID.randomUUID();
+    private static final ExecutionContext COMPOSITION_WORKER = new ExecutionContext(
+            ExecutionScope.platform(),
+            new Actor(ActorType.SYSTEM, "notes-composition-worker"),
+            new Initiator(ActorType.SYSTEM, "notes-composition-runtime"),
+            "notes-composition-worker");
 
     @Container
     private static final PostgreSQLContainer POSTGRES =
@@ -145,6 +160,9 @@ class NotesDemoIT {
 
     @Autowired
     private MybatisPlusNoteRepository notes;
+
+    @Autowired
+    private NoteApplicationService noteApplicationService;
 
     @Autowired
     private StreamOperations streams;
@@ -383,6 +401,200 @@ class NotesDemoIT {
         }
         assertThat(ExecutionContextHolder.current()).isEmpty();
     }
+
+    @Test
+    void trustedEntriesPropagateDirectTasksIntoTenantBusinessReadsAndRestoreTheWorker()
+            throws Exception {
+        long tenantANote = 9_100_001;
+        long tenantBNote = 9_100_002;
+        int rowsBeforeReads = count("demo_note");
+        int outboxBeforeReads = count("moduvera_message_outbox");
+        int receiptsBeforeReads = count("demo_note_receipt");
+        seedNote(tenantANote, "tenant-a", "tenant a composition");
+        seedNote(tenantBNote, "tenant-b", "tenant b composition");
+
+        ExecutionContext firstTenantA = tenantReadContext(
+                "tenant-a", "async-reader-a", "origin-a", "async-direct-a");
+        ExecutionContext secondTenantA = tenantReadContext(
+                "tenant-a", "async-reader-b", "origin-b", "async-direct-b");
+        ExecutionContext tenantB = tenantReadContext(
+                "tenant-b", "async-reader-c", "origin-c", "async-direct-c");
+        ExecutionContext platform = platformReadContext("platform-reader", "async-direct-platform");
+
+        ExecutorService rawTasks = contextWorker("notes-direct-composition");
+        try (ExecutorService tasks = ContextExecutors.propagating(rawTasks)) {
+            awaitBusinessRead(
+                    submitBusinessRead(tasks, firstTenantA, tenantANote),
+                    tenantANote,
+                    firstTenantA,
+                    "notes-direct-composition");
+            assertWorkerRestored(rawTasks);
+            awaitBusinessRead(
+                    submitBusinessRead(tasks, secondTenantA, tenantANote),
+                    tenantANote,
+                    secondTenantA,
+                    "notes-direct-composition");
+            assertWorkerRestored(rawTasks);
+            awaitBusinessRead(
+                    submitBusinessRead(tasks, tenantB, tenantBNote),
+                    tenantBNote,
+                    tenantB,
+                    "notes-direct-composition");
+            assertWorkerRestored(rawTasks);
+
+            assertFutureFailure(
+                    submitBusinessRead(tasks, tenantB, tenantANote), NoteNotFoundException.class);
+            assertWorkerRestored(rawTasks);
+            assertFutureFailure(
+                    submitBusinessRead(tasks, platform, tenantANote), IllegalStateException.class);
+            assertWorkerRestored(rawTasks);
+            assertFutureFailure(tasks.submit(() -> businessRead(tenantANote)),
+                    MissingExecutionContextException.class);
+            assertWorkerRestored(rawTasks);
+        } finally {
+            deleteNotes(tenantANote, tenantBNote);
+        }
+
+        assertThat(count("demo_note")).isEqualTo(rowsBeforeReads);
+        assertThat(count("moduvera_message_outbox")).isEqualTo(outboxBeforeReads);
+        assertThat(count("demo_note_receipt")).isEqualTo(receiptsBeforeReads);
+        assertThat(ExecutionContextHolder.current()).isEmpty();
+    }
+
+    @Test
+    void registeredCallbacksReadBusinessStateOnTheExternalCompletionThreadAndRestoreIt()
+            throws Exception {
+        long noteId = 9_100_003;
+        int rowsBeforeReads = count("demo_note");
+        int outboxBeforeReads = count("moduvera_message_outbox");
+        int receiptsBeforeReads = count("demo_note_receipt");
+        seedNote(noteId, "tenant-a", "callback composition");
+        ExecutionContext firstRequest = tenantReadContext(
+                "tenant-a", "callback-reader-a", "callback-origin-a", "callback-a");
+        ExecutionContext secondRequest = tenantReadContext(
+                "tenant-a", "callback-reader-b", "callback-origin-b", "callback-b");
+        CompletableFuture<Long> firstSource = new CompletableFuture<>();
+        CompletableFuture<Long> secondSource = new CompletableFuture<>();
+        CompletableFuture<BusinessRead> firstRead = registerBusinessRead(firstSource, firstRequest);
+        CompletableFuture<BusinessRead> secondRead = registerBusinessRead(secondSource, secondRequest);
+        assertThat(ExecutionContextHolder.current()).isEmpty();
+
+        try (ExecutorService sdk = contextWorker("notes-callback-completion")) {
+            Thread firstCompletion = completeOnWorker(sdk, firstSource, noteId);
+            BusinessRead firstObservation =
+                    awaitBusinessRead(firstRead, noteId, firstRequest, "notes-callback-completion");
+            assertThat(firstObservation.thread()).isSameAs(firstCompletion);
+            assertWorkerRestored(sdk);
+
+            Thread secondCompletion = completeOnWorker(sdk, secondSource, noteId);
+            BusinessRead secondObservation =
+                    awaitBusinessRead(secondRead, noteId, secondRequest, "notes-callback-completion");
+            assertThat(secondObservation.thread()).isSameAs(secondCompletion);
+            assertWorkerRestored(sdk);
+        } finally {
+            deleteNotes(noteId);
+        }
+
+        assertThat(count("demo_note")).isEqualTo(rowsBeforeReads);
+        assertThat(count("moduvera_message_outbox")).isEqualTo(outboxBeforeReads);
+        assertThat(count("demo_note_receipt")).isEqualTo(receiptsBeforeReads);
+        assertThat(ExecutionContextHolder.current()).isEmpty();
+    }
+
+    private Future<BusinessRead> submitBusinessRead(
+            ExecutorService tasks, ExecutionContext context, long noteId) {
+        return ExecutionContextHolder.call(
+                context, () -> tasks.submit(() -> businessRead(noteId)));
+    }
+
+    private CompletableFuture<BusinessRead> registerBusinessRead(
+            CompletableFuture<Long> source, ExecutionContext context) {
+        return ExecutionContextHolder.call(
+                context,
+                () -> source.thenApply(ExecutionContextSnapshot.capture()
+                        .bindFunction(this::businessRead)));
+    }
+
+    private BusinessRead businessRead(long noteId) {
+        Note note = noteApplicationService.get(noteId);
+        return new BusinessRead(note, ExecutionContextHolder.require(), Thread.currentThread());
+    }
+
+    private static BusinessRead awaitBusinessRead(
+            Future<BusinessRead> result,
+            long expectedNoteId,
+            ExecutionContext expectedContext,
+            String expectedThreadName)
+            throws Exception {
+        BusinessRead observed = result.get(2, TimeUnit.SECONDS);
+        assertThat(observed.note().id()).isEqualTo(expectedNoteId);
+        assertThat(observed.context()).isSameAs(expectedContext);
+        assertThat(observed.thread().getName()).startsWith(expectedThreadName);
+        return observed;
+    }
+
+    private static void assertFutureFailure(
+            Future<?> result, Class<? extends Throwable> expectedCause) {
+        Throwable failure = catchThrowable(() -> result.get(2, TimeUnit.SECONDS));
+        assertThat(failure).isInstanceOf(ExecutionException.class);
+        assertThat(failure.getCause()).isInstanceOf(expectedCause);
+    }
+
+    private static void assertWorkerRestored(ExecutorService worker) throws Exception {
+        assertThat(worker.submit(ExecutionContextHolder::require).get(2, TimeUnit.SECONDS))
+                .isSameAs(COMPOSITION_WORKER);
+    }
+
+    private static Thread completeOnWorker(
+            ExecutorService worker, CompletableFuture<Long> source, long noteId)
+            throws Exception {
+        return worker.submit(() -> {
+                    assertThat(source.complete(noteId)).isTrue();
+                    assertThat(ExecutionContextHolder.require()).isSameAs(COMPOSITION_WORKER);
+                    return Thread.currentThread();
+                })
+                .get(2, TimeUnit.SECONDS);
+    }
+
+    private static ExecutorService contextWorker(String threadName) {
+        return Executors.newSingleThreadExecutor(task -> Thread.ofPlatform()
+                .name(threadName)
+                .unstarted(() -> ExecutionContextHolder.run(COMPOSITION_WORKER, task)));
+    }
+
+    private void seedNote(long noteId, String tenantId, String content) {
+        jdbc.update(
+                "INSERT INTO demo_note(id, tenant_id, content, created_at) VALUES (?, ?, ?, ?)",
+                noteId,
+                tenantId,
+                content,
+                Timestamp.from(Instant.parse("2026-09-06T00:00:00Z")));
+    }
+
+    private void deleteNotes(long... noteIds) {
+        for (long noteId : noteIds) {
+            jdbc.update("DELETE FROM demo_note WHERE id = ?", noteId);
+        }
+    }
+
+    private static ExecutionContext tenantReadContext(
+            String tenantId, String actor, String initiator, String correlationId) {
+        return new ExecutionContext(
+                ExecutionScope.tenant(new TenantId(tenantId)),
+                new Actor(ActorType.USER, actor, Set.of("notes:read")),
+                new Initiator(ActorType.USER, initiator),
+                correlationId);
+    }
+
+    private static ExecutionContext platformReadContext(String actor, String correlationId) {
+        return new ExecutionContext(
+                ExecutionScope.platform(),
+                new Actor(ActorType.USER, actor, Set.of("notes:read")),
+                new Initiator(ActorType.USER, actor),
+                correlationId);
+    }
+
+    private record BusinessRead(Note note, ExecutionContext context, Thread thread) {}
 
     private static ExecutionContext platformContext(String correlationId) {
         return ExecutionContext.initiatedBy(

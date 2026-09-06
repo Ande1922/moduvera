@@ -326,8 +326,30 @@ configuration. See [the tenant-only message context guide](../implementation/TEN
 
 ## Composition and consumer qualification — ticket 11
 
-Status: planned.
+Status: verified for the bounded public consumers and combinations described below.
 
-Cross-boundary consumer evidence and dependency closure determine support claims. Planned or unverified behavior is never promoted by this summary.
+The independent Notes consumer composes an explicitly installed trusted caller context with a
+directly submitted propagating JDK task and a real PostgreSQL-backed Application Service read.
+A second composition captures a request-owned Function when it is registered, completes its
+Future later on an external SDK-shaped worker, and performs the same business read inside the
+bound callback. The compositions cover distinct tenants, two complete identities in one tenant,
+Platform and absence where tenant data must fail closed, and exact restoration of a foreign
+Platform worker after each actual success or failure exit. Row, Outbox and receipt counts remain
+unchanged by the read and rejected branches. This is an explicit trusted-Holder consumer seam;
+it does not claim an unimplemented HTTP-to-async chain. Servlet entry behavior and negative
+write/message side effects retain their separate runtime evidence.
 
-Implementation and consumer evidence remain the responsibility of ticket 11.
+The Reactor-only consumer uses the native subscription Context and a real scheduler without an
+AI dependency. The AI consumer provides the combined request, two-round ToolCallingAdvisor loop,
+tool callback and final streaming-response path already described above; its test-source scripted
+model makes no external provider claim. The Spring task consumer uses a real ApplicationContext,
+selected TaskExecutor and Async proxies. Resolved closures bind the qualification to Java 26,
+Spring Boot 4.1.1, Spring Framework 7.0.9, Reactor Core 3.8.7 and Spring AI 2.0.1. The Kernel
+artifact remains JDK-only; Spring task and Reactor consumers do not acquire Spring AI, and
+consumers that use none of these optional adapters acquire none of their frameworks.
+
+The supported adoption and lifecycle boundary is recorded in
+[`EXECUTION-CONTEXT-PROPAGATION.md`](../implementation/EXECUTION-CONTEXT-PROPAGATION.md). Support
+is limited to the explicit public seams and consumers named there. In particular, plaintext Kafka
+runtime tests do not verify producer authentication or destination ACLs; those remain deployment
+prerequisites for trusting message producers.

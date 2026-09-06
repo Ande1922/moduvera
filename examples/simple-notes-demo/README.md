@@ -9,6 +9,7 @@ This is a deliberately small consumer project, not another platform module. It o
 - versionless dependencies on the Kernel and Message Core artifacts, Resource Server autoconfigure, and the Web, Data, Messaging and Migration Spring Boot starters;
 - native HTTP responses and RFC 9457 errors;
 - JWT-derived `ExecutionContext`, use-case permission checks and transparent tenant isolation;
+- explicit JDK executor submission capture and registration-time callback binding;
 - PostgreSQL, MyBatis-Plus, `TransactionBoundary` and component-owned Flyway SQL.
 
 It does not import Catalog, Order, Inventory or `app-monolith`. It exercises Kafka and JDBC Outbox/Inbox behavior as consumer evidence for the documented Messaging capability; it does not establish any additional platform support beyond the [current capability status](../../docs/implementation/SCAFFOLD-PRODUCT-SURFACE.md), and it does not claim MySQL support.
@@ -21,7 +22,10 @@ The useful path is intentionally short:
 2. [`NoteController.java`](./src/main/java/io/github/ande1922/moduvera/example/notes/interfaces/http/NoteController.java) is ordinary native HTTP code.
 3. [`NoteApplicationService.java`](./src/main/java/io/github/ande1922/moduvera/example/notes/application/NoteApplicationService.java) uses permissions and `TransactionBoundary` without tenant parameters.
 4. [`MybatisPlusNoteRepository.java`](./src/main/java/io/github/ande1922/moduvera/example/notes/infrastructure/persistence/MybatisPlusNoteRepository.java) derives tenant identity from the trusted context at the infrastructure boundary.
-5. [`NotesDemoIT.java`](./src/test/java/io/github/ande1922/moduvera/example/notes/NotesDemoIT.java) drives the result through real HTTP and PostgreSQL.
+5. [`NotesDemoIT.java`](./src/test/java/io/github/ande1922/moduvera/example/notes/NotesDemoIT.java) drives the result through real HTTP and PostgreSQL, and composes explicit trusted Holder callers with direct tasks and externally completed callbacks before business reads.
+
+The shared capture, lifecycle and unsupported-boundary rules are in the
+[Execution Context propagation guide](../../docs/implementation/EXECUTION-CONTEXT-PROPAGATION.md).
 
 ## Automated proof
 
@@ -38,6 +42,8 @@ The test proves:
 - the same tenant reads it, while another tenant receives `404`;
 - missing permission uses the Web Starter's `403 security.permission-denied` problem, while missing authentication returns `401`;
 - invalid input returns `400 application/problem+json` with the correlation ID;
+- a directly submitted task and a callback completed later on an external worker both retain their complete request identity while reading real PostgreSQL business state, then restore that worker exactly;
+- Platform, absent and cross-tenant async reads fail closed without changing Note, Outbox or receipt state;
 - the Notes and Messaging migration definitions have distinct component identities and Flyway histories;
 - Kafka publication and consumption, JDBC Outbox/Inbox, retry and DLQ behavior remain active;
 - PostgreSQL migration, Mapper registration, TenantLine and `TransactionBoundary` are all active.
