@@ -38,7 +38,6 @@ import io.github.ande1922.moduvera.message.publication.DurablePublication;
 import io.github.ande1922.moduvera.migration.MigrationDefinition;
 import io.github.ande1922.moduvera.messaging.kafka.KafkaMessageMapper;
 import io.github.ande1922.moduvera.messaging.kafka.OutboxRelay;
-import io.github.ande1922.moduvera.messaging.kafka.ReliableInboundEndpoint;
 import io.github.ande1922.moduvera.messaging.kafka.ReliableMessageConsumerFactory;
 import io.github.ande1922.moduvera.testing.Eventually;
 import java.net.URI;
@@ -789,10 +788,9 @@ class NotesDemoIT {
         }
 
         @Bean
-        ReliableInboundEndpoint alwaysFail(
+        java.util.function.Consumer<org.springframework.messaging.Message<byte[]>> alwaysFail(
                 ReliableMessageConsumerFactory factory, AtomicInteger retryAttempts) {
-            return factory.forConsumer(
-                    "failure-probe",
+            return factory.forContract(
                     new InboundMessageContract(
                             MessageKind.EVENT,
                             new MessageType("io.github.ande1922.moduvera.example.notes.failure.v1"),

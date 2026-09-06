@@ -26,6 +26,11 @@ public final class InboxTemplate {
         this.clock = clock;
     }
 
+    public boolean isProcessed(MessageId messageId) {
+        var tenantId = ExecutionContextHolder.require().tenantId();
+        return repository.isProcessed(tenantId, consumerId, messageId);
+    }
+
     public InboxOutcome handle(MessageId messageId, Runnable businessChange) {
         var tenantId = ExecutionContextHolder.require().tenantId();
         return transactions.inTransaction(() -> {

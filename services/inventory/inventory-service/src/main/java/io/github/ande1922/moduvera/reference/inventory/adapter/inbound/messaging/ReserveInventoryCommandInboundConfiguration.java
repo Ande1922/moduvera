@@ -6,34 +6,27 @@ import io.github.ande1922.moduvera.message.Destination;
 import io.github.ande1922.moduvera.message.InboundMessageContract;
 import io.github.ande1922.moduvera.message.MessageKind;
 import io.github.ande1922.moduvera.message.MessageType;
-import io.github.ande1922.moduvera.message.handler.CommandMessageHandler;
-import io.github.ande1922.moduvera.messaging.kafka.ReliableInboundEndpoint;
+import io.github.ande1922.moduvera.message.NonRetryableMessageException;
 import io.github.ande1922.moduvera.messaging.kafka.ReliableMessageConsumerFactory;
 import io.github.ande1922.moduvera.reference.inventory.api.ReserveInventoryCommand;
-import io.github.ande1922.moduvera.reference.inventory.application.InventoryApplicationService;
+import io.github.ande1922.moduvera.reference.inventory.application.InventoryReservationHandler;
 import java.net.URI;
 import java.util.Set;
-import org.springframework.beans.factory.annotation.Qualifier;
+import java.util.function.Consumer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.messaging.Message;
+import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
 @Configuration(proxyBeanMethods = false)
 public class ReserveInventoryCommandInboundConfiguration {
 
-    static final String HANDLER_BEAN = "reserveInventoryCommandMessageHandler";
-
-    @Bean(HANDLER_BEAN)
-    CommandMessageHandler reserveInventoryCommandMessageHandler(
-            InventoryApplicationService inventory,
-            ObjectMapper json) {
-        return new ReserveInventoryCommandMessageHandler(inventory, json);
-    }
-
     @Bean
-    ReliableInboundEndpoint reserveInventory(
+    Consumer<Message<byte[]>> reserveInventory(
             ReliableMessageConsumerFactory consumers,
-            @Qualifier(HANDLER_BEAN) CommandMessageHandler handler) {
+            InventoryReservationHandler handler,
+            ObjectMapper json) {
         var contract = new InboundMessageContract(
                 MessageKind.valueOf(ReserveInventoryCommand.MESSAGE_KIND),
                 new MessageType(ReserveInventoryCommand.MESSAGE_TYPE),
@@ -42,7 +35,14 @@ public class ReserveInventoryCommandInboundConfiguration {
                 new Actor(
                         ActorType.SERVICE,
                         "order-service",
-                        Set.of(InventoryApplicationService.RESERVE.value())));
-        return consumers.forConsumer("inventory-reservation", contract, handler);
+                        Set.of(InventoryReservationHandler.RESERVE.value())));
+        return consumers.forContract(contract, serialized -> {
+            try {
+                var command = json.readValue(serialized.payload(), ReserveInventoryCommand.class);
+                handler.handle(command, serialized.descriptor().id());
+            } catch (JacksonException invalid) {
+                throw new NonRetryableMessageException("invalid reserve inventory command", invalid);
+            }
+        });
     }
 }

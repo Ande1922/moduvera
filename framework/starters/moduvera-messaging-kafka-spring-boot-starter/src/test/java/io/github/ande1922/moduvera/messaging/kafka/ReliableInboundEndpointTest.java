@@ -7,7 +7,6 @@ import io.github.ande1922.moduvera.context.Actor;
 import io.github.ande1922.moduvera.context.ActorType;
 import io.github.ande1922.moduvera.context.ExecutionContext;
 import io.github.ande1922.moduvera.context.ExecutionContextHolder;
-import io.github.ande1922.moduvera.context.ExecutionScope;
 import io.github.ande1922.moduvera.context.Initiator;
 import io.github.ande1922.moduvera.context.TenantId;
 import io.github.ande1922.moduvera.data.TransactionBoundary;
@@ -19,210 +18,152 @@ import io.github.ande1922.moduvera.message.MessageKind;
 import io.github.ande1922.moduvera.message.MessageType;
 import io.github.ande1922.moduvera.message.NonRetryableMessageException;
 import io.github.ande1922.moduvera.message.SerializedMessage;
+import io.github.ande1922.moduvera.message.handler.ApplicationMessageHandler;
+import io.github.ande1922.moduvera.message.inbox.InboxRepository;
+import io.github.ande1922.moduvera.message.inbox.InboxTemplate;
 import java.net.URI;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
-import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
+import org.springframework.messaging.Message;
 
 class ReliableInboundEndpointTest {
 
     private final KafkaMessageMapper mapper = new KafkaMessageMapper();
-    private final ReliableMessageConsumerFactory factory = new ReliableMessageConsumerFactory(
-            mapper,
-            (tenantId, consumerId, messageId, processedAt) -> true,
-            new DirectTransactionBoundary(),
-            Clock.fixed(Instant.parse("2026-08-30T00:00:00Z"), ZoneOffset.UTC));
 
     @Test
-    void invokesTheBoundHandlerInsideTrustedInboxAndSkipsDuplicates() {
-        Set<MessageId> admitted = new HashSet<>();
-        var duplicateAwareFactory = new ReliableMessageConsumerFactory(
-                mapper,
-                (tenantId, consumerId, messageId, processedAt) -> admitted.add(messageId),
-                new DirectTransactionBoundary(),
-                Clock.fixed(Instant.parse("2026-08-30T00:00:00Z"), ZoneOffset.UTC));
-        AtomicInteger handled = new AtomicInteger();
-        var consumer = duplicateAwareFactory.forConsumer("notes-audit", contract(), message -> {
-            assertThat(ExecutionContextHolder.require().tenantId()).isEqualTo(new TenantId("tenant-a"));
-            assertThat(ExecutionContextHolder.require().actor().subjectId()).isEqualTo("notes-service");
-            handled.incrementAndGet();
-        });
-        var inbound = mapper.toSpringMessage(message("msg-once", "notes.events"));
+    void publicFactoryReturnsOnlyTheStandardConsumerSurface() {
+        Consumer<Message<byte[]>> consumer = new ReliableMessageConsumerFactory(mapper)
+                .forContract(contract(), ignored -> {});
 
         assertThat(consumer).isInstanceOf(Consumer.class);
-        var previous = priorWorkerContext();
+        assertThat(consumer.getClass()).hasPackage("io.github.ande1922.moduvera.messaging.kafka");
+        assertThat(consumer.getClass().getModifiers() & java.lang.reflect.Modifier.PUBLIC).isZero();
+    }
+
+    @Test
+    void establishesTrustedContextWithoutStartingABusinessTransaction() {
+        var observed = new AtomicReference<ExecutionContext>();
+        var consumer = new ReliableMessageConsumerFactory(mapper)
+                .forContract(contract(), ignored -> observed.set(ExecutionContextHolder.require()));
+        var previous = ExecutionContext.initiatedBy(
+                new TenantId("prior"), new Actor(ActorType.SERVICE, "worker"), "corr-prior");
+
         ExecutionContextHolder.run(previous, () -> {
-            assertThat(consumer.handle(inbound))
-                    .isEqualTo(io.github.ande1922.moduvera.message.inbox.InboxOutcome.APPLIED);
-            assertThat(ExecutionContextHolder.require()).isSameAs(previous);
-            assertThat(consumer.handle(inbound))
-                    .isEqualTo(io.github.ande1922.moduvera.message.inbox.InboxOutcome.DUPLICATE);
+            consumer.accept(mapper.toSpringMessage(message("message-1", "notes.events")));
             assertThat(ExecutionContextHolder.require()).isSameAs(previous);
         });
 
-        assertThat(handled).hasValue(1);
+        assertThat(observed.get().tenantId()).isEqualTo(new TenantId("tenant-a"));
+        assertThat(observed.get().actor().subjectId()).isEqualTo("notes-service");
+        assertThat(observed.get().actor().permissions()).containsExactly("notes:consume");
+        assertThat(observed.get().initiator()).isEqualTo(new Initiator(ActorType.USER, "alice"));
+        assertThat(observed.get().correlationId()).isEqualTo("corr-message");
         assertThat(ExecutionContextHolder.current()).isEmpty();
     }
 
     @Test
-    void establishesAndAlwaysClearsTheTrustedMessageContext() {
-        AtomicInteger handled = new AtomicInteger();
-        var successful = factory.forConsumer("notes-audit", contract(), ignored -> {
-            assertThat(ExecutionContextHolder.require().tenantId()).isEqualTo(new TenantId("tenant-a"));
-            assertThat(ExecutionContextHolder.require().actor().subjectId()).isEqualTo("notes-service");
-            assertThat(ExecutionContextHolder.require().actor().permissions())
-                    .containsExactly("notes:consume");
-            handled.incrementAndGet();
-        });
-        var failing = factory.forConsumer("notes-audit", contract(), ignored -> {
-            throw new IllegalStateException("boom");
-        });
+    void rejectsContractMismatchBeforeCallingTheInboundAdapter() {
+        var calls = new AtomicInteger();
+        var consumer = new ReliableMessageConsumerFactory(mapper)
+                .forContract(contract(), ignored -> calls.incrementAndGet());
 
-        var previous = priorWorkerContext();
-        ExecutionContextHolder.run(previous, () -> {
-            successful.handle(mapper.toSpringMessage(message("msg-success", "notes.events")));
-            assertThat(ExecutionContextHolder.require()).isSameAs(previous);
-
-            assertThatThrownBy(() -> failing.handle(
-                            mapper.toSpringMessage(message("msg-failure", "notes.events"))))
-                    .isInstanceOf(NonRetryableMessageException.class)
-                    .hasCauseInstanceOf(IllegalStateException.class);
-            assertThat(ExecutionContextHolder.require()).isSameAs(previous);
-        });
-        assertThat(ExecutionContextHolder.current()).isEmpty();
-        assertThat(handled).hasValue(1);
-    }
-
-    @Test
-    void rejectsAnUnexpectedKindTypeSourceOrDestinationBeforeTheBusinessHandler() {
-        AtomicInteger handled = new AtomicInteger();
-        var consumer = factory.forConsumer(
-                "notes-audit", contract(), ignored -> handled.incrementAndGet());
-
-        assertThatThrownBy(() -> consumer.handle(
-                        mapper.toSpringMessage(message("msg-route", "inventory.events"))))
+        assertThatThrownBy(() -> consumer.accept(
+                        mapper.toSpringMessage(message("wrong", "inventory.events"))))
                 .isInstanceOf(NonRetryableMessageException.class);
-        assertThatThrownBy(() -> consumer.handle(
-                        mapper.toSpringMessage(message(
-                                "msg-type",
-                                MessageKind.EVENT,
-                                "io.github.ande1922.moduvera.example.notes.created.v2",
-                                URI.create("urn:service:notes"),
-                                "notes.events",
-                                "tenant-a"))))
-                .isInstanceOf(NonRetryableMessageException.class);
-        assertThatThrownBy(() -> consumer.handle(
-                        mapper.toSpringMessage(message(
-                                "msg-source",
-                                MessageKind.EVENT,
-                                "io.github.ande1922.moduvera.example.notes.created.v1",
-                                URI.create("urn:service:unknown"),
-                                "notes.events",
-                                "tenant-a"))))
-                .isInstanceOf(NonRetryableMessageException.class);
-        assertThatThrownBy(() -> consumer.handle(
-                        mapper.toSpringMessage(message(
-                                "msg-kind",
-                                MessageKind.ASYNC_COMMAND,
-                                "io.github.ande1922.moduvera.example.notes.created.v1",
-                                URI.create("urn:service:notes"),
-                                "notes.events",
-                                "tenant-a"))))
-                .isInstanceOf(NonRetryableMessageException.class);
-        assertThat(handled).hasValue(0);
+        assertThat(calls).hasValue(0);
         assertThat(ExecutionContextHolder.current()).isEmpty();
     }
 
     @Test
-    void retriesTransientFailuresWithinTheConfiguredBound() {
-        var retryingFactory = new ReliableMessageConsumerFactory(
-                mapper,
-                (tenant, consumer, messageId, processedAt) -> true,
-                new DirectTransactionBoundary(),
-                Clock.fixed(Instant.parse("2026-08-30T00:00:00Z"), ZoneOffset.UTC),
-                3,
-                Duration.ofNanos(1),
-                Duration.ofNanos(1));
-        AtomicInteger attempts = new AtomicInteger();
-        var consumer = retryingFactory.forConsumer("notes-audit", contract(), ignored -> {
-            assertThat(ExecutionContextHolder.require()).isEqualTo(new ExecutionContext(
-                    new TenantId("tenant-a"),
-                    contract().executionActor(),
-                    new Initiator(ActorType.USER, "alice"),
-                    "corr-1"));
-            if (attempts.incrementAndGet() < 3) {
-                throw new IllegalStateException("temporary");
-            }
-        });
+    void retriesApplicationFailuresWithContextClearedBetweenAttempts() {
+        var attempts = new AtomicInteger();
+        var consumer = new ReliableMessageConsumerFactory(
+                        mapper, 3, Duration.ZERO, Duration.ZERO)
+                .forContract(contract(), ignored -> {
+                    assertThat(ExecutionContextHolder.require().actor().subjectId())
+                            .isEqualTo("notes-service");
+                    if (attempts.incrementAndGet() < 3) {
+                        throw new IllegalStateException("temporarily unavailable");
+                    }
+                });
 
-        var previous = priorWorkerContext();
-        ExecutionContextHolder.run(previous, () -> {
-            consumer.handle(mapper.toSpringMessage(message("msg-retry", "notes.events")));
-            assertThat(ExecutionContextHolder.require()).isSameAs(previous);
-        });
+        consumer.accept(mapper.toSpringMessage(message("retry", "notes.events")));
 
         assertThat(attempts).hasValue(3);
         assertThat(ExecutionContextHolder.current()).isEmpty();
     }
 
     @Test
-    void doesNotRetryAHandlerClassifiedAsNonRetryable() {
-        var retryingFactory = new ReliableMessageConsumerFactory(
-                mapper,
-                (tenant, consumer, messageId, processedAt) -> true,
-                new DirectTransactionBoundary(),
-                Clock.fixed(Instant.parse("2026-08-30T00:00:00Z"), ZoneOffset.UTC),
-                3,
-                Duration.ofNanos(1),
-                Duration.ofNanos(1));
-        AtomicInteger attempts = new AtomicInteger();
-        var consumer = retryingFactory.forConsumer("notes-audit", contract(), ignored -> {
-            attempts.incrementAndGet();
+    void terminalFailuresAreNotRetriedAndExhaustionPropagates() {
+        var terminalAttempts = new AtomicInteger();
+        var retryableAttempts = new AtomicInteger();
+        var factory = new ReliableMessageConsumerFactory(
+                mapper, 2, Duration.ZERO, Duration.ZERO);
+        var terminal = factory.forContract(contract(), ignored -> {
+            terminalAttempts.incrementAndGet();
             throw new NonRetryableMessageException("invalid payload");
         });
+        var retryable = factory.forContract(contract(), ignored -> {
+            retryableAttempts.incrementAndGet();
+            throw new IllegalStateException("database unavailable");
+        });
 
-        assertThatThrownBy(() -> consumer.handle(
-                        mapper.toSpringMessage(message("msg-terminal", "notes.events"))))
+        assertThatThrownBy(() -> terminal.accept(mapper.toSpringMessage(message("terminal", "notes.events"))))
                 .isInstanceOf(NonRetryableMessageException.class)
                 .hasMessage("invalid payload");
-
-        assertThat(attempts).hasValue(1);
-        assertThat(ExecutionContextHolder.current()).isEmpty();
+        assertThatThrownBy(() -> retryable.accept(mapper.toSpringMessage(message("exhausted", "notes.events"))))
+                .isInstanceOf(NonRetryableMessageException.class)
+                .hasMessage("message handling exhausted 2 attempts")
+                .hasCauseInstanceOf(IllegalStateException.class);
+        assertThat(terminalAttempts).hasValue(1);
+        assertThat(retryableAttempts).hasValue(2);
     }
 
     @Test
-    void isolatesAlternatingMessagesOnReusedAndVirtualThreads() throws Exception {
-        var consumer = factory.forConsumer("notes-audit", contract(), message -> {
-            assertThat(ExecutionContextHolder.require().tenantId())
-                    .isEqualTo(message.descriptor().tenantId());
-            assertThat(ExecutionContextHolder.require().correlationId()).isEqualTo("corr-1");
-        });
-        try (var reused = Executors.newFixedThreadPool(1)) {
-            var tenantA = reused.submit(() -> consumer.handle(
-                    mapper.toSpringMessage(message("msg-thread-a", "notes.events", "tenant-a"))));
-            var tenantB = reused.submit(() -> consumer.handle(
-                    mapper.toSpringMessage(message("msg-thread-b", "notes.events", "tenant-b"))));
-            tenantA.get();
-            tenantB.get();
-            assertThat(reused.submit(ExecutionContextHolder::current).get()).isEmpty();
-        }
+    void preparationFailureOnAMissRunsOutsideTheInboxTransactionAndLeavesNoRecord() {
+        var inboxRepository = new RecordingInboxRepository();
+        var transactions = new RecordingTransactionBoundary();
+        var preparationCalls = new AtomicInteger();
+        var preparationObservedTransaction = new AtomicReference<Boolean>();
+        var businessCalls = new AtomicInteger();
+        var preparationFailure = new IllegalStateException("preparation unavailable");
+        var inbox = new InboxTemplate(
+                "prepared-handler",
+                inboxRepository,
+                transactions,
+                Clock.fixed(Instant.parse("2026-08-30T00:00:00Z"), ZoneOffset.UTC));
+        ApplicationMessageHandler<byte[]> handler = new PreparedApplicationHandler(
+                inbox,
+                payload -> {
+                    preparationCalls.incrementAndGet();
+                    preparationObservedTransaction.set(transactions.active);
+                    throw preparationFailure;
+                },
+                businessCalls::incrementAndGet);
+        var consumer = new ReliableMessageConsumerFactory(mapper)
+                .forContract(contract(), serialized -> handler.handle(
+                        serialized.payload(), serialized.descriptor().id()));
 
-        try (var virtual = Executors.newVirtualThreadPerTaskExecutor()) {
-            var result = virtual.submit(() -> {
-                assertThat(Thread.currentThread().isVirtual()).isTrue();
-                return consumer.handle(
-                        mapper.toSpringMessage(message("msg-virtual", "notes.events", "tenant-a")));
-            });
-            assertThat(result.get()).isEqualTo(io.github.ande1922.moduvera.message.inbox.InboxOutcome.APPLIED);
-        }
+        assertThatThrownBy(() -> consumer.accept(
+                        mapper.toSpringMessage(message("preparation-failure", "notes.events"))))
+                .isInstanceOf(NonRetryableMessageException.class)
+                .hasMessage("message handling exhausted 1 attempts")
+                .satisfies(thrown -> assertThat(thrown.getCause()).isSameAs(preparationFailure));
+
+        assertThat(inboxRepository.prechecks).isOne();
+        assertThat(preparationCalls).hasValue(1);
+        assertThat(preparationObservedTransaction).hasValue(false);
+        assertThat(transactions.calls).isZero();
+        assertThat(inboxRepository.starts).isZero();
+        assertThat(businessCalls).hasValue(0);
         assertThat(ExecutionContextHolder.current()).isEmpty();
     }
 
@@ -235,55 +176,72 @@ class ReliableInboundEndpointTest {
                 new Actor(ActorType.SERVICE, "notes-service", Set.of("notes:consume")));
     }
 
-    private static ExecutionContext priorWorkerContext() {
-        return ExecutionContext.initiatedBy(
-                ExecutionScope.platform(),
-                new Actor(ActorType.SERVICE, "listener-worker", Set.of("listener:local")),
-                "corr-worker-before-message");
-    }
-
-    private static SerializedMessage message(String id, String destination) {
-        return message(id, destination, "tenant-a");
-    }
-
-    private static SerializedMessage message(String id, String destination, String tenantId) {
-        return message(
-                id,
-                MessageKind.EVENT,
-                "io.github.ande1922.moduvera.example.notes.created.v1",
-                URI.create("urn:service:notes"),
-                destination,
-                tenantId);
-    }
-
-    private static SerializedMessage message(
-            String id,
-            MessageKind kind,
-            String type,
-            URI source,
-            String destination,
-            String tenantId) {
+    private static SerializedMessage message(String messageId, String destination) {
         return SerializedMessage.json(
                 new MessageDescriptor(
-                        new MessageId(id),
-                        kind,
-                        new MessageType(type),
-                        source,
+                        new MessageId(messageId),
+                        MessageKind.EVENT,
+                        new MessageType("io.github.ande1922.moduvera.example.notes.created.v1"),
+                        URI.create("urn:service:notes"),
                         new Destination(destination),
                         Instant.parse("2026-08-30T00:00:00Z"),
-                        new TenantId(tenantId),
-                        new Actor(ActorType.SERVICE, "notes-service", Set.of("sender:claimed")),
-                        "corr-1",
+                        new TenantId("tenant-a"),
+                        new Actor(ActorType.SERVICE, "wire-producer", Set.of("wire:permission")),
+                        "corr-message",
                         null,
                         new Initiator(ActorType.USER, "alice"),
-                        tenantId + ":note-1"),
+                        "tenant-a:1"),
                 "{}");
     }
 
-    private static final class DirectTransactionBoundary implements TransactionBoundary {
+    private record PreparedApplicationHandler(
+            InboxTemplate inbox, Consumer<byte[]> preparation, Runnable businessWork)
+            implements ApplicationMessageHandler<byte[]> {
+
+        @Override
+        public void handle(byte[] payload, MessageId messageId) {
+            if (inbox.isProcessed(messageId)) {
+                return;
+            }
+            preparation.accept(payload);
+            inbox.handle(messageId, businessWork);
+        }
+    }
+
+    private static final class RecordingInboxRepository implements InboxRepository {
+        private int prechecks;
+        private int starts;
+
+        @Override
+        public boolean isProcessed(TenantId tenantId, String consumerId, MessageId messageId) {
+            prechecks++;
+            return false;
+        }
+
+        @Override
+        public boolean tryStart(
+                TenantId tenantId,
+                String consumerId,
+                MessageId messageId,
+                Instant processedAt) {
+            starts++;
+            return true;
+        }
+    }
+
+    private static final class RecordingTransactionBoundary implements TransactionBoundary {
+        private boolean active;
+        private int calls;
+
         @Override
         public <T> T inTransaction(Supplier<T> work) {
-            return work.get();
+            calls++;
+            active = true;
+            try {
+                return work.get();
+            } finally {
+                active = false;
+            }
         }
     }
 }

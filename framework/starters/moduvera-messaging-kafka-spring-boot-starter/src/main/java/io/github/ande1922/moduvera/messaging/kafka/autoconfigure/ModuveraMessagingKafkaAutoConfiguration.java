@@ -1,6 +1,5 @@
 package io.github.ande1922.moduvera.messaging.kafka.autoconfigure;
 
-import io.github.ande1922.moduvera.data.TransactionBoundary;
 import io.github.ande1922.moduvera.data.autoconfigure.ModuveraDataMybatisPlusAutoConfiguration;
 import io.github.ande1922.moduvera.message.inbox.InboxRepository;
 import io.github.ande1922.moduvera.message.outbox.MessageTransport;
@@ -158,15 +157,9 @@ public class ModuveraMessagingKafkaAutoConfiguration {
     @ConditionalOnMissingBean
     ReliableMessageConsumerFactory moduveraReliableMessageConsumerFactory(
             KafkaMessageMapper mapper,
-            InboxRepository repository,
-            TransactionBoundary transactions,
-            Clock clock,
             ModuveraMessagingKafkaProperties properties) {
         return new ReliableMessageConsumerFactory(
                 mapper,
-                repository,
-                transactions,
-                clock,
                 properties.getConsumerMaxAttempts(),
                 properties.getConsumerBackoffInitial(),
                 properties.getConsumerBackoffMax());

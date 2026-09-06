@@ -7,34 +7,26 @@ import io.github.ande1922.moduvera.message.Destination;
 import io.github.ande1922.moduvera.message.InboundMessageContract;
 import io.github.ande1922.moduvera.message.MessageKind;
 import io.github.ande1922.moduvera.message.MessageType;
-import io.github.ande1922.moduvera.message.handler.EventMessageHandler;
-import io.github.ande1922.moduvera.messaging.kafka.ReliableInboundEndpoint;
 import io.github.ande1922.moduvera.messaging.kafka.ReliableMessageConsumerFactory;
-import io.github.ande1922.moduvera.reference.order.application.OrderApplicationService;
+import io.github.ande1922.moduvera.reference.order.application.InventoryResultHandler;
 import java.net.URI;
 import java.util.Set;
-import org.springframework.beans.factory.annotation.Qualifier;
+import java.util.function.Consumer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.messaging.Message;
 import tools.jackson.databind.ObjectMapper;
 
 @Configuration(proxyBeanMethods = false)
 public class InventoryResultInboundConfiguration {
 
-    static final String HANDLER_BEAN = "inventoryResultMessageHandler";
-
-    @Bean(HANDLER_BEAN)
-    EventMessageHandler inventoryResultMessageHandler(
-            OrderApplicationService orders, ObjectMapper json) {
-        return new InventoryResultMessageHandler(orders, new InventoryResultMessageMapper(json));
-    }
-
     @Bean
-    ReliableInboundEndpoint inventoryResult(
+    Consumer<Message<byte[]>> inventoryResult(
             ReliableMessageConsumerFactory consumers,
-            @Qualifier(HANDLER_BEAN) EventMessageHandler handler) {
-        return consumers.forConsumer(
-                "order-inventory-result",
+            InventoryResultHandler handler,
+            ObjectMapper json) {
+        var mapper = new InventoryResultMessageMapper(json);
+        return consumers.forContract(
                 new InboundMessageContract(
                         MessageKind.valueOf(InventoryReservationResult.MESSAGE_KIND),
                         new MessageType(InventoryReservationResult.MESSAGE_TYPE),
@@ -44,6 +36,7 @@ public class InventoryResultInboundConfiguration {
                                 ActorType.SERVICE,
                                 "inventory-service",
                                 Set.of("order:apply-inventory-result"))),
-                handler);
+                serialized -> handler.handle(
+                        mapper.map(serialized.payload()), serialized.descriptor().id()));
     }
 }

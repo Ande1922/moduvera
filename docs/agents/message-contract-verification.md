@@ -13,7 +13,7 @@ This step is complete when the repository identity gate covers every discovered 
 
 ## Asynchronous-only capability
 
-Register each asynchronous-only command with `ModuveraArchitectureRules.asyncOnlyCapabilityDoesNotExposeSynchronousServiceApi`. The rule prevents a public Service API interface from accepting that command. A message Inbound Adapter invokes the Application Service after protocol handling; add a synchronous Service API only for a separately supported direct local or remote call.
+Register each asynchronous-only command with `ModuveraArchitectureRules.asyncOnlyCapabilityDoesNotExposeSynchronousServiceApi`. The rule prevents a public Service API interface from accepting that command. A message Inbound Adapter invokes an independent `ApplicationMessageHandler<P>` after protocol handling; add a synchronous Service API only for a separately supported direct local or remote call.
 
 This step is complete when the generic rule passes against current production classes and its neutral mutation fixtures still fail for renamed interfaces and arbitrary return types.
 
@@ -30,6 +30,22 @@ The shared TCK accepts the declared kind, type, source, and destination; mutates
 
 This step is complete when every changed message Inbound Adapter passes the shared TCK without duplicating its mismatch matrix.
 
+## Application Handler and Inbox
+
+Test each Handler through its public typed seam with scripted collaborators.
+Verify that a committed precheck exits before authorization and protected
+preparation, authorization precedes protected work on a miss, preparation
+failure leaves no Inbox record, and mutable reads and changes occur in the
+Inbox callback. The Handler owns a fixed consumer ID through `InboxTemplate`
+and does not directly open a top-level transaction.
+
+For replay recovery, first commit a real Inbox row through the production
+repository and transaction adapter. Redeliver the same serialized message
+through the public `Consumer<Message<byte[]>>` while the preparation
+collaborator is unavailable. Require normal return, zero preparation calls,
+and exactly one committed Inbox row. A stubbed `isProcessed` result alone is
+not recovery evidence.
+
 ## Asynchronous negative assertions
 
 An unchanged business count is evidence only after a consumption-completion barrier. Capture a `ProgressBarrier` immediately before sending, then require a monotonic consumer offset, Inbox marker, or unique same-partition barrier to advance. Assert the unchanged business state only after that barrier succeeds.
@@ -38,4 +54,4 @@ This step is complete when the test would time out if the message were never con
 
 ## Evidence placement
 
-Keep generic envelope validation, trusted-context construction, and retry classification in the message framework tests. Verify Inbox/Outbox atomicity, persistence, concurrency, and recovery through the production runtime Adapters and real infrastructure according to ADR 0034. App tests retain only assembly, Broker delivery, and end-to-end business evidence that lower seams cannot prove.
+Keep generic envelope validation, trusted-context construction, retry classification, and context cleanup in the message framework tests; the framework consumer must not open the business transaction. Verify Inbox/Outbox atomicity, persistence, concurrency, and recovery through the production runtime Adapters and real infrastructure according to ADR 0034. App tests retain only assembly, Broker delivery, and end-to-end business evidence that lower seams cannot prove.

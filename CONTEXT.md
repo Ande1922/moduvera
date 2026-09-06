@@ -158,6 +158,10 @@ _Avoid_: Destination、Topic 版本、独立路由版本
 由服务 API 拥有，并在应用装配或运行配置时映射到 Broker Topic 或 Queue 的逻辑路由地址。
 _Avoid_: 硬编码 Topic、Binding Name
 
+**应用消息处理器（Application Message Handler）**:
+位于 Application 层、代表一个协议无关消息用例的独立类型；接收已解码的提供方业务 Payload 和原始 MessageId，自身负责授权、允许的准备、领域编排及固定 Inbox。已提交 Inbox 预检查先于受保护准备；依赖并发一致性的读取、业务变更、Inbox 与同库 Outbox 都在 Inbox 回调中作为事务内处理，并形成一个完整本地事务。它不接收消息信封或传输类型，也不直接开启顶层事务。
+_Avoid_: Command/Event Handler 标记、传输回调、空壳转发 Service、事务包装器
+
 **Outbox 记录（Outbox Record）**:
 与触发它的业务状态原子提交、用于表达待发布集成消息意图的持久记录；其职责止于 Broker 确认接收，不记录消费结果。
 _Avoid_: 已发布事件、消息日志
@@ -177,7 +181,7 @@ _Avoid_: Outbox Terminal、Inbox 记录、业务失败状态
 ## 数据与运行时能力
 
 **事务边界（Transaction Boundary）**:
-由应用用例显式开启的一次顶层、单服务、单数据库事务；其内部只允许本地 Repository 和同库 Outbox/Inbox 操作，禁止嵌套以及 HTTP、Broker、Redis 等外部副作用。
+由应用用例显式拥有的一次顶层、单服务、单数据库事务；其内部只允许本地 Repository 和同库 Outbox/Inbox 操作，禁止嵌套以及 HTTP、Broker、Redis 等外部副作用。消息用例通过其固定 Inbox 完成这一次完整本地事务，Handler 不再直接叠加事务边界。
 _Avoid_: Work Unit、Transaction Composer、Saga、分布式事务
 
 **聚合仓储（Aggregate Repository）**:

@@ -48,9 +48,11 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Properties;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterAll;
@@ -73,6 +75,8 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.http.client.ClientHttpRequestFactory;
 import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
 import io.micrometer.observation.ObservationRegistry;
+import org.apache.kafka.clients.admin.Admin;
+import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtException;
@@ -360,10 +364,16 @@ class OrderApplicationIT {
                 "{\"commandId\":\"reserve-order-" + confirmedId + "\",\"orderId\":"
                         + confirmedId + ",\"reservedAt\":\"2026-08-30T00:00:01Z\"}",
                 "corr-confirm-result");
+        long beforeConfirmation = consumedResultRecords();
         transport.send(confirmed);
         eventuallyStatus(confirmedId, "CONFIRMED");
+        eventually(() -> consumedResultRecords() > beforeConfirmation);
+        PersistedOrder committedConfirmation = persistedOrder(confirmedId);
+        long beforeReplay = consumedResultRecords();
         transport.send(confirmed);
-        eventually(() -> count("moduvera_message_inbox") == 1);
+        eventually(() -> consumedResultRecords() > beforeReplay);
+        assertThat(persistedOrder(confirmedId)).isEqualTo(committedConfirmation);
+        assertThat(count("moduvera_message_inbox")).isEqualTo(1);
 
         String rejectedId = createOrder("corr-reject-create");
         assertThat(outboxWorker.publishBatch(10).published()).isEqualTo(1);
@@ -438,6 +448,24 @@ class OrderApplicationIT {
 
     private int count(String table) {
         return jdbc.queryForObject("SELECT COUNT(*) FROM " + table, Integer.class);
+    }
+
+    private long consumedResultRecords() {
+        Properties properties = new Properties();
+        properties.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, KAFKA.getBootstrapServers());
+        try (Admin admin = Admin.create(properties)) {
+            return admin.listConsumerGroupOffsets("order-it")
+                    .partitionsToOffsetAndMetadata()
+                    .get(5, TimeUnit.SECONDS)
+                    .entrySet()
+                    .stream()
+                    .filter(entry -> RESULT_TOPIC.equals(entry.getKey().topic()))
+                    .mapToLong(entry -> entry.getValue().offset())
+                    .sum();
+        } catch (Exception failure) {
+            throw new IllegalStateException(
+                    "could not observe order consumer progress for " + RESULT_TOPIC, failure);
+        }
     }
 
     private record PersistedOrder(String status, long version, String createdBy, String updatedBy) {}

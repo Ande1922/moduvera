@@ -4,7 +4,6 @@ import io.github.ande1922.moduvera.reference.inventory.api.InventoryRejected;
 import io.github.ande1922.moduvera.reference.inventory.api.InventoryReservationResult;
 import io.github.ande1922.moduvera.reference.inventory.api.InventoryReserved;
 import io.github.ande1922.moduvera.message.NonRetryableMessageException;
-import io.github.ande1922.moduvera.message.SerializedMessage;
 import java.time.Instant;
 import java.util.List;
 import tools.jackson.databind.JsonNode;
@@ -18,9 +17,9 @@ final class InventoryResultMessageMapper {
         this.json = json;
     }
 
-    InventoryReservationResult map(SerializedMessage serialized) {
+    InventoryReservationResult map(byte[] payloadBytes) {
         try {
-            JsonNode payload = json.readTree(serialized.payload());
+            JsonNode payload = json.readTree(payloadBytes);
             String commandId = requiredText(payload, "commandId");
             long orderId = payload.get("orderId").asLong();
             if (payload.has("reservedAt")) {

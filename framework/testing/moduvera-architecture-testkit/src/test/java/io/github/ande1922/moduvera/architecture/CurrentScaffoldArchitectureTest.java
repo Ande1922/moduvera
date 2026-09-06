@@ -16,12 +16,14 @@ class CurrentScaffoldArchitectureTest {
 
     private static final String INVENTORY_APPLICATION =
             "io.github.ande1922.moduvera.reference.app.inventory.InventoryApplication";
-    private static final String RESERVE_INVENTORY_COMMAND_MESSAGE_HANDLER =
-            "io.github.ande1922.moduvera.reference.inventory.adapter.inbound.messaging.ReserveInventoryCommandMessageHandler";
-    private static final String INVENTORY_RESULT_MESSAGE_HANDLER =
-            "io.github.ande1922.moduvera.reference.order.adapter.inbound.messaging.InventoryResultMessageHandler";
+    private static final String INVENTORY_RESERVATION_HANDLER =
+            "io.github.ande1922.moduvera.reference.inventory.application.InventoryReservationHandler";
+    private static final String INVENTORY_RESULT_HANDLER =
+            "io.github.ande1922.moduvera.reference.order.application.InventoryResultHandler";
     private static final String RELIABLE_INBOUND_ENDPOINT =
             "io.github.ande1922.moduvera.messaging.kafka.ReliableInboundEndpoint";
+    private static final String RELIABLE_MESSAGE_CONSUMER_FACTORY =
+            "io.github.ande1922.moduvera.messaging.kafka.ReliableMessageConsumerFactory";
     private static final JavaClasses CURRENT_CLASSES = new ClassFileImporter()
             .withImportOption(new ImportOption.DoNotIncludeTests())
             .importPackages("io.github.ande1922.moduvera");
@@ -35,10 +37,11 @@ class CurrentScaffoldArchitectureTest {
         assertImported("io.github.ande1922.moduvera.reference.app.monolith.ModuveraMonolithApplication");
         assertImported(
                 "io.github.ande1922.moduvera.reference.catalog.catalog.adapter.inbound.http.CatalogHttpController");
-        assertImported(RESERVE_INVENTORY_COMMAND_MESSAGE_HANDLER);
+        assertImported(INVENTORY_RESERVATION_HANDLER);
         assertImported("io.github.ande1922.moduvera.reference.order.adapter.inbound.http.OrderHttpController");
-        assertImported(INVENTORY_RESULT_MESSAGE_HANDLER);
+        assertImported(INVENTORY_RESULT_HANDLER);
         assertImported(RELIABLE_INBOUND_ENDPOINT);
+        assertImported(RELIABLE_MESSAGE_CONSUMER_FACTORY);
         assertFalse(CURRENT_CLASSES.contain(
                 "io.github.ande1922.moduvera.messaging.kafka.ReliableMessageConsumer"));
     }
@@ -103,8 +106,8 @@ class CurrentScaffoldArchitectureTest {
                 "io.github.ande1922.moduvera.reference.inventory.InventoryModuleConfiguration"));
         assertTrue(businessServiceClasses.contains(
                 "io.github.ande1922.moduvera.reference.order.OrderModuleConfiguration"));
-        assertTrue(businessServiceClasses.contains(RESERVE_INVENTORY_COMMAND_MESSAGE_HANDLER));
-        assertTrue(businessServiceClasses.contains(INVENTORY_RESULT_MESSAGE_HANDLER));
+        assertTrue(businessServiceClasses.contains(INVENTORY_RESERVATION_HANDLER));
+        assertTrue(businessServiceClasses.contains(INVENTORY_RESULT_HANDLER));
         ModuveraArchitectureRules.BUSINESS_SERVICE_CLASSES_HAVE_EXPLICIT_OWNERS.check(CURRENT_CLASSES);
     }
 
@@ -146,42 +149,44 @@ class CurrentScaffoldArchitectureTest {
         ModuveraArchitectureRules.BUSINESS_HTTP_CONTROLLERS_BELONG_TO_PROVIDER_INBOUND.check(CURRENT_CLASSES);
         ModuveraArchitectureRules.BUSINESS_MESSAGE_INBOUND_BELONGS_TO_PROVIDER_ADAPTER
                 .check(CURRENT_CLASSES);
-        ModuveraArchitectureRules.BUSINESS_MESSAGE_HANDLERS_ARE_CLASSIFIED_AND_PACKAGE_PRIVATE
+        ModuveraArchitectureRules.APPLICATION_MESSAGE_HANDLERS_HAVE_APPLICATION_OWNERSHIP
                 .check(CURRENT_CLASSES);
-        ModuveraArchitectureRules.APPLICATION_SERVICES_DO_NOT_IMPLEMENT_MESSAGE_HANDLERS
+        ModuveraArchitectureRules.BUSINESS_MESSAGE_INBOUND_DOES_NOT_OWN_INBOX_TRANSACTION
                 .check(CURRENT_CLASSES);
-        ModuveraArchitectureRules.BUSINESS_MESSAGE_HANDLERS_DO_NOT_OWN_RELIABILITY
+        ModuveraArchitectureRules.RELIABLE_CONSUMER_TRANSPORT_DOES_NOT_OWN_BUSINESS_TRANSACTION
                 .check(CURRENT_CLASSES);
     }
 
     @Test
-    void reliableInboundEndpointOwnsTheConsumerBoundaryAndReliabilityMechanics() {
+    void reliableInboundEndpointOwnsOnlyTheConsumerTransportBoundary() {
         var endpoint = CURRENT_CLASSES.get(RELIABLE_INBOUND_ENDPOINT);
         Set<String> dependencies = endpoint.getDirectDependenciesFromSelf().stream()
                 .map(dependency -> dependency.getTargetClass().getName())
                 .collect(Collectors.toSet());
 
         assertTrue(endpoint.isAssignableTo(java.util.function.Consumer.class));
-        assertTrue(dependencies.contains("io.github.ande1922.moduvera.message.inbox.InboxTemplate"));
         assertTrue(dependencies.contains("io.github.ande1922.moduvera.context.ExecutionContextHolder"));
-        assertTrue(dependencies.contains(
-                "io.github.ande1922.moduvera.message.handler.InboundMessageHandler"));
+        assertTrue(dependencies.contains("io.github.ande1922.moduvera.message.SerializedMessage"));
         assertTrue(dependencies.contains("io.github.ande1922.moduvera.message.NonRetryableMessageException"));
         assertTrue(dependencies.contains("java.lang.Thread"));
         assertTrue(dependencies.contains("java.time.Duration"));
+        assertFalse(dependencies.contains("io.github.ande1922.moduvera.message.inbox.InboxTemplate"));
+        assertFalse(dependencies.contains("io.github.ande1922.moduvera.data.TransactionBoundary"));
+        assertFalse(dependencies.contains(
+                "io.github.ande1922.moduvera.message.handler.ApplicationMessageHandler"));
     }
 
     @Test
-    void asyncOnlyInventoryReservationUsesTheDirectApplicationServicePath() {
-        Set<String> selectedAdapters = CURRENT_CLASSES.stream()
-                .filter(ModuveraArchitectureRules.INVENTORY_RESERVATION_MESSAGE_ADAPTER)
+    void asyncOnlyInventoryReservationUsesTheApplicationHandlerPath() {
+        Set<String> selectedHandlers = CURRENT_CLASSES.stream()
+                .filter(ModuveraArchitectureRules.INVENTORY_RESERVATION_APPLICATION_HANDLER)
                 .map(javaClass -> javaClass.getName())
                 .collect(Collectors.toSet());
 
         assertTrue(
-                selectedAdapters.contains(RESERVE_INVENTORY_COMMAND_MESSAGE_HANDLER),
+                selectedHandlers.contains(INVENTORY_RESERVATION_HANDLER),
                 () -> "Inventory reservation rule did not select the current handler: "
-                        + selectedAdapters);
+                        + selectedHandlers);
         ModuveraArchitectureRules.asyncOnlyCapabilityDoesNotExposeSynchronousServiceApi(
                         ReserveInventoryCommand.class)
                 .check(CURRENT_CLASSES);

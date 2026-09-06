@@ -5,10 +5,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.ande1922.moduvera.context.Actor;
 import io.github.ande1922.moduvera.context.ActorType;
+import io.github.ande1922.moduvera.context.ExecutionContext;
 import io.github.ande1922.moduvera.context.ExecutionContextHolder;
 import io.github.ande1922.moduvera.context.Initiator;
 import io.github.ande1922.moduvera.context.MissingExecutionContextException;
 import io.github.ande1922.moduvera.context.TenantId;
+import io.github.ande1922.moduvera.data.NestedTransactionBoundaryException;
 import io.github.ande1922.moduvera.data.spring.SpringTransactionBoundary;
 import io.github.ande1922.moduvera.message.Destination;
 import io.github.ande1922.moduvera.message.InboundMessageContract;
@@ -18,7 +20,7 @@ import io.github.ande1922.moduvera.message.MessageKind;
 import io.github.ande1922.moduvera.message.MessageType;
 import io.github.ande1922.moduvera.message.NonRetryableMessageException;
 import io.github.ande1922.moduvera.message.SerializedMessage;
-import io.github.ande1922.moduvera.message.handler.InboundMessageHandler;
+import io.github.ande1922.moduvera.message.handler.ApplicationMessageHandler;
 import io.github.ande1922.moduvera.message.inbox.InboxOutcome;
 import io.github.ande1922.moduvera.message.inbox.InboxTemplate;
 import io.github.ande1922.moduvera.message.outbox.MessageTransport;
@@ -41,6 +43,7 @@ import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -70,6 +73,7 @@ class JdbcMessagingStoreIT {
     private JdbcDurablePublication publication;
     private JdbcInboxRepository inbox;
     private ReliableMessageConsumerFactory inboxConsumers;
+    private SpringTransactionBoundary inboxTransactions;
     private TransactionTemplate transactions;
     private AtomicInteger wakeSignals;
 
@@ -93,11 +97,8 @@ class JdbcMessagingStoreIT {
         secondOutbox = new JdbcOutboxStore(
                 named, JdbcMessagingDialect.POSTGRESQL, transactions, new LocalOutboxWakeSignal());
         inbox = new JdbcInboxRepository(named);
-        inboxConsumers = new ReliableMessageConsumerFactory(
-                new KafkaMessageMapper(),
-                inbox,
-                new SpringTransactionBoundary(transactions),
-                Clock.fixed(Instant.parse("2026-08-30T00:00:00Z"), ZoneOffset.UTC));
+        inboxTransactions = new SpringTransactionBoundary(transactions);
+        inboxConsumers = new ReliableMessageConsumerFactory(new KafkaMessageMapper());
         jdbc.execute("""
                 CREATE TABLE test_inbox_business_record (
                     tenant_id VARCHAR(64) NOT NULL,
@@ -106,13 +107,19 @@ class JdbcMessagingStoreIT {
                     PRIMARY KEY (tenant_id, consumer_id, message_id)
                 )
                 """);
+        jdbc.execute("""
+                CREATE TABLE test_deferred_commit_record (
+                    id INTEGER UNIQUE DEFERRABLE INITIALLY DEFERRED
+                )
+                """);
     }
 
     @BeforeEach
     void clearTables() {
         jdbc.execute("""
                 TRUNCATE TABLE moduvera_message_inbox, moduvera_message_outbox,
-                    test_business_record, test_inbox_business_record
+                    test_business_record, test_inbox_business_record,
+                    test_deferred_commit_record
                 """);
         wakeSignals.set(0);
     }
@@ -552,20 +559,13 @@ class JdbcMessagingStoreIT {
     void commitsBusinessChangesOncePerTrustedTenantAndConsumerScope() {
         var mapper = new KafkaMessageMapper();
         var tenantA = inboxMessage("msg-inbox-scope", "tenant-a");
-        var inventory = inboxConsumers.forConsumer(
-                "inventory", inboxContract(), recordBusinessChange("inventory"));
+        var inventory = inboxConsumer("inventory", recordBusinessChange("inventory"));
 
-        assertThat(inventory.handle(mapper.toSpringMessage(tenantA)))
-                .isEqualTo(InboxOutcome.APPLIED);
-        assertThat(inventory.handle(mapper.toSpringMessage(tenantA)))
-                .isEqualTo(InboxOutcome.DUPLICATE);
-        assertThat(inboxConsumers
-                        .forConsumer("audit", inboxContract(), recordBusinessChange("audit"))
-                        .handle(mapper.toSpringMessage(tenantA)))
-                .isEqualTo(InboxOutcome.APPLIED);
-        assertThat(inventory.handle(mapper.toSpringMessage(
-                        inboxMessage("msg-inbox-scope", "tenant-b"))))
-                .isEqualTo(InboxOutcome.APPLIED);
+        inventory.accept(mapper.toSpringMessage(tenantA));
+        inventory.accept(mapper.toSpringMessage(tenantA));
+        inboxConsumer("audit", recordBusinessChange("audit"))
+                .accept(mapper.toSpringMessage(tenantA));
+        inventory.accept(mapper.toSpringMessage(inboxMessage("msg-inbox-scope", "tenant-b")));
 
         assertThat(businessScopes())
                 .containsExactly(
@@ -577,24 +577,54 @@ class JdbcMessagingStoreIT {
     }
 
     @Test
+    void publicConsumerSkipsUnavailablePreparationForARealCommittedInboxReplay() {
+        var mapper = new KafkaMessageMapper();
+        var serialized = inboxMessage("msg-committed-replay", "tenant-a");
+        var messageId = serialized.descriptor().id();
+        var template = inboxTemplate("inventory");
+        assertThat(handle("tenant-a", template, messageId, () -> {}))
+                .isEqualTo(InboxOutcome.APPLIED);
+
+        var preparationAttempts = new AtomicInteger();
+        Consumer<byte[]> unavailablePreparation = ignored -> {
+            preparationAttempts.incrementAndGet();
+            throw new IllegalStateException("preparation unavailable");
+        };
+        ApplicationMessageHandler<byte[]> handler = (payload, originalMessageId) -> {
+            if (template.isProcessed(originalMessageId)) {
+                return;
+            }
+            unavailablePreparation.accept(payload);
+            template.handle(originalMessageId, () -> {});
+        };
+        Consumer<org.springframework.messaging.Message<byte[]>> replay = inboxConsumers.forContract(
+                inboxContract(),
+                message -> handler.handle(message.payload(), message.descriptor().id()));
+
+        replay.accept(mapper.toSpringMessage(serialized));
+
+        assertThat(preparationAttempts).hasValue(0);
+        assertThat(inboxRecordCount(messageId.value())).isEqualTo(1);
+        assertThat(ExecutionContextHolder.current()).isEmpty();
+    }
+
+    @Test
     void rollsBackInboxAndBusinessChangeTogetherSoTheMessageCanRetry() {
         var mapper = new KafkaMessageMapper();
         var serialized = inboxMessage("msg-inbox-retry", "tenant-a");
-        var failing = inboxConsumers.forConsumer("inventory", inboxContract(), message -> {
-            recordBusinessChange("inventory").handle(message);
+        var failing = inboxConsumer("inventory", message -> {
+            recordBusinessChange("inventory").accept(message);
             throw new IllegalStateException("handler failed");
         });
 
-        assertThatThrownBy(() -> failing.handle(mapper.toSpringMessage(serialized)))
+        assertThatThrownBy(() -> failing.accept(mapper.toSpringMessage(serialized)))
                 .isInstanceOf(NonRetryableMessageException.class)
                 .hasCauseInstanceOf(IllegalStateException.class);
         assertThat(businessRecordCount("msg-inbox-retry")).isZero();
         assertThat(inboxRecordCount("msg-inbox-retry")).isZero();
 
-        var retry = inboxConsumers.forConsumer(
-                "inventory", inboxContract(), recordBusinessChange("inventory"));
-        assertThat(retry.handle(mapper.toSpringMessage(serialized)))
-                .isEqualTo(InboxOutcome.APPLIED);
+        var retry = inboxConsumer("inventory", recordBusinessChange("inventory"));
+        retry.accept(mapper.toSpringMessage(serialized));
         assertThat(businessRecordCount("msg-inbox-retry")).isEqualTo(1);
         assertThat(inboxRecordCount("msg-inbox-retry")).isEqualTo(1);
         assertThat(ExecutionContextHolder.current()).isEmpty();
@@ -617,6 +647,242 @@ class JdbcMessagingStoreIT {
         assertThat(inboxRecordCount("msg-missing-context")).isZero();
     }
 
+    @Test
+    void precheckReadsOnlyCommittedStateWithinTenantAndConsumerIdentity() {
+        var id = new MessageId("msg-precheck-scope");
+        var inventory = inboxTemplate("inventory");
+
+        assertThat(isProcessed("tenant-a", inventory, id)).isFalse();
+        assertThat(inboxRecordCount(id.value())).isZero();
+
+        assertThat(handle("tenant-a", inventory, id, () -> {}))
+                .isEqualTo(InboxOutcome.APPLIED);
+        assertThat(isProcessed("tenant-a", inventory, id)).isTrue();
+        assertThat(isProcessed("tenant-a", inboxTemplate("audit"), id)).isFalse();
+        assertThat(isProcessed("tenant-b", inventory, id)).isFalse();
+    }
+
+    @Test
+    void precheckCannotSeeUncommittedOrRolledBackInboxRows() throws Exception {
+        assertPrecheckVisibility("msg-visibility-commit", false);
+        assertPrecheckVisibility("msg-visibility-rollback", true);
+    }
+
+    @Test
+    void committedFirstWriterWinsAfterBothPrechecksMiss() throws Exception {
+        assertConcurrentPrecheckRace("msg-race-commit", false);
+    }
+
+    @Test
+    void rolledBackFirstWriterLetsTheCompetingCallCommit() throws Exception {
+        assertConcurrentPrecheckRace("msg-race-rollback", true);
+    }
+
+    @Test
+    void domainFailureRollsBackInboxAndBusinessBeforeRetry() {
+        var id = new MessageId("msg-domain-failure");
+        var template = inboxTemplate("inventory");
+
+        assertThatThrownBy(() -> handle("tenant-a", template, id, () -> {
+                    recordTemplateBusinessChange("inventory", id).run();
+                    throw new IllegalStateException("domain failed");
+                }))
+                .isInstanceOf(IllegalStateException.class);
+        assertAtomicInboxState(id, "domain-retry-outbox", 0);
+
+        assertThat(handle("tenant-a", template, id, atomicInboxWork(id, "domain-retry-outbox")))
+                .isEqualTo(InboxOutcome.APPLIED);
+        assertAtomicInboxState(id, "domain-retry-outbox", 1);
+    }
+
+    @Test
+    void outboxWriteFailureRollsBackInboxAndBusinessBeforeRetry() {
+        var id = new MessageId("msg-outbox-write-failure");
+        var template = inboxTemplate("inventory");
+        append(message("occupied-outbox-id", "inventory.events", "occupied"));
+
+        assertThatThrownBy(() -> handle("tenant-a", template, id, () -> {
+                    recordTemplateBusinessChange("inventory", id).run();
+                    publication.append(message("occupied-outbox-id", "inventory.events", "occupied"));
+                }))
+                .isInstanceOf(RuntimeException.class);
+        assertThat(businessRecordCount(id.value())).isZero();
+        assertThat(inboxRecordCount(id.value())).isZero();
+        assertThat(outboxRecordCount("occupied-outbox-id")).isEqualTo(1);
+
+        assertThat(handle("tenant-a", template, id, atomicInboxWork(id, "outbox-write-retry")))
+                .isEqualTo(InboxOutcome.APPLIED);
+        assertAtomicInboxState(id, "outbox-write-retry", 1);
+    }
+
+    @Test
+    void failureAfterOutboxWriteRollsBackAllThreeResourcesBeforeRetry() {
+        var id = new MessageId("msg-after-outbox-failure");
+        var template = inboxTemplate("inventory");
+
+        assertThatThrownBy(() -> handle("tenant-a", template, id, () -> {
+                    atomicInboxWork(id, "after-outbox-event").run();
+                    throw new IllegalStateException("after outbox failed");
+                }))
+                .isInstanceOf(IllegalStateException.class);
+        assertAtomicInboxState(id, "after-outbox-event", 0);
+
+        assertThat(handle("tenant-a", template, id, atomicInboxWork(id, "after-outbox-event")))
+                .isEqualTo(InboxOutcome.APPLIED);
+        assertAtomicInboxState(id, "after-outbox-event", 1);
+    }
+
+    @Test
+    void commitFailureDoesNotReturnAppliedAndRollsBackInbox() {
+        var id = new MessageId("msg-commit-failure");
+
+        assertThatThrownBy(() -> handle("tenant-a", inboxTemplate("inventory"), id, () -> {
+                    jdbc.update("INSERT INTO test_deferred_commit_record(id) VALUES (42)");
+                    jdbc.update("INSERT INTO test_deferred_commit_record(id) VALUES (42)");
+                }))
+                .isInstanceOf(RuntimeException.class);
+
+        assertThat(inboxRecordCount(id.value())).isZero();
+        assertThat(jdbc.queryForObject(
+                        "SELECT COUNT(*) FROM test_deferred_commit_record", Integer.class))
+                .isZero();
+    }
+
+    @Test
+    void productionBoundaryRejectsExistingAndHelperOpenedTopLevelTransactions() {
+        var outerId = new MessageId("msg-existing-transaction");
+        var helperId = new MessageId("msg-helper-transaction");
+
+        assertThatThrownBy(() -> ExecutionContextHolder.run(
+                        inboxContext("tenant-a"),
+                        () -> transactions.executeWithoutResult(ignored -> inboxTemplate("inventory")
+                                .handle(outerId, () -> {}))))
+                .isInstanceOf(NestedTransactionBoundaryException.class);
+        assertThat(inboxRecordCount(outerId.value())).isZero();
+
+        assertThatThrownBy(() -> handle("tenant-a", inboxTemplate("inventory"), helperId, () -> {
+                    atomicInboxWork(helperId, "helper-nested-event").run();
+                    openTopLevelTransactionFromHelper();
+                }))
+                .isInstanceOf(NestedTransactionBoundaryException.class);
+        assertAtomicInboxState(helperId, "helper-nested-event", 0);
+    }
+
+    private void assertPrecheckVisibility(String messageId, boolean rollBack) throws Exception {
+        var id = new MessageId(messageId);
+        var template = inboxTemplate("inventory");
+        InboxDatabaseConcurrency.assertPrecheckVisibility(
+                inboxOperations(template), messageId, rollBack);
+    }
+
+    private void assertConcurrentPrecheckRace(String messageId, boolean rollBackFirst)
+            throws Exception {
+        var id = new MessageId(messageId);
+        var template = inboxTemplate("inventory");
+        InboxDatabaseConcurrency.assertPrecheckRace(
+                inboxOperations(template),
+                messageId,
+                rollBackFirst,
+                this::atomicInboxWork,
+                this::inboxInsertIsWaiting);
+        assertAtomicInboxState(id, messageId + "-event", 1);
+    }
+
+    private boolean inboxInsertIsWaiting() {
+        return jdbc.queryForObject(
+                        """
+                        SELECT COUNT(*)
+                          FROM pg_stat_activity
+                         WHERE pid <> pg_backend_pid()
+                           AND datname = current_database()
+                           AND wait_event_type = 'Lock'
+                           AND query LIKE '%INSERT%moduvera_message_inbox%'
+                        """,
+                        Integer.class)
+                > 0;
+    }
+
+    private InboxTemplate inboxTemplate(String consumerId) {
+        return new InboxTemplate(
+                consumerId,
+                inbox,
+                inboxTransactions,
+                Clock.fixed(Instant.parse("2026-08-30T00:00:00Z"), ZoneOffset.UTC));
+    }
+
+    private static boolean isProcessed(
+            String tenantId, InboxTemplate template, MessageId messageId) {
+        return ExecutionContextHolder.call(
+                inboxContext(tenantId), () -> template.isProcessed(messageId));
+    }
+
+    private static InboxOutcome handle(
+            String tenantId, InboxTemplate template, MessageId messageId, Runnable businessChange) {
+        return ExecutionContextHolder.call(
+                inboxContext(tenantId), () -> template.handle(messageId, businessChange));
+    }
+
+    private static InboxDatabaseConcurrency.Operations inboxOperations(InboxTemplate template) {
+        return new InboxDatabaseConcurrency.Operations() {
+            @Override
+            public boolean isProcessed(MessageId messageId) {
+                return JdbcMessagingStoreIT.isProcessed("tenant-a", template, messageId);
+            }
+
+            @Override
+            public InboxOutcome handle(MessageId messageId, Runnable businessChange) {
+                return JdbcMessagingStoreIT.handle(
+                        "tenant-a", template, messageId, businessChange);
+            }
+        };
+    }
+
+    private Runnable atomicInboxWork(MessageId messageId, String outboxMessageId) {
+        return () -> {
+            recordTemplateBusinessChange("inventory", messageId).run();
+            publication.append(message(outboxMessageId, "inventory.events", messageId.value()));
+        };
+    }
+
+    private Runnable recordTemplateBusinessChange(String consumerId, MessageId messageId) {
+        return () -> {
+            var context = ExecutionContextHolder.require();
+            jdbc.update(
+                    """
+                    INSERT INTO test_inbox_business_record(tenant_id, consumer_id, message_id)
+                    VALUES (?, ?, ?)
+                    """,
+                    context.tenantId().value(),
+                    consumerId,
+                    messageId.value());
+        };
+    }
+
+    private void assertAtomicInboxState(
+            MessageId messageId, String outboxMessageId, int expectedCount) {
+        assertThat(businessRecordCount(messageId.value())).isEqualTo(expectedCount);
+        assertThat(inboxRecordCount(messageId.value())).isEqualTo(expectedCount);
+        assertThat(outboxRecordCount(outboxMessageId)).isEqualTo(expectedCount);
+    }
+
+    private int outboxRecordCount(String messageId) {
+        return jdbc.queryForObject(
+                "SELECT COUNT(*) FROM moduvera_message_outbox WHERE message_id = ?",
+                Integer.class,
+                messageId);
+    }
+
+    private void openTopLevelTransactionFromHelper() {
+        inboxTransactions.inTransaction(() -> null);
+    }
+
+    private static ExecutionContext inboxContext(String tenantId) {
+        return ExecutionContext.initiatedBy(
+                new TenantId(tenantId),
+                new Actor(ActorType.SERVICE, "inventory-service"),
+                "corr-inbox-template");
+    }
+
     private static Set<String> claimIds(
             JdbcOutboxStore store, CountDownLatch ready, CountDownLatch start)
             throws InterruptedException {
@@ -625,7 +891,19 @@ class JdbcMessagingStoreIT {
         return new HashSet<>(ids(store.claim(10, Duration.ofSeconds(30)).orElseThrow()));
     }
 
-    private InboundMessageHandler recordBusinessChange(String consumerId) {
+    private Consumer<org.springframework.messaging.Message<byte[]>> inboxConsumer(
+            String consumerId, Consumer<SerializedMessage> businessChange) {
+        var template = inboxTemplate(consumerId);
+        return inboxConsumers.forContract(inboxContract(), serialized -> {
+            var messageId = serialized.descriptor().id();
+            if (template.isProcessed(messageId)) {
+                return;
+            }
+            template.handle(messageId, () -> businessChange.accept(serialized));
+        });
+    }
+
+    private Consumer<SerializedMessage> recordBusinessChange(String consumerId) {
         return serialized -> {
             var context = ExecutionContextHolder.require();
             assertThat(context.tenantId()).isEqualTo(serialized.descriptor().tenantId());
