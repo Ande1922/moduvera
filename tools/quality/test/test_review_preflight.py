@@ -85,6 +85,41 @@ class ReviewPreflightTest(unittest.TestCase):
         self.assertEqual(0, code)
         self.assertNotEqual(original["diff_sha256"], changed["diff_sha256"])
 
+    def test_fingerprint_ignores_git_presentation_and_order_configuration(self) -> None:
+        self.fixture.write("README.md", "# Updated\n")
+        self.fixture.write("café file.txt", "content\n")
+        head = self.fixture.commit("multiple paths")
+        code, original = self.run_preflight(head)
+        self.assertEqual(0, code)
+        order_file = self.fixture.root / "custom-order"
+        order_file.write_text("caf*\nREADME*\n")
+        for key, value in (
+            ("diff.noprefix", "true"), ("core.abbrev", "5"),
+            ("diff.renames", "copies"), ("diff.algorithm", "histogram"),
+            ("core.quotePath", "false"), ("diff.relative", "true"),
+            ("color.ui", "always"), ("diff.orderFile", str(order_file)),
+        ):
+            with self.subTest(key=key):
+                self.fixture.git("config", key, value)
+                code, configured = self.run_preflight(head)
+                self.assertEqual(0, code)
+                self.assertEqual(original["diff_sha256"], configured["diff_sha256"])
+
+    def test_fingerprint_includes_file_modes_and_binary_object_changes(self) -> None:
+        binary = self.fixture.root / "fixture.bin"
+        binary.write_bytes(b"\x00\xff\x01")
+        binary_base = self.fixture.commit("binary baseline")
+        binary.write_bytes(b"\x00\xff\x02")
+        content_head = self.fixture.commit("binary content")
+        code, content = self.run_preflight(content_head, binary_base)
+        self.assertEqual(0, code)
+        self.fixture.git("update-index", "--chmod=+x", "fixture.bin")
+        self.fixture.git("commit", "-q", "-m", "mode only")
+        mode_head = self.fixture.git("rev-parse", "HEAD")
+        code, mode = self.run_preflight(mode_head, binary_base)
+        self.assertEqual(0, code)
+        self.assertNotEqual(content["diff_sha256"], mode["diff_sha256"])
+
     def test_current_clean_mode_rejects_dirty_tracked_and_untracked_files(self) -> None:
         self.fixture.write("README.md", "# Updated\n")
         head = self.fixture.commit("valid")

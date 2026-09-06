@@ -36,6 +36,10 @@ timestamp, and its exit code. It does not replace either review axis or the
 quality gate. Default mode checks the committed range even in a dirty checkout.
 On failure, report the failed check and return to the authorized implementer.
 
+The `git-diff-tree-raw-v1` fingerprint hashes NUL-delimited raw changes with
+full object IDs and modes, renames disabled and canonical path order. It is
+independent of patch display settings; it is not the SHA-256 of a rendered patch.
+
 For a ticket review handoff, the worker adds `--repo <worktree>
 --require-current-clean --expected-branch <registered-branch>` and stores stdout
 in the external evidence directory with the command's actual exit code. This

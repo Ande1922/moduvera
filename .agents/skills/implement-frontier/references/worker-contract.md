@@ -64,6 +64,7 @@ Risks or blockers:
 - <none or concrete item>
 ```
 
-For a registered loop, add the preflight receipt and both original review
-paths to this report. Keep command output and exit codes in their existing
+For a registered loop, add the preflight receipt and both current-head review
+paths/statuses/base/head to this report, linking earlier rounds as finding
+history. Keep command output and exit codes in their existing
 evidence files; summarize new conclusions rather than copying full logs.

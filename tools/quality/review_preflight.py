@@ -9,6 +9,7 @@ import datetime as dt
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 
@@ -65,11 +66,15 @@ def main() -> int:
             if (options.expected_branch is not None
                     and report["checkout"]["branch"] != options.expected_branch):
                 raise quality_gate.GateError("checkout branch does not match registered --expected-branch")
-        patch = subprocess.run(
-            ["git", "diff", "--binary", "--no-ext-diff", "--no-textconv", base, head, "--"],
+        raw_diff = subprocess.run(
+            ["git", "diff-tree", "--raw", "-r", "-z", "--no-commit-id",
+             "--no-renames", "--no-abbrev", "--no-ext-diff", "--no-textconv",
+             "--no-color", "--no-relative", "--ignore-submodules=none",
+             "-O", os.devnull, base, head, "--"],
             cwd=options.repo, capture_output=True, check=True,
         ).stdout
-        report.update(diff_sha256=hashlib.sha256(patch).hexdigest(), changed_file_count=len(entries))
+        report.update(diff_sha256=hashlib.sha256(raw_diff).hexdigest(),
+                      diff_format="git-diff-tree-raw-v1", changed_file_count=len(entries))
         whitespace = quality_gate.git(options.repo, "diff", "--check", base, head, check=False)
         report["checks"].append({
             "name": "diff-check", "exit_code": whitespace.returncode,

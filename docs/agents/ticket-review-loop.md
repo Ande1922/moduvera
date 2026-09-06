@@ -11,17 +11,21 @@ condition.
 At the first review-ready commit, the coordinator records in the existing
 ledger/state: ticket, base, worktree/branch, original worker and Standards/Spec
 agent IDs, separate external report locations by round and axis, authorized
-operations, acceptance criteria, required verification, and high-risk seams requiring coordinator
-attention. Register both reviewers before enabling peer continuation. Keep
-source writes with the original worker and each review report with its author.
+operations, acceptance criteria, required verification, and high-risk seams
+requiring coordinator attention. Register both reviewers before enabling peer
+continuation. Keep source writes with the original worker and each review
+report with its author.
 
 Grant routine repair authority only for findings that restore an existing
 criterion or repository rule within the assigned ticket and authorized edit
 scope. The worker must agree with the finding. Changes to public contracts,
 security/trust boundaries, migration strategy, cross-ticket ownership, runtime
 dependencies, ticket dependency edges, or required verification obligations
-return to the coordinator. A high-risk seam already in scope retains the
-coordinator attention recorded at registration.
+return to the coordinator. For high-risk repairs, the coordinator must explicitly
+preauthorize a bounded repair scope and verification at registration; otherwise
+escalate before editing, including newly discovered high-risk changes. That
+preauthorization preserves the later coordinator risk inspection and does not
+need to be repeated for each repair inside the same approved boundary.
 Changing or waiving a user requirement needs the user's decision.
 
 ## Review and repair
@@ -48,19 +52,23 @@ Changing or waiving a user requirement needs the user's decision.
    cannot approve its own change or suppress another axis's report.
 5. When both axes are complete and clean for the same current pair, the worker
    sends the coordinator one review-complete packet: ticket/base/head,
-   preflight receipt, criterion-to-evidence mapping, original reports, and
-   remaining risks. The coordinator performs the registered risk checks and
-   cross-ticket assessment before authorized integration. Aggregate review,
+   preflight receipt, criterion-to-evidence mapping, and each axis's current
+   report path/status/reviewed base/head. Link earlier rounds as finding history;
+   they cannot substitute for current-head results. Include remaining risks.
+   The coordinator performs the registered risk checks and cross-ticket
+   assessment before authorized integration. Aggregate review,
    the repository gate, applicable Scenarios, and final acceptance still apply.
 
 ## Escalation and transport
 
 Send the coordinator the unresolved decision and original evidence when a
 finding is disputed, a registered boundary changes, evidence is contradictory,
-ownership or comparison no longer matches, a reviewer is unavailable, or the
-same failure recurs without a defensible repair plan. Restore the common cause
-and affected entry paths before another repair; round count alone does not
-force replanning. Keep the current state and stop dependent edits while the
+ownership or comparison no longer matches, or a reviewer is unavailable. If a
+reviewer rejects a submitted repair because the same confirmed cause remains,
+the coordinator decides the next repair plan from the cause, affected entry
+paths, failed closure evidence, and proposed plan. Ordinary local test/debug
+iterations stay with the worker; round count alone does not force replanning.
+Keep the current state and stop dependent edits while the
 decision is pending. Reviewers report such exceptions directly as well as to
 the worker; the worker cannot filter them from the coordinator.
 
