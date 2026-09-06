@@ -7,6 +7,7 @@ This is a deliberately small consumer project, not another platform module. It o
 - its own Spring Boot 4.1.1 parent rather than `moduvera-parent`;
 - `moduvera-bom` as an imported BOM;
 - versionless dependencies on the Kernel and Message Core artifacts, Resource Server autoconfigure, and the Web, Data, Messaging and Migration Spring Boot starters;
+- the typed `ApplicationMessageHandler<P>` seam, with a fixed `notes-audit` Inbox identity and the original `MessageId` supplied by the standard Messaging `Consumer`;
 - native HTTP responses and RFC 9457 errors;
 - JWT-derived `ExecutionContext`, use-case permission checks and transparent tenant isolation;
 - explicit JDK executor submission capture and registration-time callback binding;
@@ -22,7 +23,8 @@ The useful path is intentionally short:
 2. [`NoteController.java`](./src/main/java/io/github/ande1922/moduvera/example/notes/interfaces/http/NoteController.java) is ordinary native HTTP code.
 3. [`NoteApplicationService.java`](./src/main/java/io/github/ande1922/moduvera/example/notes/application/NoteApplicationService.java) uses permissions and `TransactionBoundary` without tenant parameters.
 4. [`MybatisPlusNoteRepository.java`](./src/main/java/io/github/ande1922/moduvera/example/notes/infrastructure/persistence/MybatisPlusNoteRepository.java) derives tenant identity from the trusted context at the infrastructure boundary.
-5. [`NotesDemoIT.java`](./src/test/java/io/github/ande1922/moduvera/example/notes/NotesDemoIT.java) drives the result through real HTTP and PostgreSQL, and composes explicit trusted Holder callers with direct tasks and externally completed callbacks before business reads.
+5. [`NoteCreatedHandler.java`](./src/main/java/io/github/ande1922/moduvera/example/notes/application/NoteCreatedHandler.java) performs the committed Inbox precheck and records a new receipt inside one atomic Inbox transaction.
+6. [`NotesDemoIT.java`](./src/test/java/io/github/ande1922/moduvera/example/notes/NotesDemoIT.java) drives the result through real HTTP, PostgreSQL and Kafka, and composes explicit trusted Holder callers with direct tasks and externally completed callbacks before business reads.
 
 The shared capture, lifecycle and unsupported-boundary rules are in the
 [Execution Context propagation guide](../../docs/implementation/EXECUTION-CONTEXT-PROPAGATION.md).
@@ -36,6 +38,13 @@ DOCKER_HOST=unix://$HOME/.orbstack/run/docker.sock \
   ./mvnw -pl examples/simple-notes-demo -am verify
 ```
 
+To verify the independent Spring Boot parent, imported BOM and versionless public dependencies against artifacts produced from the current checkout, install them and then invoke the Notes POM as a standalone Maven project:
+
+```bash
+./mvnw -DskipITs install
+./mvnw -f examples/simple-notes-demo/pom.xml verify
+```
+
 The test proves:
 
 - an authenticated writer creates a note and receives an unwrapped `201` body;
@@ -45,7 +54,7 @@ The test proves:
 - a directly submitted task and a callback completed later on an external worker both retain their complete request identity while reading real PostgreSQL business state, then restore that worker exactly;
 - Platform, absent and cross-tenant async reads fail closed without changing Note, Outbox or receipt state;
 - the Notes and Messaging migration definitions have distinct component identities and Flyway histories;
-- Kafka publication and consumption, JDBC Outbox/Inbox, retry and DLQ behavior remain active;
+- Kafka publication and standard-Consumer delivery to the typed Application Handler, JDBC Outbox/Inbox, committed-replay skipping, retry and DLQ behavior remain active;
 - PostgreSQL migration, Mapper registration, TenantLine and `TransactionBoundary` are all active.
 
 ## Manual run
