@@ -20,6 +20,7 @@ import io.opentelemetry.context.Context;
 import java.net.http.HttpTimeoutException;
 import java.sql.SQLException;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -293,6 +294,89 @@ class ModuveraEcsStructuredLogFormatterTest {
     }
 
     @Test
+    void redactsSensitiveNameFamiliesAcrossMessageAndStructuredInputs()
+            throws Exception {
+        List<String> violations = new ArrayList<>();
+        for (String sensitiveName :
+                List.of(
+                        "accessToken",
+                        "refreshToken",
+                        "clientSecret",
+                        "sessionToken",
+                        "AccessTOKEN",
+                        "clientsecret",
+                        "refresh_token",
+                        "pass.word",
+                        "requestBody")) {
+            String fluentSentinel = "fluent-sensitive-" + java.util.UUID.randomUUID();
+            LoggingEvent fluentEvent = event(Level.INFO, "fluent sensitive field", null);
+            fluentEvent.setMDCPropertyMap(Map.of());
+            fluentEvent.setKeyValuePairs(List.of(
+                    new KeyValuePair(sensitiveName, fluentSentinel),
+                    new KeyValuePair("session_id", "safe-session"),
+                    new KeyValuePair("order_id", "safe-order"),
+                    new KeyValuePair("http.request.body.bytes", 64)));
+
+            String fluentLine = formatter().format(fluentEvent);
+            JsonNode fluentJson = JSON.readTree(fluentLine);
+            recordStructuredViolations(
+                    violations,
+                    "fluent",
+                    sensitiveName,
+                    fluentSentinel,
+                    fluentLine,
+                    fluentJson);
+            assertSafeControls(fluentJson);
+
+            String mdcSentinel = "mdc-sensitive-" + java.util.UUID.randomUUID();
+            LoggingEvent mdcEvent = event(Level.INFO, "MDC sensitive field", null);
+            mdcEvent.setMDCPropertyMap(Map.of(
+                    sensitiveName, mdcSentinel,
+                    "session_id", "safe-session",
+                    "order_id", "safe-order",
+                    "http.request.body.bytes", "64"));
+
+            String mdcLine = formatter().format(mdcEvent);
+            JsonNode mdcJson = JSON.readTree(mdcLine);
+            recordStructuredViolations(
+                    violations,
+                    "mdc",
+                    sensitiveName,
+                    mdcSentinel,
+                    mdcLine,
+                    mdcJson);
+            assertSafeControls(mdcJson);
+
+            String messageSentinel = "message-sensitive-" + java.util.UUID.randomUUID();
+            String messageTemplate = "sensitive assignment, " + sensitiveName
+                    + "={}, session_id={}, order_id={}, http.request.body.bytes={}";
+            LoggingEvent messageEvent = event(
+                    Level.INFO,
+                    messageTemplate,
+                    null,
+                    messageSentinel,
+                    "safe-session",
+                    "safe-order",
+                    64);
+            messageEvent.setMDCPropertyMap(Map.of());
+
+            String messageLine = formatter().format(messageEvent);
+            String expectedMessage = "sensitive assignment, " + sensitiveName
+                    + "=[REDACTED], session_id=safe-session, order_id=safe-order, "
+                    + "http.request.body.bytes=64";
+            JsonNode messageJson = JSON.readTree(messageLine);
+            if (messageLine.contains(messageSentinel)) {
+                violations.add("message-value:" + sensitiveName);
+            }
+            if (!expectedMessage.equals(messageJson.path("message").stringValue())) {
+                violations.add("message-rendering:" + sensitiveName);
+            }
+        }
+
+        assertThat(violations).isEmpty();
+    }
+
+    @Test
     void normalizesGovernedFieldTypesFromMdcAndKeyValuesAndOmitsInvalidValues()
             throws Exception {
         LoggingEvent mdcEvent = event(Level.INFO, "MDC fields", null);
@@ -398,6 +482,29 @@ class ModuveraEcsStructuredLogFormatterTest {
                                 "logging.structured.ecs.service.environment",
                                 "test")));
         return new ModuveraEcsStructuredLogFormatter(environment);
+    }
+
+    private static void recordStructuredViolations(
+            List<String> violations,
+            String surface,
+            String sensitiveName,
+            String sentinel,
+            String line,
+            JsonNode json) {
+        if (line.contains(sentinel)) {
+            violations.add(surface + "-value:" + sensitiveName);
+        }
+        String sensitiveRoot = sensitiveName.split("\\.", 2)[0];
+        if (json.has(sensitiveRoot)) {
+            violations.add(surface + "-field:" + sensitiveName);
+        }
+    }
+
+    private static void assertSafeControls(JsonNode json) {
+        assertThat(json.path("session_id").stringValue()).isEqualTo("safe-session");
+        assertThat(json.path("order_id").stringValue()).isEqualTo("safe-order");
+        assertThat(json.path("http").path("request").path("body").path("bytes").longValue())
+                .isEqualTo(64);
     }
 
     private static LoggingEvent event(

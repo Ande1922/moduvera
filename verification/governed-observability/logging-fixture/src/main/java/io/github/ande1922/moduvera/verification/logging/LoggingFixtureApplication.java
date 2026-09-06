@@ -59,6 +59,8 @@ public class LoggingFixtureApplication {
         String apiKey = requiredEnvironment("FIXTURE_API_KEY");
         String xApiKey = requiredEnvironment("FIXTURE_X_API_KEY");
         String dottedApiKey = requiredEnvironment("FIXTURE_DOTTED_API_KEY");
+        String camelAccessToken = requiredEnvironment("FIXTURE_CAMEL_ACCESS_TOKEN");
+        String camelClientSecret = requiredEnvironment("FIXTURE_CAMEL_CLIENT_SECRET");
         String basicCredential = requiredEnvironment("FIXTURE_BASIC_CREDENTIAL");
         Actor actor = new Actor(ActorType.USER, "fixture-user", Set.of("fixture:read"));
         ExecutionContext executionContext = new ExecutionContext(
@@ -90,7 +92,9 @@ public class LoggingFixtureApplication {
                                 secret,
                                 basicCredential);
             } else {
-                try (var ignoredApiKey = MDC.putCloseable("X-Api-Key", xApiKey)) {
+                try (var ignoredApiKey = MDC.putCloseable("X-Api-Key", xApiKey);
+                        var ignoredClientSecret =
+                                MDC.putCloseable("clientSecret", camelClientSecret)) {
                     LOGGER.atInfo()
                             .addKeyValue("event.action", "fixture_observed")
                             .addKeyValue("order_id", "fixture-order-info")
@@ -98,14 +102,19 @@ public class LoggingFixtureApplication {
                             .addKeyValue("retry.attempt", 2)
                             .addKeyValue("api_key", apiKey)
                             .addKeyValue("api.key", dottedApiKey)
+                            .addKeyValue("accessToken", camelAccessToken)
                             .addKeyValue("authorization", secret)
+                            .addKeyValue("session_id", "safe-session")
+                            .addKeyValue("http.request.body.bytes", 64)
                             .addKeyValue("tenant_id", "forged-tenant")
                             .log(
-                                    "fixture ordinary secret={}, api_key={}, X-Api-Key: {}, api.key={}",
+                                    "fixture ordinary secret={}, api_key={}, X-Api-Key: {}, api.key={}, accessToken={}, clientSecret={}",
                                     secret,
                                     apiKey,
                                     xApiKey,
-                                    dottedApiKey);
+                                    dottedApiKey,
+                                    camelAccessToken,
+                                    camelClientSecret);
                 }
             }
         }

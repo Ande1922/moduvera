@@ -108,15 +108,21 @@ def main() -> None:
     info = one_message(
         records,
         "fixture ordinary secret=[REDACTED], api_key=[REDACTED], "
-        "X-Api-Key=[REDACTED], api.key=[REDACTED]",
+        "X-Api-Key=[REDACTED], api.key=[REDACTED], "
+        "accessToken=[REDACTED], clientSecret=[REDACTED]",
     )
     assert info["log"]["level"] == "INFO"
     assert info["event"] == {"action": "fixture_observed"}
     assert info["order_id"] == "fixture-order-info"
+    assert info["session_id"] == "safe-session"
     assert isinstance(info["duration_ms"], float) and info["duration_ms"] == 12.5
     assert isinstance(info["retry"]["attempt"], int) and not isinstance(info["retry"]["attempt"], bool)
     assert info["retry"]["attempt"] == 2
-    assert not ({"api", "api.key", "api_key", "X-Api-Key"} & info.keys())
+    assert info["http"]["request"]["body"]["bytes"] == 64
+    assert not (
+        {"accessToken", "api", "api.key", "api_key", "clientSecret", "X-Api-Key"}
+        & info.keys()
+    )
     assert_trace(info, SAMPLED_TRACE_ID)
     for field, expected in TRUSTED_FIELDS.items():
         assert info.get(field) == expected, f"unexpected trusted {field}"

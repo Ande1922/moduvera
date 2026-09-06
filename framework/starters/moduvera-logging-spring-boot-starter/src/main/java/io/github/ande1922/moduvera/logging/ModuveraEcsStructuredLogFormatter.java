@@ -9,12 +9,10 @@ import java.net.URISyntaxException;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
@@ -40,28 +38,21 @@ public final class ModuveraEcsStructuredLogFormatter
             Pattern.compile("[A-Za-z_][A-Za-z0-9_-]*(?:\\.[A-Za-z_][A-Za-z0-9_-]*)*");
     private static final Pattern ERROR_CODE =
             Pattern.compile("(?:BIZ|DEP|SYS|ENV)_[A-Z0-9]+(?:_[A-Z0-9]+)*");
+    private static final String SENSITIVE_NAME_PART =
+            "(?:x[._-]*)?api[._-]*key|pass[._-]*word|passwd|"
+                    + "secret|credential|authorization|cookie|headers?|body|payload|query|sql|token";
+    private static final Pattern SENSITIVE_NAME = Pattern.compile(
+            "[A-Za-z0-9_.-]*(?:" + SENSITIVE_NAME_PART + ")[A-Za-z0-9_.-]*",
+            Pattern.CASE_INSENSITIVE);
     private static final Pattern SENSITIVE_ASSIGNMENT = Pattern.compile(
-            "(?i)[\"']?(x[._-]*api[._-]*key|api[._-]*key|password|passwd|token|secret|credential|authorization|cookie|query|sql|body|payload)"
-                    + "[\"']?\\s*[:=]\\s*(?:(?:bearer|basic)\\s+[^\\s,;}\\]]+|[\"'][^\"']*[\"']|(?!\\{\\})[^\\s,;}\\]]+)");
+            "[\"']?(" + SENSITIVE_NAME.pattern() + ")"
+                    + "[\"']?\\s*[:=]\\s*(?:(?:bearer|basic)\\s+[^\\s,;}\\]]+|[\"'][^\"']*[\"']|(?!\\{\\})[^\\s,;}\\]]+)",
+            Pattern.CASE_INSENSITIVE);
     private static final Pattern URL = Pattern.compile("(?i)\\bhttps?://[^\\s,;]+");
     private static final Set<String> RESERVED_ROOTS =
             Set.of("log", "process", "service", "ecs", "message", "tags", "error");
     private static final Set<String> NESTED_ROOTS =
             Set.of("event", "retry", "http", "messaging", "url", "db");
-    private static final Set<String> SENSITIVE_SEGMENTS = Set.of(
-            "password",
-            "passwd",
-            "secret",
-            "credential",
-            "authorization",
-            "cookie",
-            "header",
-            "headers",
-            "body",
-            "payload",
-            "query",
-            "sql",
-            "token");
     private static final Set<String> SAFE_SIZE_FIELDS = Set.of(
             "http.request.body.bytes",
             "http.response.body.bytes",
@@ -191,16 +182,14 @@ public final class ModuveraEcsStructuredLogFormatter
                 || NESTED_ROOTS.contains(name)) {
             return false;
         }
+        return !isSensitiveName(name);
+    }
+
+    private static boolean isSensitiveName(String name) {
         if (SAFE_SIZE_FIELDS.contains(name)) {
-            return true;
+            return false;
         }
-        String normalizedName = name.toLowerCase(Locale.ROOT)
-                .replace(".", "")
-                .replace("_", "")
-                .replace("-", "");
-        return !normalizedName.contains("apikey")
-                && Arrays.stream(name.toLowerCase(Locale.ROOT).split("[._-]"))
-                .noneMatch(SENSITIVE_SEGMENTS::contains);
+        return SENSITIVE_NAME.matcher(name).matches();
     }
 
     private static boolean isTrustedNamespace(String name) {
@@ -462,7 +451,10 @@ public final class ModuveraEcsStructuredLogFormatter
         }
         String singleLine = text.replace('\r', ' ').replace('\n', ' ');
         Matcher matcher = SENSITIVE_ASSIGNMENT.matcher(singleLine);
-        String safe = matcher.replaceAll("$1=[REDACTED]");
+        String safe = matcher.replaceAll(result -> Matcher.quoteReplacement(
+                isSensitiveName(result.group(1))
+                        ? result.group(1) + "=[REDACTED]"
+                        : result.group()));
         matcher = URL.matcher(safe);
         StringBuilder withoutQueries = new StringBuilder();
         while (matcher.find()) {
