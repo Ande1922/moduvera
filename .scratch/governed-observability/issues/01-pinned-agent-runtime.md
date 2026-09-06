@@ -1,5 +1,5 @@
 Type: issue
-Status: claimed
+Status: resolved
 Blocked by: None
 
 # 01 — 固定 Agent 装载与真实 Trace 导出
@@ -22,12 +22,12 @@ Blocked by: None
 
 ## Acceptance criteria
 
-- [ ] 固定版本、下载来源、SHA-256 和 OTel API 依赖组合可复现；不用 latest，摘要不匹配、缺失制品或错误装载在受治理业务就绪前失败。容器只读挂载外置制品，公共镜像不内置 Agent。
-- [ ] 运行中只有 Agent 提供的一个 SDK；传播设为 tracecontext，Trace exporter 为 OTLP 且显式 http/protobuf，logs/metrics exporter 均为 none；不附加 tracing bridge 或第二套 SDK。
-- [ ] 真实 HTTP/Kafka 调用可观察 Agent 的有效 Context、传播 header 与 Span 数量/owner；验证无上游、合法/非法上游及未采样有效上游，不把全部 consumer 强制断言为同 Trace。
-- [ ] 验收根 Trace 全采样；普通库级测试仍可无 Agent，不能借伪造 Trace ID 满足受治理运行断言。已有 JaCoCo javaagent 与 Agent 同时生效。
-- [ ] 接收端启动后失联时，业务 HTTP/数据库事务及 Kafka ACK 仍按原契约完成；导出有界、异步，不等待遥测确认、不因遥测失败重放业务。记录所用队列/超时等有效配置及故障观察。
-- [ ] 自动采集不输出凭据、原始 Header、query/带 query URL、SQL 全文或 HTTP/消息正文；使用敏感哨兵夹具核对实际导出，不能只检查配置字符串。
+- [x] 固定版本、下载来源、SHA-256 和 OTel API 依赖组合可复现；不用 latest，摘要不匹配、缺失制品或错误装载在受治理业务就绪前失败。容器只读挂载外置制品，公共镜像不内置 Agent。
+- [x] 运行中只有 Agent 提供的一个 SDK；传播设为 tracecontext，Trace exporter 为 OTLP 且显式 http/protobuf，logs/metrics exporter 均为 none；不附加 tracing bridge 或第二套 SDK。
+- [x] 真实 HTTP/Kafka 调用可观察 Agent 的有效 Context、传播 header 与 Span 数量/owner；验证无上游、合法/非法上游及未采样有效上游，不把全部 consumer 强制断言为同 Trace。
+- [x] 验收根 Trace 全采样；普通库级测试仍可无 Agent，不能借伪造 Trace ID 满足受治理运行断言。已有 JaCoCo javaagent 与 Agent 同时生效。
+- [x] 接收端启动后失联时，业务 HTTP/数据库事务及 Kafka ACK 仍按原契约完成；导出有界、异步，不等待遥测确认、不因遥测失败重放业务。记录所用队列/超时等有效配置及故障观察。
+- [x] 自动采集不输出凭据、原始 Header、query/带 query URL、SQL 全文或 HTTP/消息正文；使用敏感哨兵夹具核对实际导出，不能只检查配置字符串。
 
 ## Verification
 
@@ -50,3 +50,12 @@ Blocked by: None
 
 - 2026-09-06：维护者确认 17 票粒度、依赖关系与落票。当前仅创建实施票；未开始实现、运行功能验证或取得交付通过证据。
 - 2026-09-06：维护者授权首批 01 → 07 的隔离实施；协调者为票 01 预留专属 writer/worktree，基线与后续证据记入 execution-ledger。
+
+## Answer
+
+- Commit: `a0c5ab9e9c286abbed00c4af9894767f98be0ca2`；实际比较点 `cb6602f2eb9cb9ef73c24ee87d1b6a069b083d6b..a0c5ab9e9c286abbed00c4af9894767f98be0ca2`，普通实现及修复提交已快进集成到 `codex/governed-observability-20260906-integration`，无冲突。
+- 验证通过（PASS）：JDK 26 / Boot 4.1.1 全 reactor `clean install`、6 个公共镜像 contract、外置只读 Agent/扩展与 JaCoCo 真实镜像 smoke、真实 HTTP/Kafka/数据库/OTLP 验证。Agent 2.31.1 / API 1.65.0、来源和 SHA-256 已固定于 [agent.lock](../../../verification/governed-observability/agent.lock)。重命名重复 Agent、缺失/错误摘要、校验和有效但 SPI 失败的负例均在业务 main/就绪前被拒绝。
+- 375 次 OTLP 请求、724 个 Span、711508 原始字节中，6 类敏感哨兵零命中；采样订单绑定 11 个核心 Agent Span 与 2 条 Kafka 记录，合法上游 Gateway→Identity 另验证 3 个具体 Span 的数量、owner 与因果。缓存实测 Identity 请求 1→0、Catalog 1→1；未采样有效 Trace 继续传播。
+- OTLP 接收端停机后订单最终 CONFIRMED，并保留该订单的 reserve/result Kafka、两侧 Inbox/Outbox 和库存/订单证据；0.307175 秒仅为创建 HTTP 返回时间，终态在后续观察。限定本次故障运行的一次有效业务结果，保持至少一次传输契约。
+- Standards 和 Spec 均在上述同一 base/head 完成且无剩余 finding：[双轴评审记录](/private/tmp/governed-observability-frontier-20260906/evidence/01/review-final.md)。完整运行见 [修复验证报告](/private/tmp/governed-observability-frontier-20260906/evidence/01/worker-fix-report-round1.md)；最后提交仅补分析器及其回归，[最终分析重放](/private/tmp/governed-observability-frontier-20260906/evidence/01/worker-fix-report-round2.md) exit 0，运行制品和配置未改变。集成后 `verification/governed-observability/tests/test-agent-contract.sh` 再次 PASS（10 tests）。
+- 本票基线能力已交付；本批 01→07 的聚合双轴评审、Normal Gate 与最终适用 Scenario 将在 07 集成后的固定提交完成，不将本票证据冒充批次最终验收。
