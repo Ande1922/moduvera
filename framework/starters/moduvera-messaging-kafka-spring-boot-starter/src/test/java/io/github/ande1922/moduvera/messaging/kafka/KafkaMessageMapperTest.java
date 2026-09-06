@@ -148,6 +148,26 @@ class KafkaMessageMapperTest {
         assertThat(restored.descriptor().correlationId()).isEqualTo("legacy-correlation-01");
     }
 
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("nonStringCreationMutations")
+    void ignoresNonStringCreationMetadataWithoutPoisoningBusinessMessage(
+            NonStringCreationMutation mutation) throws IOException {
+        var json = new tools.jackson.databind.ObjectMapper();
+        var envelope = json.readTree(resourceBytes(mutation.resource())).asObject();
+        byte[] expectedPayload = json.writeValueAsBytes(
+                envelope.get(mutation.kind() == MessageKind.EVENT ? "data" : "payload"));
+        mutation.apply().accept(envelope);
+        var message = MessageBuilder.withPayload(json.writeValueAsBytes(envelope))
+                .setHeader("contentType", mutation.contentType())
+                .build();
+
+        SerializedMessage restored = new KafkaMessageMapper().fromSpringMessage(message);
+
+        assertThat(restored.descriptor().creationContext()).isEqualTo(mutation.expected());
+        assertThat(restored.descriptor().correlationId()).isEqualTo("legacy-correlation-01");
+        assertThat(restored.payload()).containsExactly(expectedPayload);
+    }
+
     @Test
     void retainsAnUnsampledParentAndAppliesStandardInvalidTraceStateSemantics() {
         var mapper = new KafkaMessageMapper();
@@ -322,6 +342,66 @@ class KafkaMessageMapperTest {
                         new TraceContextCarrier(TRACE_PARENT, null)));
     }
 
+    private static List<NonStringCreationMutation> nonStringCreationMutations() {
+        return List.of(
+                new NonStringCreationMutation(
+                        "event object parent",
+                        "messaging/compatibility/v1/event-with-creation.json",
+                        KafkaMessageMapper.STRUCTURED_CLOUD_EVENT,
+                        MessageKind.EVENT,
+                        envelope -> envelope.putObject("traceparent"),
+                        null),
+                new NonStringCreationMutation(
+                        "command array parent",
+                        "messaging/compatibility/v1/command-with-creation.json",
+                        KafkaMessageMapper.ASYNC_COMMAND,
+                        MessageKind.ASYNC_COMMAND,
+                        envelope -> envelope.putArray("traceparent"),
+                        null),
+                new NonStringCreationMutation(
+                        "event numeric parent",
+                        "messaging/compatibility/v1/event-with-creation.json",
+                        KafkaMessageMapper.STRUCTURED_CLOUD_EVENT,
+                        MessageKind.EVENT,
+                        envelope -> envelope.put("traceparent", 42),
+                        null),
+                new NonStringCreationMutation(
+                        "command boolean parent",
+                        "messaging/compatibility/v1/command-with-creation.json",
+                        KafkaMessageMapper.ASYNC_COMMAND,
+                        MessageKind.ASYNC_COMMAND,
+                        envelope -> envelope.put("traceparent", true),
+                        null),
+                new NonStringCreationMutation(
+                        "event object state",
+                        "messaging/compatibility/v1/event-with-creation.json",
+                        KafkaMessageMapper.STRUCTURED_CLOUD_EVENT,
+                        MessageKind.EVENT,
+                        envelope -> envelope.putObject("tracestate"),
+                        new TraceContextCarrier(TRACE_PARENT, null)),
+                new NonStringCreationMutation(
+                        "command array state",
+                        "messaging/compatibility/v1/command-with-creation.json",
+                        KafkaMessageMapper.ASYNC_COMMAND,
+                        MessageKind.ASYNC_COMMAND,
+                        envelope -> envelope.putArray("tracestate"),
+                        new TraceContextCarrier(TRACE_PARENT, null)),
+                new NonStringCreationMutation(
+                        "event numeric state",
+                        "messaging/compatibility/v1/event-with-creation.json",
+                        KafkaMessageMapper.STRUCTURED_CLOUD_EVENT,
+                        MessageKind.EVENT,
+                        envelope -> envelope.put("tracestate", 42),
+                        new TraceContextCarrier(TRACE_PARENT, null)),
+                new NonStringCreationMutation(
+                        "command boolean state",
+                        "messaging/compatibility/v1/command-with-creation.json",
+                        KafkaMessageMapper.ASYNC_COMMAND,
+                        MessageKind.ASYNC_COMMAND,
+                        envelope -> envelope.put("tracestate", true),
+                        new TraceContextCarrier(TRACE_PARENT, null)));
+    }
+
     private static byte[] resourceBytes(String resource) throws IOException {
         try (var input = KafkaMessageMapperTest.class.getClassLoader().getResourceAsStream(resource)) {
             if (input == null) {
@@ -352,4 +432,17 @@ class KafkaMessageMapperTest {
     private record CreationMutation(
             Consumer<tools.jackson.databind.node.ObjectNode> apply,
             TraceContextCarrier expected) {}
+
+    private record NonStringCreationMutation(
+            String description,
+            String resource,
+            String contentType,
+            MessageKind kind,
+            Consumer<tools.jackson.databind.node.ObjectNode> apply,
+            TraceContextCarrier expected) {
+        @Override
+        public String toString() {
+            return description;
+        }
+    }
 }

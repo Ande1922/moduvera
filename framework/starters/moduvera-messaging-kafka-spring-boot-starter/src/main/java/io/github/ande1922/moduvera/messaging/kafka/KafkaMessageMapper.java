@@ -46,7 +46,7 @@ public final class KafkaMessageMapper {
 
         @Override
         public String get(ObjectNode carrier, String key) {
-            return optionalText(carrier, key);
+            return optionalCreationText(carrier, key);
         }
     };
 
@@ -237,8 +237,13 @@ public final class KafkaMessageMapper {
         return value == null || value.isNull() ? null : value.asString();
     }
 
+    private static String optionalCreationText(ObjectNode envelope, String name) {
+        JsonNode value = envelope.get(name);
+        return value == null || !value.isString() ? null : value.asString();
+    }
+
     private static TraceContextCarrier creationContext(ObjectNode envelope) {
-        String traceParent = optionalText(envelope, TRACE_PARENT);
+        String traceParent = optionalCreationText(envelope, TRACE_PARENT);
         if (traceParent == null
                 || traceParent.isBlank()
                 || traceParent.length() > TraceContextCarrier.MAX_TRACE_PARENT_LENGTH) {
@@ -251,7 +256,7 @@ public final class KafkaMessageMapper {
             return null;
         }
 
-        String traceState = optionalText(envelope, TRACE_STATE);
+        String traceState = optionalCreationText(envelope, TRACE_STATE);
         if (traceState == null
                 || traceState.isBlank()
                 || traceState.length() > TraceContextCarrier.MAX_TRACE_STATE_LENGTH
