@@ -67,6 +67,7 @@ for script in "$OBSERVABILITY_DIR"/*.sh "$SCRIPT_DIR"/*.sh; do bash -n "$script"
 python3 -c 'import ast, pathlib, sys; [ast.parse(pathlib.Path(p).read_text()) for p in sys.argv[1:]]' \
   "$OBSERVABILITY_DIR/header_proxy.py" "$OBSERVABILITY_DIR/otlp_receiver.py" \
   "$OBSERVABILITY_DIR/probe.py" "$OBSERVABILITY_DIR/runtime_policy.py"
+"$SCRIPT_DIR/test-login-fixture-environment.sh"
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s "$SCRIPT_DIR" -p 'test_*.py'
 
 echo "Governed Agent static contract: PASS"

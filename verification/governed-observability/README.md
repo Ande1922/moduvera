@@ -49,11 +49,21 @@ MODUVERA_OBSERVABILITY_MAVEN_REPO=/private/tmp/moduvera-otel-m2 \
 verification/governed-observability/verify.sh
 ```
 
-All three login variables are required and an empty or missing value exits 64
-before downloads, builds, or runtime startup. `verify.sh` removes them from its
-inherited environment and supplies them only to the two `probe.py` login
-processes. Their values are not command arguments, log output, or evidence
-fields.
+All three login variables are required. The tenant must be the current
+canonical `tenant-a` qualification fixture because the analyzer binds Kafka
+and persistence evidence to that tenant. An empty, missing, or noncanonical
+value exits 64 before downloads, builds, or runtime startup. The supplied
+username must identify an enabled `tenant-a` seed member with `catalog:read`,
+`order:create`, and `order:read`; the current reference seed supplies `alice`.
+The Order service also needs its seeded `catalog:read` permission, which the
+scenario checks before the cold-cache probe.
+
+`verify.sh` removes the three caller-facing variables and clears any inherited
+export attribute from its private copies before starting unrelated children.
+It supplies them only to the two `probe.py` login processes. The credential is
+not a command argument, log value, or evidence field. Username and tenant are
+business identifiers and can appear in existing span, Kafka, and persistence
+evidence; this verification does not add a new redaction rule for them.
 
 The scenario downloads the exact release asset, verifies both runtime artifact
 digests, builds and inspects the public images, mounts the Agent and extension

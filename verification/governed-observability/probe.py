@@ -30,6 +30,7 @@ OUTAGE_PARENT_ID = "8888888888888888"
 LOGIN_USERNAME_ENV = "MODUVERA_OBSERVABILITY_LOGIN_USERNAME"
 LOGIN_CREDENTIAL_ENV = "MODUVERA_OBSERVABILITY_LOGIN_CREDENTIAL"
 LOGIN_TENANT_ENV = "MODUVERA_OBSERVABILITY_LOGIN_TENANT"
+CANONICAL_LOGIN_TENANT = "tenant-a"
 
 
 def request(
@@ -68,6 +69,8 @@ def login(base: str) -> str:
     username = required_environment(LOGIN_USERNAME_ENV)
     credential = required_environment(LOGIN_CREDENTIAL_ENV)
     tenant = required_environment(LOGIN_TENANT_ENV)
+    if tenant != CANONICAL_LOGIN_TENANT:
+        raise RuntimeError(f"{LOGIN_TENANT_ENV} must select the canonical {CANONICAL_LOGIN_TENANT} fixture")
     login_body = {"username": username, "tenantId": tenant}
     login_body["password"] = credential
     status, _, body = request(

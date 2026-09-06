@@ -131,7 +131,7 @@ class LoginFixtureTest(unittest.TestCase):
     def test_sends_explicit_environment_values_in_the_login_payload(self) -> None:
         username = "fixture-user-" + secrets.token_hex(8)
         credential = secrets.token_urlsafe(24)
-        tenant = "fixture-tenant-" + secrets.token_hex(8)
+        tenant = PROBE.CANONICAL_LOGIN_TENANT
         opaque_session = secrets.token_urlsafe(32)
         environment = {
             PROBE.LOGIN_USERNAME_ENV: username,
@@ -163,7 +163,7 @@ class LoginFixtureTest(unittest.TestCase):
         environment = {
             PROBE.LOGIN_USERNAME_ENV: "fixture-user-" + secrets.token_hex(8),
             PROBE.LOGIN_CREDENTIAL_ENV: secrets.token_urlsafe(24),
-            PROBE.LOGIN_TENANT_ENV: "fixture-tenant-" + secrets.token_hex(8),
+            PROBE.LOGIN_TENANT_ENV: PROBE.CANONICAL_LOGIN_TENANT,
         }
         for missing in environment:
             with self.subTest(missing=missing):
@@ -173,6 +173,21 @@ class LoginFixtureTest(unittest.TestCase):
                         with self.assertRaisesRegex(RuntimeError, missing):
                             PROBE.login("http://127.0.0.1")
                 request.assert_not_called()
+
+    def test_rejects_noncanonical_tenant_before_request(self) -> None:
+        environment = {
+            PROBE.LOGIN_USERNAME_ENV: "fixture-user-" + secrets.token_hex(8),
+            PROBE.LOGIN_CREDENTIAL_ENV: secrets.token_urlsafe(24),
+            PROBE.LOGIN_TENANT_ENV: "tenant-b",
+        }
+        response_body = {}
+        response_body["token"] = secrets.token_urlsafe(32)
+
+        with mock.patch.dict(PROBE.os.environ, environment, clear=True):
+            with mock.patch.object(PROBE, "request", return_value=(200, {}, response_body)) as request:
+                with self.assertRaisesRegex(RuntimeError, "tenant-a"):
+                    PROBE.login("http://127.0.0.1")
+        request.assert_not_called()
 
 
 if __name__ == "__main__":
