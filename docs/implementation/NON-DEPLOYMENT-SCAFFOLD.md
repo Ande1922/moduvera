@@ -16,9 +16,9 @@ The non-deployment scaffold is complete only when all of the following exist and
 4. internal authentication, resource-server support, tenant membership and use-case RBAC;
 5. typed configuration, telemetry integration points, governed HTTP clients and explicit propagation boundaries;
 6. a programmatic `TransactionBoundary`, service-owned Flyway artifacts, a MyBatis-Plus adapter, PostgreSQL Golden Path tests, and MySQL compatibility Repository TCKs;
-7. at-least-once messaging with CloudEvents, asynchronous command contracts, transactional Outbox/Inbox, and Spring Cloud Stream imperative functions over Kafka in both supported application topologies;
+7. at-least-once messaging with CloudEvents, asynchronous command contracts, transactional Outbox/Inbox, and Spring Cloud Stream imperative functions over Kafka in the microservice Golden Path;
 8. Catalog, Order and Inventory reference business capabilities exercising tenant/RBAC, real HTTP boundaries, Outbox/Inbox, PostgreSQL persistence and public black-box acceptance;
-9. separate-process Catalog, Order and Inventory App Assemblies with exactly one selected implementation for every required Service API, plus one modular-monolith App Assembly that proves the same reference-business flow through focused topology acceptance;
+9. separate-process Catalog, Order and Inventory App Assemblies with exactly one selected implementation for every required Service API, plus the retained modular-monolith composition and basic compilation; monolith runtime qualification is on demand under [ADR 0038](../adr/0038-retain-monolith-as-on-demand-assembly.md);
 10. unit, architecture, contract, integration, TCK and independent pytest acceptance suites, with documented evidence and no hidden deployment dependency.
 
 ## Explicitly outside this delivery

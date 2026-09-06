@@ -13,7 +13,10 @@ requested_apps=("$@")
 
 selected() {
   local app="$1" requested
-  [[ $REQUESTED_COUNT -eq 0 ]] && return 0
+  if [[ $REQUESTED_COUNT -eq 0 ]]; then
+    [[ "$app" != "app-monolith" || "${MODUVERA_IMAGE_INCLUDE_MONOLITH:-0}" == "1" ]]
+    return
+  fi
   for requested in "${requested_apps[@]}"; do
     [[ "$requested" == "$app" ]] && return 0
   done

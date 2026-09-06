@@ -23,6 +23,8 @@ def apps() -> list[tuple[str, int]]:
         if not line or line.startswith("#"):
             continue
         app, port = line.split("\t")
+        if app == "app-monolith" and os.environ.get("MODUVERA_IMAGE_INCLUDE_MONOLITH") != "1":
+            continue
         result.append((app, int(port)))
     return result
 

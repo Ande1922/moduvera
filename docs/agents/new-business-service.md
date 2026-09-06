@@ -253,7 +253,9 @@ routes or bindings, trusted Execution Context entry, and migration policy
 needed by its support promises. A multi-service App also selects the Local or
 Remote collaborator implementations required by that assembly; it does not
 recreate transport or use-case mapping. Follow
-[ADR 0022](../adr/0022-support-both-application-topologies.md).
+[ADR 0038](../adr/0038-retain-monolith-as-on-demand-assembly.md). Default to microservice acceptance;
+select monolith adaptation and runtime evidence only for an explicit monolith
+requirement. New services need not join the retained monolith assembly.
 
 Acceptance follows the declared acceptance consumer and topology. Select the
 reference-product entry only for `reference-product`; use the named App or

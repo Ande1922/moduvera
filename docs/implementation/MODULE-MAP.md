@@ -59,7 +59,7 @@ Concrete inbound adapters remain package-separated configuration slices in the o
 - `catalog-app`: internal JWT-protected product lookup and PostgreSQL persistence.
 - `order-app`: public service API behind Gateway, Catalog HTTP client, Order persistence and Kafka result/Outbox assembly.
 - `inventory-app`: Kafka-only business entry plus a health endpoint, Inventory persistence and result Outbox assembly.
-- `app-monolith`: supported focused Catalog/Order/Inventory business-core composition under ADR 0022 and ADR 0027. It selects the Local `CatalogApi`, keeps Order/Inventory collaboration on the same Kafka Outbox/Inbox path, and prefixes each service's public Controllers according to ADR 0029. The separate Gateway therefore forwards the stable Order external path without stripping the service name; Gateway and Identity remain separate Apps in this topology.
+- `app-monolith`: retained on-demand Catalog/Order/Inventory business-core composition under ADR 0038 and ADR 0027, with compilation but no default runtime qualification. It selects the Local `CatalogApi`, keeps Order/Inventory collaboration on the same Kafka Outbox/Inbox path, and prefixes each service's public Controllers according to ADR 0029. The separate Gateway therefore forwards the stable Order external path without stripping the service name; Gateway and Identity remain separate Apps in this topology.
 
 All six assemblies are eligible inputs to the shared
 `build/docker/Dockerfile.jvm`; individual App modules do not own Dockerfiles.
@@ -73,8 +73,8 @@ The service-to-service security chain is USER JWT at Order, then an audience-sco
 - Architecture tests enforce framework-free domain, module ownership, inbound/outbound Adapter direction, package-private Command/Event message Handlers, reliable-endpoint ownership, migration definition/execution separation, App Assembly boundaries, production/test isolation, context ownership and no direct business `ThreadLocal`/executor coupling. Negative fixtures prove each structural rule selects a violating shape, while current-scaffold assertions prove the rules select the real production classes.
 - PostgreSQL owns end-to-end, failure recovery and default runtime configuration.
 - MySQL runs the same focused Repository, tenant, migration and durable-message persistence contracts without multiplying the full topology.
-- The Notes consumer proves public artifacts independently. The topology-parameterized reference harness runs one public Gateway HTTP contract against both the five-App Golden Path and Gateway + Identity + business-core monolith, including Kafka outage/restart recovery. Focused Order, Inventory and Monolith App integration tests inject duplicate deliveries and prove Inbox idempotency without adding a test-only production route.
-- The application-image scenario builds and inspects all six App images, then runs one non-root Catalog image against real PostgreSQL for external-port, Actuator/HTTP and default-off/runtime-opt-in debug behavior. It is an image-construction Scenario gate, not deployment guidance.
+- The Notes consumer proves public artifacts independently. The reference harness defaults to the five-App Golden Path public Gateway HTTP contract, including Kafka outage/restart recovery. Focused Order and Inventory App integration tests prove duplicate-delivery safety. The retained monolith uses the same contract and its own duplicate-delivery IT only on explicit qualification; no test-only production route is added.
+- The application-image scenario defaults to building and inspecting the five microservice App images, with monolith image qualification explicitly opt-in, then runs one non-root Catalog image against real PostgreSQL for external-port, Actuator/HTTP and default-off/runtime-opt-in debug behavior. It is an image-construction Scenario gate, not deployment guidance.
 
 ## Version governance
 

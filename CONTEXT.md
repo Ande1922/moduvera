@@ -33,10 +33,10 @@ _Avoid_: Bootstrap 模块、Server 模块
 _Avoid_: POM 可编译、理论可组合、完整基础设施矩阵
 
 **业务核心模块化单体（Business-core Modular Monolith）**:
-把 Catalog、Order 和 Inventory 组合进一个 App 装配，同时让 Gateway 和 Identity 继续作为独立外部信任边界的受支持拓扑。它是当前聚焦的单体范围，不排除未来把 Gateway 和 Identity 一并组合。
+把 Catalog、Order 和 Inventory 组合进一个 App 装配，同时让 Gateway 和 Identity 继续作为独立外部信任边界的按需保留装配。它是当前聚焦的单体范围，不排除未来把 Gateway 和 Identity 一并组合。
 _Avoid_: 全后端单体、绕过身份的内部 Demo、无外部依赖的单进程系统
 
-当前资格证据由同一套公共 HTTP 黑盒步骤覆盖五 App 微服务 Golden Path 与业务核心模块化单体；两次运行只切换 App 集合、Gateway 前缀策略和目标地址，并继续使用同一 Kafka、Outbox/Inbox、可信消息上下文及恢复语义。重复投递由两种装配各自的真实 Kafka App integration test 注入并验证，不为测试向生产 HTTP 面增加入口。
+五 App 微服务 Golden Path 是唯一默认交付与验收拓扑。业务核心模块化单体保留代码组合基础和历史验证资产，但不承诺后续迭代同步接入或持续可运行；实际启用时按目标版本补齐装配并重新验收。两种装配仍遵循同一 Kafka、Outbox/Inbox、可信消息上下文及恢复语义；默认验收范围见 [ADR 0038](docs/adr/0038-retain-monolith-as-on-demand-assembly.md).
 
 **服务 API（Service API）**:
 业务服务向其他业务服务承诺支持的、与传输协议无关的直接调用能力及跨服务消息契约。直接调用能力可由 Local 或 Remote 适配器实现；只提供异步消息入口的命令只发布消息契约，不因此要求一个同形的同步 Java 接口。Service API 不定义浏览器侧公共 HTTP 路由。

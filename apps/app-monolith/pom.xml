@@ -12,6 +12,10 @@
   <artifactId>app-monolith</artifactId>
   <name>Moduvera :: App :: Monolith</name>
 
+  <properties>
+    <monolith.skipITs>true</monolith.skipITs>
+  </properties>
+
   <dependencies>
     <dependency>
       <groupId>io.github.ande1922.moduvera</groupId>
@@ -121,6 +125,7 @@
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-failsafe-plugin</artifactId>
         <configuration>
+          <skipITs>${monolith.skipITs}</skipITs>
           <systemPropertyVariables>
             <postgresql.test.image>${postgresql.test.image}</postgresql.test.image>
             <kafka.test.image>confluentinc/cp-kafka:7.3.3</kafka.test.image>

@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Qualifies both supported application topologies. The client contract lives only in blackbox.py.
+# Defaults to the microservice Golden Path; monolith qualification is explicit.
+# The shared client contract lives only in blackbox.py.
 HARNESS_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$HARNESS_DIR/../../.." && pwd)"
-TOPOLOGY="${1:-all}"
+TOPOLOGY="${1:-microservices}"
 
 case "$TOPOLOGY" in
   all|microservices|business-core-monolith) ;;
@@ -25,10 +26,16 @@ run_harness_self_test "$HARNESS_DIR/tests/test-cleanup.sh"
 run_harness_self_test "$HARNESS_DIR/tests/test-parallel-scenario.sh"
 
 if [[ "${REFERENCE_SKIP_BUILD:-0}" != "1" ]]; then
-  "$PROJECT_ROOT/mvnw" -q clean install
+  build_args=(-Dmonolith.skipITs=true)
+  duplicate_tests="OrderApplicationIT, InventoryApplicationIT"
+  if [[ "$TOPOLOGY" != "microservices" ]]; then
+    build_args=(-Dmonolith.skipITs=false)
+    duplicate_tests+=", ModuveraMonolithApplicationIT"
+  fi
+  "$PROJECT_ROOT/mvnw" -q clean install "${build_args[@]}"
   # These topology-specific tests inject duplicate deliveries below the public seam. Exposing a
   # production test endpoint merely for duplicate injection would weaken the black-box boundary.
-  echo "Focused duplicate-delivery evidence: PASS (OrderApplicationIT, InventoryApplicationIT, ModuveraMonolithApplicationIT)"
+  echo "Focused duplicate-delivery evidence: PASS ($duplicate_tests)"
 fi
 
 if [[ "$TOPOLOGY" == "all" ]]; then

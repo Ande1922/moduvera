@@ -1,6 +1,6 @@
 # Moduvera — A Verifiable Java Service Platform
 
-This repository is an executable Spring Boot 4.1.1/JDK 26 platform scaffold plus a non-trivial multi-tenant order-fulfillment reference product. PostgreSQL is the Golden Path, MyBatis-Plus is the selected ORM, Kafka is the selected broker, and MySQL is maintained through focused compatibility tests rather than a second end-to-end matrix. The five-App microservice topology is the Golden Path; a focused business-core modular monolith is also supported behind the same Gateway and Identity trust boundary.
+This repository is an executable Spring Boot 4.1.1/JDK 26 platform scaffold plus a non-trivial multi-tenant order-fulfillment reference product. PostgreSQL is the Golden Path, MyBatis-Plus is the selected ORM, Kafka is the selected broker, and MySQL is maintained through focused compatibility tests rather than a second end-to-end matrix. The five-App microservice topology is the Golden Path; the existing business-core modular monolith is retained on demand behind the same Gateway and Identity trust boundary, with compilation but no continuous runtime-support commitment. See [ADR 0038](docs/adr/0038-retain-monolith-as-on-demand-assembly.md).
 
 [`SCAFFOLD-PRODUCT-SURFACE.md`](./docs/implementation/SCAFFOLD-PRODUCT-SURFACE.md) is the only current capability-status source. The BOM manages more coordinates than the supported surface; a managed coordinate does not install or prove a capability.
 
@@ -12,20 +12,20 @@ Requirements: JDK 26, Docker with Compose, and `uv`. Then run:
 verification/reference-product/harness/verify.sh
 ```
 
-That one command builds and verifies the reactor once, then runs the same public-HTTP-only black-box contract first against five App Assemblies and then against Gateway + Identity + `app-monolith`. Only topology configuration changes the target App set, Order target address and Gateway prefix policy. It proves:
+That command builds and verifies the reactor once, skipping monolith-specific integration tests, then runs the public-HTTP-only black-box contract against the five-App microservice Golden Path. It proves:
 
 - opaque browser sessions and audience-scoped internal USER/SERVICE JWTs;
 - stable 400/401/403/404 behavior without trusting a browser-supplied tenant;
-- Gateway → Order → Catalog HTTP with service identity in the Golden Path, and the same `CatalogApi` selected locally inside the business-core monolith;
+- Gateway → Order → Catalog HTTP with service identity;
 - transactional Order + Outbox, Kafka command/event flow, Inventory + Inbox + result Outbox;
 - `CONFIRMED` and `REJECTED` fulfillment, duplicate safety and correlation propagation;
 - concurrent bounded inventory and parallel tenant isolation;
 - order creation while Kafka is unavailable, followed by the topology's business App restart and eventual recovery;
-- identical external `/api/identity/v1/...` and `/api/order/v1/...` URLs, native success bodies, RFC 9457 errors, external `Location`, correlation and hidden internal/Actuator routes in both topologies.
+- external `/api/identity/v1/...` and `/api/order/v1/...` URLs, native success bodies, RFC 9457 errors, external `Location`, correlation and hidden internal/Actuator routes in the microservice topology.
 
 The harness uses explicit `RUN_SLOT` values so independent runs can coexist on one host. Slot 0 is the compatible default: Apps use ports 58080-58085, PostgreSQL 55432 and Kafka 59092. Every subsequent slot adds a fixed stride of 100 to each selected topology port; for example, `RUN_SLOT=1` uses Gateway 58180, PostgreSQL 55532 and Kafka 59192. Existing `REFERENCE_*_PORT` overrides remain available for focused diagnostics and are normalized to canonical decimal values. The documented verification command first runs its focused harness regressions. Before starting Compose or a JVM, each topology writes a JSON port manifest, prints a human-readable plan, atomically locks the slot and every required host port, and checks reusable IPv4 loopback/wildcard plus applicable IPv6 listeners so active conflicts fail early without rejecting normal `TIME_WAIT` reuse. Lock ownership includes the process birth identity so a reused live PID does not strand stale locks. The default manifest lives in the run's isolated temporary directory; set `REFERENCE_PORT_MANIFEST=/path/to/ports.json` when a caller needs to retain it. Management endpoints currently share each App's HTTP port, and the manifest reports that fact rather than allocating fictitious management listeners. Set `REFERENCE_DEBUG=1` to add deterministic loopback-only JDWP listeners (50080-50085 in slot 0, with the same stride). Compose and owned-lock cleanup failures make an otherwise successful run fail and are reported without replacing an earlier primary failure. Cleanup sends TERM to all JVMs concurrently under one five-second deadline, bounds failure diagnostics at five seconds, and bounds Compose down at ten seconds. The two subprocess watchdogs add at most five seconds total for TERM/KILL and reaping, making the default supervised cleanup budget 25 seconds before final lock and temporary-filesystem operations. `REFERENCE_APP_STOP_TIMEOUT_SECONDS`, `REFERENCE_DIAGNOSTICS_TIMEOUT_SECONDS` and `REFERENCE_COMPOSE_DOWN_TIMEOUT_SECONDS` accept positive integer overrides.
 
-Each topology still receives a unique Compose project, Kafka topics, temporary directory and disposable data volumes, and tears them down after the run. Run only one topology with `verification/reference-product/harness/verify.sh microservices` or `verification/reference-product/harness/verify.sh business-core-monolith`. After a successful build, `REFERENCE_SKIP_BUILD=1` skips the Maven phase.
+Each topology still receives a unique Compose project, Kafka topics, temporary directory and disposable data volumes, and tears them down after the run. The default is `verification/reference-product/harness/verify.sh microservices`. Explicitly select `business-core-monolith` or `all` for on-demand qualification; these selections enable monolith integration tests with `-Dmonolith.skipITs=false`. Direct Maven builds skip only those integration tests by default and retain monolith compilation. After a successful build with the appropriate test scope, `REFERENCE_SKIP_BUILD=1` skips the Maven phase; a skipped build supplies no fresh integration-test evidence.
 
 The full parallel scenario is explicit because it runs both public contracts concurrently. It defaults to isolated slots 40 and 41, supervises each topology and the evidence validator in separate process groups with bounded signal escalation, propagates either failure, and validates distinct ports, Compose projects, data namespaces, Kafka topics and temporary directories from their manifests. Successful runner and validator leaders are accepted only after their process groups are empty. The default supervisor grace is the configured JVM, diagnostics and Compose deadlines plus five seconds; its validator timeout is ten seconds. `REFERENCE_PARALLEL_TERM_TIMEOUT_SECONDS` and `REFERENCE_PARALLEL_VALIDATOR_TIMEOUT_SECONDS` accept finite nonnegative overrides.
 
@@ -35,10 +35,10 @@ verification/reference-product/harness/verify-parallel.sh
 
 Pass two distinct slot numbers to override those defaults. Set `REFERENCE_KEEP_PARALLEL_EVIDENCE=1`, or provide a new directory through `REFERENCE_PARALLEL_EVIDENCE_DIR`, to retain the two manifests and topology logs for inspection; otherwise successful temporary evidence is removed after validation. Ordinary `verify.sh [topology]` runs remain sequential and do not implicitly pay for this scenario.
 
-To inspect the selected topology after acceptance, use:
+To inspect the microservice topology after acceptance, use:
 
 ```bash
-REFERENCE_KEEP_RUNNING=1 REFERENCE_SKIP_BUILD=1 verification/reference-product/harness/verify.sh business-core-monolith
+REFERENCE_KEEP_RUNNING=1 REFERENCE_SKIP_BUILD=1 verification/reference-product/harness/verify.sh microservices
 ```
 
 The local fixture users are `alice/alice-password` (`tenant-a`), `bob/bob-password` (`tenant-b`) and `viewer/viewer-password` (read-only in `tenant-a`). These credentials and the Compose assets are for local development/acceptance only and are not a production deployment reference.

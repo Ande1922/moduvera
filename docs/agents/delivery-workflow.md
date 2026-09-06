@@ -69,6 +69,15 @@ Every stage returns its artifacts, exact checks, unresolved decisions, and
 authorization-limited actions. Failure, missing evidence, or unavailable
 capability is a stop with a truthful status, never an inferred pass.
 
+## Application topology scope
+
+Apply [ADR 0038](../adr/0038-retain-monolith-as-on-demand-assembly.md) when selecting Scenario gates.
+The microservice Golden Path is the only default topology. Retain monolith
+compilation and shared architectural contracts; require its dedicated runtime,
+black-box, recovery and image qualification only when monolith support is
+explicitly included in the task. New services need not join that assembly.
+Report monolith runtime as outside scope for ordinary delivery, not as PASS.
+
 ## Final acceptance boundary
 
 Final acceptance requires all of the following:

@@ -1,8 +1,11 @@
 ---
-status: accepted
+status: superseded
 ---
 
 # Support both microservice and modular-monolith application topologies
+
+Superseded by [ADR 0038](0038-retain-monolith-as-on-demand-assembly.md): monolith is retained on demand;
+the following records the historical dual-topology commitment.
 
 The scaffold supports two build-time application topologies over the same Business Service and Service API code. The multi-process microservice topology remains the Golden Path and owns the full remote-HTTP, Kafka, and failure-recovery reference path; the modular monolith is also a product commitment and must pass focused end-to-end acceptance proving one executable entry point, Local collaborator selection, unchanged use-case authorization and transaction semantics, and the complete reference-business flow. Topology support does not create a Cartesian product of database and Broker matrices, and runtime topology switching remains forbidden.
 

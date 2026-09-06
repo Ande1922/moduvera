@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Explicit high-cost scenario: run both supported public contracts concurrently without duplicating them.
+# Explicit high-cost scenario: run both retained topology contracts concurrently without duplicating them.
 HARNESS_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$HARNESS_DIR/../../.." && pwd)"
 MICROSERVICES_SLOT="${1:-${REFERENCE_PARALLEL_MICROSERVICES_SLOT:-40}}"
@@ -43,7 +43,7 @@ fi
 "$HARNESS_DIR/tests/test-cleanup.sh"
 "$HARNESS_DIR/tests/test-parallel-scenario.sh"
 if [[ "${REFERENCE_SKIP_BUILD:-0}" != "1" ]]; then
-  "$PROJECT_ROOT/mvnw" -q clean install
+  "$PROJECT_ROOT/mvnw" -q clean install -Dmonolith.skipITs=false
 fi
 
 exec python3 "$HARNESS_DIR/parallel_supervisor.py" \

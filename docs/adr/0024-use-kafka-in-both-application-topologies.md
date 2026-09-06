@@ -4,6 +4,9 @@ status: accepted
 
 # Use Kafka in both application topologies
 
+Current qualification scope follows [ADR 0038](0038-retain-monolith-as-on-demand-assembly.md).
+Monolith-specific runtime evidence is required only when that topology is explicitly in scope.
+
 Both the multi-process Golden Path and the modular-monolith topology use the same Spring Cloud Stream/Kafka asynchronous path, including serialized asynchronous Command and Integration Event contracts, transactional Outbox/Inbox, trusted message context, bounded retry, ordering and recovery semantics. The modular monolith is one executable Business Service composition, not a Broker-free infrastructure bundle; synchronous Service API collaborators may become Local calls, while asynchronous service boundaries continue through Kafka.
 
 This supersedes ADR 0023's proposed Local Message Transport. Avoiding a second transport and reliable-consumption implementation keeps the current boundary explicit and the focused topology inexpensive. A future middleware adapter may replace Kafka only behind the platform messaging boundary and must pass the same semantic contract evidence rather than changing Business Service code.

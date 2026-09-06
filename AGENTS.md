@@ -9,7 +9,7 @@ This is a Java 26, Spring Boot 4.1 multi-module Maven repository. The root `pom.
 - `./mvnw clean verify` builds the full reactor and runs unit, integration, architecture, formatting, PMD, and JaCoCo checks.
 - `./mvnw -pl services/order/order-service -am test` tests one module plus required dependencies during focused development.
 - `./mvnw -pl '!framework/bom,!framework/testing/moduvera-bom-smoke,!examples/simple-notes-demo,!:moduvera-reactor' spotless:apply` removes unused imports and normalizes Java/POM whitespace in Parent-managed modules before review.
-- `verification/reference-product/harness/verify.sh [microservices|business-core-monolith]` runs the public HTTP acceptance contract. It requires JDK 26, Docker Compose, and `uv`; omit the argument to verify both topologies.
+- `verification/reference-product/harness/verify.sh [microservices|business-core-monolith|all]` runs the public HTTP acceptance contract. It requires JDK 26, Docker Compose, and `uv`; omit the argument for microservices only. Monolith and dual-topology runtime qualification are explicit opt-ins under [ADR 0038](docs/adr/0038-retain-monolith-as-on-demand-assembly.md); retain monolith compilation without requiring new iterations to adapt it.
 
 ## Coding Style & Naming Conventions
 
