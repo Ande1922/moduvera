@@ -108,6 +108,51 @@ class LoggingContextSnapshotTest {
     }
 
     @Test
+    void captureAllowingAbsentPreservesCompleteTelemetryAndMasksBusinessResidue() {
+        LoggingContextSnapshot snapshot;
+        try (var ignoredTelemetry = Context.root()
+                .with(Span.wrap(UNSAMPLED))
+                .with(CUSTOM_CONTEXT, "captured-without-business")
+                .makeCurrent()) {
+            snapshot = LoggingContextSnapshot.captureAllowingAbsent();
+        }
+
+        MDC.put("outer_key", "outer-value");
+        MDC.put("tenant_id", "stale-tenant");
+        MDC.put("trace_id", "stale-trace");
+        ExecutionContext outer = tenantUser("tenant-outer", "user-outer", "corr-outer");
+        try (var ignoredExecution = ExecutionContextHolder.open(outer);
+                var ignoredTelemetry = Context.root().with(Span.wrap(SAMPLED)).makeCurrent()) {
+            try (var ignoredSnapshot = snapshot.openScope()) {
+                assertThat(ExecutionContextHolder.current()).isEmpty();
+                assertThat(Span.current().getSpanContext()).isEqualTo(UNSAMPLED);
+                assertThat(Context.current().get(CUSTOM_CONTEXT))
+                        .isEqualTo("captured-without-business");
+                assertThat(MDC.getCopyOfContextMap())
+                        .containsEntry("outer_key", "outer-value")
+                        .containsEntry("trace_id", UNSAMPLED.getTraceId())
+                        .containsEntry("span_id", UNSAMPLED.getSpanId())
+                        .doesNotContainKeys(
+                                "correlation_id",
+                                "tenant_id",
+                                "actor_type",
+                                "actor_id",
+                                "initiator_type",
+                                "initiator_id",
+                                "user_id");
+            }
+
+            assertThat(ExecutionContextHolder.require()).isEqualTo(outer);
+            assertThat(Span.current().getSpanContext()).isEqualTo(SAMPLED);
+            assertThat(Context.current().get(CUSTOM_CONTEXT)).isNull();
+            assertThat(MDC.getCopyOfContextMap())
+                    .containsEntry("outer_key", "outer-value")
+                    .containsEntry("tenant_id", "stale-tenant")
+                    .containsEntry("trace_id", "stale-trace");
+        }
+    }
+
+    @Test
     void nestedExceptionalExitRestoresEveryPriorLayer() {
         ExecutionContext outer = tenantUser("tenant-outer", "user-outer", "corr-outer");
         ExecutionContext inner = tenantUser("tenant-inner", "user-inner", "corr-inner");

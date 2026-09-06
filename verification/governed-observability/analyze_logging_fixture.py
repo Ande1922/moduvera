@@ -105,18 +105,25 @@ def main() -> None:
     assert not ({"trace_id", "span_id"} & ready.keys())
     assert not (TRUSTED_FIELDS.keys() & ready.keys())
 
-    info = one_message(records, "fixture ordinary secret=[REDACTED]")
+    info = one_message(
+        records,
+        "fixture ordinary secret=[REDACTED], api_key=[REDACTED], X-Api-Key=[REDACTED]",
+    )
     assert info["log"]["level"] == "INFO"
     assert info["event"] == {"action": "fixture_observed"}
     assert info["order_id"] == "fixture-order-info"
     assert isinstance(info["duration_ms"], float) and info["duration_ms"] == 12.5
     assert isinstance(info["retry"]["attempt"], int) and not isinstance(info["retry"]["attempt"], bool)
     assert info["retry"]["attempt"] == 2
+    assert "api_key" not in info and "X-Api-Key" not in info
     assert_trace(info, SAMPLED_TRACE_ID)
     for field, expected in TRUSTED_FIELDS.items():
         assert info.get(field) == expected, f"unexpected trusted {field}"
 
-    error = one_message(records, "fixture final failure, credential=[REDACTED]")
+    error = one_message(
+        records,
+        "fixture final failure, credential=[REDACTED], Authorization=[REDACTED]",
+    )
     assert error["log"]["level"] == "ERROR"
     assert error["order_id"] == "fixture-order-error"
     assert error["url"] == {"full": "https://example.test/orders"}

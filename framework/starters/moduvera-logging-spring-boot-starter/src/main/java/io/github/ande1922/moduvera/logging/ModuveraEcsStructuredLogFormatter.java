@@ -41,8 +41,8 @@ public final class ModuveraEcsStructuredLogFormatter
     private static final Pattern ERROR_CODE =
             Pattern.compile("(?:BIZ|DEP|SYS|ENV)_[A-Z0-9]+(?:_[A-Z0-9]+)*");
     private static final Pattern SENSITIVE_ASSIGNMENT = Pattern.compile(
-            "(?i)[\"']?(password|passwd|token|secret|credential|authorization|cookie|query|sql|body|payload)"
-                    + "[\"']?\\s*[:=]\\s*(?:bearer\\s+[^\\s,;}\\]]+|[\"'][^\"']*[\"']|(?!\\{\\})[^\\s,;}\\]]+)");
+            "(?i)[\"']?(x[-_]?api[-_]?key|api[-_]?key|password|passwd|token|secret|credential|authorization|cookie|query|sql|body|payload)"
+                    + "[\"']?\\s*[:=]\\s*(?:(?:bearer|basic)\\s+[^\\s,;}\\]]+|[\"'][^\"']*[\"']|(?!\\{\\})[^\\s,;}\\]]+)");
     private static final Pattern URL = Pattern.compile("(?i)\\bhttps?://[^\\s,;]+");
     private static final Set<String> RESERVED_ROOTS =
             Set.of("log", "process", "service", "ecs", "message", "tags", "error");
@@ -140,7 +140,7 @@ public final class ModuveraEcsStructuredLogFormatter
                 Map.Entry::getValue);
         normalizeRetry(root);
         TrustedLogContext.currentFields().forEach(root::put);
-        addError(root, event);
+        addError(root, event, mdc);
         addMarkers(root, event.getMarkerList());
         root.put("ecs", Map.of("version", ECS_VERSION));
         return JSON_WRITER.writeToString(root);
@@ -194,7 +194,9 @@ public final class ModuveraEcsStructuredLogFormatter
         if (SAFE_SIZE_FIELDS.contains(name)) {
             return true;
         }
-        return Arrays.stream(name.toLowerCase(Locale.ROOT).split("[._-]"))
+        String normalizedName = name.toLowerCase(Locale.ROOT).replace("_", "").replace("-", "");
+        return !normalizedName.contains("apikey")
+                && Arrays.stream(name.toLowerCase(Locale.ROOT).split("[._-]"))
                 .noneMatch(SENSITIVE_SEGMENTS::contains);
     }
 
@@ -368,9 +370,10 @@ public final class ModuveraEcsStructuredLogFormatter
         }
     }
 
-    private static void addError(Map<String, Object> root, ILoggingEvent event) {
+    private static void addError(
+            Map<String, Object> root, ILoggingEvent event, Map<String, String> mdc) {
         Map<String, Object> error = new LinkedHashMap<>();
-        String code = errorCode(event.getKeyValuePairs());
+        String code = errorCode(event.getKeyValuePairs(), mdc);
         IThrowableProxy throwable = event.getThrowableProxy();
         boolean finalError = event.getLevel().isGreaterOrEqual(Level.ERROR);
         if (code == null && finalError) {
@@ -391,19 +394,18 @@ public final class ModuveraEcsStructuredLogFormatter
         }
     }
 
-    private static String errorCode(List<KeyValuePair> fields) {
-        if (fields == null) {
-            return null;
-        }
-        String code = null;
-        for (KeyValuePair field : fields) {
-            if ("error.code".equals(field.key)
-                    && field.value instanceof String candidate
-                    && ERROR_CODE.matcher(candidate).matches()) {
-                code = candidate;
+    private static String errorCode(List<KeyValuePair> fields, Map<String, String> mdc) {
+        if (fields != null) {
+            for (KeyValuePair field : fields) {
+                if ("error.code".equals(field.key)
+                        && field.value instanceof String candidate
+                        && ERROR_CODE.matcher(candidate).matches()) {
+                    return candidate;
+                }
             }
         }
-        return code;
+        String candidate = mdc == null ? null : mdc.get("error.code");
+        return candidate != null && ERROR_CODE.matcher(candidate).matches() ? candidate : null;
     }
 
     private static String safeStackTrace(IThrowableProxy throwable) {

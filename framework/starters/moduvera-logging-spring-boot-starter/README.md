@@ -21,6 +21,12 @@ trusted context values into its owned MDC keys and restores those keys, the OTel
 Scope, and the business context on close. Callers must not hold the scope across
 an asynchronous wait.
 
+The qualified output pipeline is Spring Boot's synchronous console appender.
+Deferred or custom appender pipelines require separate event-time trusted
+projection and runtime qualification before they are enabled; this starter's
+current evidence does not establish trusted attribution after formatting moves
+to another thread.
+
 The formatter renders ordinary parameterized messages, removes query material
 from URLs, redacts common credential assignments, rejects sensitive structured
 keys, and emits exception class and stack frames without throwable messages.

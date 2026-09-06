@@ -149,12 +149,43 @@ class ModuveraEcsStructuredLogFormatterTest {
     @Test
     void finalErrorWithoutValidCodeFailsSafeToStableDefault() throws Exception {
         LoggingEvent event = event(Level.ERROR, "最终失败", new IllegalArgumentException("unsafe"));
-        event.setMDCPropertyMap(Map.of());
+        event.setMDCPropertyMap(Map.of("error.code", "also-invalid"));
         event.setKeyValuePairs(List.of(new KeyValuePair("error.code", "invalid-code")));
 
         JsonNode error = JSON.readTree(formatter().format(event)).path("error");
 
         assertThat(error.path("code").stringValue()).isEqualTo("SYS_UNEXPECTED");
+    }
+
+    @Test
+    void usesFluentErrorCodeBeforeMdcAndFallsBackToValidMdc() throws Exception {
+        LoggingEvent mdcOnly =
+                event(Level.ERROR, "MDC code", new IllegalStateException("unsafe"));
+        mdcOnly.setMDCPropertyMap(Map.of("error.code", "DEP_DATABASE_UNAVAILABLE"));
+
+        JsonNode mdcError = JSON.readTree(formatter().format(mdcOnly)).path("error");
+
+        assertThat(mdcError.path("code").stringValue()).isEqualTo("DEP_DATABASE_UNAVAILABLE");
+
+        LoggingEvent conflict =
+                event(Level.ERROR, "conflicting codes", new IllegalStateException("unsafe"));
+        conflict.setMDCPropertyMap(Map.of("error.code", "ENV_CONFIGURATION_INVALID"));
+        conflict.setKeyValuePairs(List.of(
+                new KeyValuePair("error.code", "BIZ_ORDER_REJECTED"),
+                new KeyValuePair("error.code", "SYS_LATER_VALUE")));
+
+        JsonNode conflictError = JSON.readTree(formatter().format(conflict)).path("error");
+
+        assertThat(conflictError.path("code").stringValue()).isEqualTo("BIZ_ORDER_REJECTED");
+
+        LoggingEvent invalidFluent =
+                event(Level.ERROR, "invalid fluent code", new IllegalStateException("unsafe"));
+        invalidFluent.setMDCPropertyMap(Map.of("error.code", "DEP_DATABASE_UNAVAILABLE"));
+        invalidFluent.setKeyValuePairs(List.of(new KeyValuePair("error.code", "invalid")));
+
+        JsonNode fallbackError = JSON.readTree(formatter().format(invalidFluent)).path("error");
+
+        assertThat(fallbackError.path("code").stringValue()).isEqualTo("DEP_DATABASE_UNAVAILABLE");
     }
 
     @Test
@@ -198,6 +229,38 @@ class ModuveraEcsStructuredLogFormatterTest {
         assertThat(json.path("attempt").isIntegralNumber()).isTrue();
         assertThat(json.path("attempt").intValue()).isEqualTo(2);
         assertThat(json.path("custom").stringValue()).isEqualTo("scalar-first");
+    }
+
+    @Test
+    void redactsApiKeysAndBasicCredentialsAcrossMessageAndStructuredInputs()
+            throws Exception {
+        String fluentApiKey = "fluent-api-key-" + java.util.UUID.randomUUID();
+        String mdcApiKey = "mdc-api-key-" + java.util.UUID.randomUUID();
+        String messageApiKey = "message-api-key-" + java.util.UUID.randomUUID();
+        String basicCredential = "basic-credential-" + java.util.UUID.randomUUID();
+        LoggingEvent event = event(
+                Level.INFO,
+                "credential forms, api_key={}, X-Api-Key: {}, Authorization: Basic {}",
+                null,
+                messageApiKey,
+                mdcApiKey,
+                basicCredential);
+        event.setMDCPropertyMap(Map.of(
+                "X-Api-Key", mdcApiKey,
+                "session_id", "safe-session"));
+        event.setKeyValuePairs(List.of(new KeyValuePair("api_key", fluentApiKey)));
+
+        String line = formatter().format(event);
+        JsonNode json = JSON.readTree(line);
+
+        assertThat(line).doesNotContain(
+                fluentApiKey, mdcApiKey, messageApiKey, basicCredential);
+        assertThat(json.path("message").stringValue())
+                .isEqualTo(
+                        "credential forms, api_key=[REDACTED], X-Api-Key=[REDACTED], Authorization=[REDACTED]");
+        assertThat(json.has("api_key")).isFalse();
+        assertThat(json.has("X-Api-Key")).isFalse();
+        assertThat(json.path("session_id").stringValue()).isEqualTo("safe-session");
     }
 
     @Test

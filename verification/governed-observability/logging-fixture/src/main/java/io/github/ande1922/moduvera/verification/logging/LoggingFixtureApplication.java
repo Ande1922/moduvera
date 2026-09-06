@@ -56,6 +56,9 @@ public class LoggingFixtureApplication {
         String secret = requiredEnvironment("FIXTURE_SECRET");
         String query = requiredEnvironment("FIXTURE_QUERY_SENTINEL");
         String sql = requiredEnvironment("FIXTURE_SQL_SENTINEL");
+        String apiKey = requiredEnvironment("FIXTURE_API_KEY");
+        String xApiKey = requiredEnvironment("FIXTURE_X_API_KEY");
+        String basicCredential = requiredEnvironment("FIXTURE_BASIC_CREDENTIAL");
         Actor actor = new Actor(ActorType.USER, "fixture-user", Set.of("fixture:read"));
         ExecutionContext executionContext = new ExecutionContext(
                 new TenantId("fixture-tenant"),
@@ -81,16 +84,26 @@ public class LoggingFixtureApplication {
                         .addKeyValue("order_id", "fixture-order-error")
                         .addKeyValue("trace_id", "forged-trace")
                         .setCause(failure)
-                        .log("fixture final failure, credential={}", secret);
+                        .log(
+                                "fixture final failure, credential={}, Authorization: Basic {}",
+                                secret,
+                                basicCredential);
             } else {
-                LOGGER.atInfo()
-                        .addKeyValue("event.action", "fixture_observed")
-                        .addKeyValue("order_id", "fixture-order-info")
-                        .addKeyValue("duration_ms", 12.5d)
-                        .addKeyValue("retry.attempt", 2)
-                        .addKeyValue("authorization", secret)
-                        .addKeyValue("tenant_id", "forged-tenant")
-                        .log("fixture ordinary secret={}", secret);
+                try (var ignoredApiKey = MDC.putCloseable("X-Api-Key", xApiKey)) {
+                    LOGGER.atInfo()
+                            .addKeyValue("event.action", "fixture_observed")
+                            .addKeyValue("order_id", "fixture-order-info")
+                            .addKeyValue("duration_ms", 12.5d)
+                            .addKeyValue("retry.attempt", 2)
+                            .addKeyValue("api_key", apiKey)
+                            .addKeyValue("authorization", secret)
+                            .addKeyValue("tenant_id", "forged-tenant")
+                            .log(
+                                    "fixture ordinary secret={}, api_key={}, X-Api-Key: {}",
+                                    secret,
+                                    apiKey,
+                                    xApiKey);
+                }
             }
         }
 
