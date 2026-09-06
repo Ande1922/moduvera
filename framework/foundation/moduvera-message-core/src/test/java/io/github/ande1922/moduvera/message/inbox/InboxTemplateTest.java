@@ -7,6 +7,8 @@ import io.github.ande1922.moduvera.context.Actor;
 import io.github.ande1922.moduvera.context.ActorType;
 import io.github.ande1922.moduvera.context.ExecutionContext;
 import io.github.ande1922.moduvera.context.ExecutionContextHolder;
+import io.github.ande1922.moduvera.context.ExecutionScope;
+import io.github.ande1922.moduvera.context.MissingExecutionContextException;
 import io.github.ande1922.moduvera.context.TenantId;
 import io.github.ande1922.moduvera.data.TransactionBoundary;
 import io.github.ande1922.moduvera.message.MessageId;
@@ -70,6 +72,44 @@ class InboxTemplateTest {
                         context(), () -> template.isProcessed(new MessageId("msg-failure"))))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("inbox unavailable");
+    }
+
+    @Test
+    void rejectsProcessedPrecheckWithoutExecutionContextBeforeQueryingRepository() {
+        var repository = new RecordingInboxRepository(true, true);
+        var transactions = new RecordingTransactionBoundary();
+        var template = new InboxTemplate(
+                "inventory-reservation", repository, transactions, Clock.systemUTC());
+
+        assertThat(ExecutionContextHolder.current()).isEmpty();
+        assertThatThrownBy(() -> template.isProcessed(new MessageId("msg-absent")))
+                .isInstanceOf(MissingExecutionContextException.class);
+
+        assertThat(repository.queries()).isEmpty();
+        assertThat(repository.starts()).isEmpty();
+        assertThat(transactions.executions()).isZero();
+    }
+
+    @Test
+    void rejectsProcessedPrecheckInPlatformContextBeforeQueryingRepository() {
+        var repository = new RecordingInboxRepository(true, true);
+        var transactions = new RecordingTransactionBoundary();
+        var template = new InboxTemplate(
+                "inventory-reservation", repository, transactions, Clock.systemUTC());
+        var platformContext = ExecutionContext.initiatedBy(
+                ExecutionScope.platform(),
+                new Actor(ActorType.SERVICE, "platform-service"),
+                "corr-platform");
+
+        assertThatThrownBy(() -> ExecutionContextHolder.call(
+                        platformContext,
+                        () -> template.isProcessed(new MessageId("msg-platform"))))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("tenant execution scope is required at this boundary");
+
+        assertThat(repository.queries()).isEmpty();
+        assertThat(repository.starts()).isEmpty();
+        assertThat(transactions.executions()).isZero();
     }
 
     @Test
