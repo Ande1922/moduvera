@@ -2,18 +2,12 @@
 set -euo pipefail
 
 SCRIPT_SOURCE="${BASH_SOURCE[0]}"
-if [[ "$SCRIPT_SOURCE" == */* ]]; then
-  # shellcheck source=login-fixture-env.sh
-  source "${SCRIPT_SOURCE%/*}/login-fixture-env.sh"
-else
-  # Bash searches PATH for a sourced file, matching its lookup of this launcher.
-  # shellcheck source=login-fixture-env.sh
-  source login-fixture-env.sh
-fi
-capture_login_fixture_environment
 if [[ "$SCRIPT_SOURCE" != */* ]]; then
-  SCRIPT_SOURCE="$(command -v -- "$SCRIPT_SOURCE")"
+  SCRIPT_SOURCE="./$SCRIPT_SOURCE"
 fi
+# shellcheck source=login-fixture-env.sh
+source "${SCRIPT_SOURCE%/*}/login-fixture-env.sh"
+capture_login_fixture_environment
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$SCRIPT_SOURCE")" && pwd)"
 PROJECT_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
 EVIDENCE_DIR="${MODUVERA_OBSERVABILITY_EVIDENCE_DIR:-}"
