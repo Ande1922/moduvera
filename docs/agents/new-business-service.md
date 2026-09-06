@@ -208,8 +208,8 @@ Choose exactly one Shape Contract scenario for each support promise. Apply
 [ADR 0004](../adr/0004-use-one-service-api-for-local-and-remote-calls.md) to
 direct and asynchronous-only capabilities. For messages, follow the
 [message-contract verification workflow](message-contract-verification.md)
-for identity, registration, Inbound Adapter contracts, and negative-assertion
-barriers. Apply
+for identity, registration, Application Handler ownership, Inbound Adapter
+contracts, replay recovery, and negative-assertion barriers. Apply
 [ADR 0021](../adr/0021-validate-inbound-message-contracts-without-wire-permissions.md)
 at the inbound trust boundary and
 [ADR 0031](../adr/0031-map-at-adapters-only-for-semantic-differences.md) before
@@ -227,6 +227,18 @@ use case does not need an empty Domain package. Each required provider adapter
 records the protocol mechanics it owns and the protocol-neutral seam it invokes
 or implements. Follow
 [ADR 0032](../adr/0032-organize-business-services-by-module-and-adapter-direction.md).
+
+For each message use case, create one independent Application Handler that
+implements `ApplicationMessageHandler<P>` for the decoded provider-owned
+payload. Give it the original `MessageId` and a fixed-consumer `InboxTemplate`.
+It checks committed Inbox state before authorization and protected preparation,
+then performs mutable reads, domain changes, Inbox recording, and same-database
+Outbox writes as transaction-internal processing in one complete local
+transaction. It does not depend directly on `TransactionBoundary`, receive a
+serialized envelope, or forward the same responsibility to an empty Service.
+The inbound Adapter retains envelope decoding and any justified semantic or
+error mapping, while the reliable consumer transport retains validation,
+trusted context, bounded retry, and cleanup.
 
 This step is complete when each artifact role selected by the Shape Contract
 has traceability and the service has no empty package, speculative Adapter, or

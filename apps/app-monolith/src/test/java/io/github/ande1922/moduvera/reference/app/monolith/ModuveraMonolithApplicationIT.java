@@ -28,7 +28,7 @@ import io.github.ande1922.moduvera.reference.inventory.adapter.outbound.messagin
 import io.github.ande1922.moduvera.reference.inventory.adapter.outbound.persistence.InventoryPersistenceConfiguration;
 import io.github.ande1922.moduvera.reference.inventory.api.ReserveInventoryCommand;
 import io.github.ande1922.moduvera.reference.inventory.api.ReserveInventoryLine;
-import io.github.ande1922.moduvera.reference.inventory.application.InventoryApplicationService;
+import io.github.ande1922.moduvera.reference.inventory.application.InventoryReservationHandler;
 import io.github.ande1922.moduvera.reference.inventory.application.InventoryResultPublisher;
 import io.github.ande1922.moduvera.reference.inventory.domain.InventoryStore;
 import io.github.ande1922.moduvera.reference.inventory.migration.InventoryMigrationConfiguration;
@@ -216,7 +216,7 @@ class ModuveraMonolithApplicationIT {
         assertThat(context.getBeansOfType(OrderApi.class).values())
                 .singleElement()
                 .isInstanceOf(OrderApplicationService.class);
-        assertThat(context.getBeansOfType(InventoryApplicationService.class)).hasSize(1);
+        assertThat(context.getBeansOfType(InventoryReservationHandler.class)).hasSize(1);
         assertThat(context.getBeansOfType(ProductRepository.class)).hasSize(1);
         assertThat(context.getBeansOfType(OrderRepository.class)).hasSize(1);
         assertThat(context.getBeansOfType(InventoryStore.class)).hasSize(1);

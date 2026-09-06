@@ -31,11 +31,11 @@ class InventoryResultMessageMapperTest {
     void mapsReservedAndRejectedResults() {
         var reserved = mapper.map(message(
                 "{\"commandId\":\"reserve-order-41\",\"orderId\":41,"
-                        + "\"reservedAt\":\"2026-08-30T00:00:01Z\"}"));
+                        + "\"reservedAt\":\"2026-08-30T00:00:01Z\"}").payload());
         var rejected = mapper.map(message(
                 "{\"commandId\":\"reserve-order-42\",\"orderId\":42,"
                         + "\"unavailableProductIds\":[7,9],"
-                        + "\"rejectedAt\":\"2026-08-30T00:00:02Z\"}"));
+                        + "\"rejectedAt\":\"2026-08-30T00:00:02Z\"}").payload());
 
         assertThat(reserved).isEqualTo(new InventoryReserved(
                 "reserve-order-41", 41, Instant.parse("2026-08-30T00:00:01Z")));
@@ -49,7 +49,8 @@ class InventoryResultMessageMapperTest {
     @Test
     void rejectsMalformedPayloadAsNonRetryable() {
         assertThatThrownBy(() -> mapper.map(message(
-                        "{\"orderId\":41,\"reservedAt\":\"2026-08-30T00:00:01Z\"}")))
+                                "{\"orderId\":41,\"reservedAt\":\"2026-08-30T00:00:01Z\"}")
+                        .payload()))
                 .isInstanceOf(NonRetryableMessageException.class)
                 .hasMessage("inventory result is missing commandId")
                 .hasNoCause();

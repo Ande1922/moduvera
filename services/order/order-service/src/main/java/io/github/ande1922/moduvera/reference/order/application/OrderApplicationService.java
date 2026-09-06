@@ -7,9 +7,6 @@ import io.github.ande1922.moduvera.reference.catalog.api.GetProductQuery;
 import io.github.ande1922.moduvera.reference.catalog.api.ProductSnapshot;
 import io.github.ande1922.moduvera.data.TransactionBoundary;
 import io.github.ande1922.moduvera.identifier.IdentifierGenerator;
-import io.github.ande1922.moduvera.reference.inventory.api.InventoryRejected;
-import io.github.ande1922.moduvera.reference.inventory.api.InventoryReservationResult;
-import io.github.ande1922.moduvera.reference.inventory.api.InventoryReserved;
 import io.github.ande1922.moduvera.reference.inventory.api.ReserveInventoryCommand;
 import io.github.ande1922.moduvera.reference.inventory.api.ReserveInventoryLine;
 import io.github.ande1922.moduvera.reference.order.api.CreateOrderCommand;
@@ -27,8 +24,6 @@ public final class OrderApplicationService implements OrderApi {
 
     public static final PermissionCode CREATE = new PermissionCode("order:create");
     public static final PermissionCode READ = new PermissionCode("order:read");
-    public static final PermissionCode APPLY_INVENTORY_RESULT =
-            new PermissionCode("order:apply-inventory-result");
 
     private final CatalogApi catalog;
     private final OrderRepository orders;
@@ -92,17 +87,6 @@ public final class OrderApplicationService implements OrderApi {
     public OrderView get(GetOrderQuery query) {
         authorizer.require(READ);
         return requireOrder(query.orderId()).toView();
-    }
-
-    public void resolvePendingStock(InventoryReservationResult result) {
-        authorizer.require(APPLY_INVENTORY_RESULT);
-        Order order = requireOrder(result.orderId());
-        if (result instanceof InventoryReserved reserved) {
-            order.apply(reserved);
-        } else if (result instanceof InventoryRejected rejected) {
-            order.apply(rejected);
-        }
-        orders.save(order);
     }
 
     private Order requireOrder(long orderId) {

@@ -11,28 +11,26 @@ import io.github.ande1922.moduvera.architecturefixture.shipping.api.ShippingRese
 import io.github.ande1922.moduvera.reference.app.gateway.architecturefixture.GatewayBusinessControllerViolation;
 import io.github.ande1922.moduvera.reference.app.catalog.architecturefixture.LeafAppMigrationExecutorViolation;
 import io.github.ande1922.moduvera.reference.app.inventory.architecturefixture.LeafAppBusinessCallbackViolation;
-import io.github.ande1922.moduvera.reference.app.inventory.architecturefixture.LeafAppReliableEndpointViolation;
+import io.github.ande1922.moduvera.reference.app.inventory.architecturefixture.LeafAppReliableConsumerFactoryViolation;
 import io.github.ande1922.moduvera.reference.app.monolith.architecturefixture.MonolithBusinessControllerViolation;
 import io.github.ande1922.moduvera.reference.app.order.architecturefixture.LeafAppBusinessMapper;
 import io.github.ande1922.moduvera.reference.app.order.architecturefixture.LeafAppMessageHandlerViolation;
 import io.github.ande1922.moduvera.reference.catalog.api.architecturefixture.TransportApiViolation;
 import io.github.ande1922.moduvera.reference.inventory.api.architecturefixture.MessageCoreApiViolation;
 import io.github.ande1922.moduvera.reference.inventory.api.architecturefixture.MessagingStarterApiViolation;
-import io.github.ande1922.moduvera.reference.inventory.architecturefixture.MisplacedInventoryEventProcessor;
+import io.github.ande1922.moduvera.reference.inventory.architecturefixture.MisplacedInventoryHandler;
 import io.github.ande1922.moduvera.reference.inventory.architecturefixture.MisplacedInventoryMessageHandler;
-import io.github.ande1922.moduvera.reference.inventory.adapter.inbound.messaging.architecturefixture.PublicInventoryEventMessageHandler;
-import io.github.ande1922.moduvera.reference.inventory.adapter.inbound.messaging.architecturefixture.RenamedInventoryEventProcessor;
-import io.github.ande1922.moduvera.reference.inventory.adapter.inbound.messaging.architecturefixture.ReliabilityOwningCommandMessageHandler;
-import io.github.ande1922.moduvera.reference.inventory.adapter.inbound.messaging.architecturefixture.RetryingInventoryEventProcessor;
-import io.github.ande1922.moduvera.reference.inventory.adapter.inbound.messaging.architecturefixture.UnclassifiedInventoryProcessor;
+import io.github.ande1922.moduvera.reference.inventory.adapter.inbound.messaging.architecturefixture.ReliabilityOwningInboundConfiguration;
 import io.github.ande1922.moduvera.reference.inventory.adapter.inbound.http.architecturefixture.InboundDependsOnOutboundViolation;
+import io.github.ande1922.moduvera.reference.inventory.application.architecturefixture.RenamedInventoryProcessor;
+import io.github.ande1922.moduvera.reference.inventory.application.architecturefixture.TransactionOwningInventoryHandler;
+import io.github.ande1922.moduvera.reference.inventory.application.architecturefixture.TransportLeakingInventoryHandler;
 import io.github.ande1922.moduvera.reference.inventory.architecturefixture.AdapterActivatingModuleConfiguration;
 import io.github.ande1922.moduvera.reference.inventory.configuration.architecturefixture.GenericInventoryConfigurationViolation;
 import io.github.ande1922.moduvera.reference.inventory.domain.architecturefixture.DomainDependsOnAdapterViolation;
 import io.github.ande1922.moduvera.reference.inventory.misc.architecturefixture.OrphanBusinessServiceClass;
 import io.github.ande1922.moduvera.reference.order.adapter.outbound.http.architecturefixture.OutboundDependsOnInboundViolation;
 import io.github.ande1922.moduvera.reference.order.application.architecturefixture.ApplicationDependsOnAdapterViolation;
-import io.github.ande1922.moduvera.reference.order.application.architecturefixture.HandlerApplicationServiceViolation;
 import io.github.ande1922.moduvera.reference.order.application.architecturefixture.TransportApplicationViolation;
 import io.github.ande1922.moduvera.reference.order.architecturefixture.MisplacedOrderController;
 import com.tngtech.archunit.core.domain.JavaClasses;
@@ -76,7 +74,7 @@ class AssemblyArchitectureRulesTest {
     void rejectsReliableTransportMechanicsInAppAssemblies() {
         assertViolation(
                 ModuveraArchitectureRules.APP_ASSEMBLIES_ONLY_ASSEMBLE_INBOUND_ADAPTERS,
-                LeafAppReliableEndpointViolation.class);
+                LeafAppReliableConsumerFactoryViolation.class);
     }
 
     @Test
@@ -92,8 +90,8 @@ class AssemblyArchitectureRulesTest {
                 ModuveraArchitectureRules.BUSINESS_MESSAGE_INBOUND_BELONGS_TO_PROVIDER_ADAPTER,
                 MisplacedInventoryMessageHandler.class);
         assertViolation(
-                ModuveraArchitectureRules.BUSINESS_MESSAGE_HANDLERS_BELONG_TO_PROVIDER_INBOUND,
-                MisplacedInventoryEventProcessor.class);
+                ModuveraArchitectureRules.APPLICATION_MESSAGE_HANDLERS_BELONG_TO_APPLICATION,
+                MisplacedInventoryHandler.class);
     }
 
     @Test
@@ -142,45 +140,38 @@ class AssemblyArchitectureRulesTest {
     }
 
     @Test
-    void rejectsUnclassifiedBusinessMessageHandlersEvenWhenRenamed() {
+    void rejectsRenamedApplicationMessageHandlers() {
         assertViolation(
-                ModuveraArchitectureRules.BUSINESS_MESSAGE_HANDLERS_ARE_CLASSIFIED,
-                UnclassifiedInventoryProcessor.class);
+                ModuveraArchitectureRules.APPLICATION_MESSAGE_HANDLERS_HAVE_EXPLICIT_NAMES,
+                RenamedInventoryProcessor.class);
     }
 
     @Test
-    void rejectsPublicBusinessMessageHandlers() {
+    void rejectsTransportTypesInApplicationMessageHandlers() {
         assertViolation(
-                ModuveraArchitectureRules.BUSINESS_MESSAGE_HANDLERS_ARE_PACKAGE_PRIVATE,
-                PublicInventoryEventMessageHandler.class);
+                ModuveraArchitectureRules.APPLICATION_MESSAGE_HANDLERS_ARE_PROTOCOL_NEUTRAL,
+                TransportLeakingInventoryHandler.class);
     }
 
     @Test
-    void rejectsBusinessMessageHandlersWithAmbiguousNames() {
+    void rejectsApplicationMessageHandlersWithoutInboxOwnership() {
         assertViolation(
-                ModuveraArchitectureRules.BUSINESS_MESSAGE_HANDLERS_HAVE_EXPLICIT_NAMES,
-                RenamedInventoryEventProcessor.class);
+                ModuveraArchitectureRules.APPLICATION_MESSAGE_HANDLERS_OWN_INBOX,
+                TransportLeakingInventoryHandler.class);
     }
 
     @Test
-    void rejectsApplicationServicesThatImplementMessageHandlers() {
+    void rejectsApplicationMessageHandlersThatOwnTopLevelTransactions() {
         assertViolation(
-                ModuveraArchitectureRules.APPLICATION_SERVICES_DO_NOT_IMPLEMENT_MESSAGE_HANDLERS,
-                HandlerApplicationServiceViolation.class);
+                ModuveraArchitectureRules.APPLICATION_MESSAGE_HANDLERS_DO_NOT_OWN_TRANSACTION_BOUNDARY,
+                TransactionOwningInventoryHandler.class);
     }
 
     @Test
-    void rejectsBusinessMessageHandlersThatOwnInboxReliability() {
+    void rejectsMessagingInboundAdaptersThatOwnInboxOrTransactions() {
         assertViolation(
-                ModuveraArchitectureRules.BUSINESS_MESSAGE_HANDLERS_DO_NOT_OWN_RELIABILITY,
-                ReliabilityOwningCommandMessageHandler.class);
-    }
-
-    @Test
-    void rejectsRenamedBusinessMessageHandlersThatOwnRetry() {
-        assertViolation(
-                ModuveraArchitectureRules.BUSINESS_MESSAGE_HANDLERS_DO_NOT_OWN_RELIABILITY,
-                RetryingInventoryEventProcessor.class);
+                ModuveraArchitectureRules.BUSINESS_MESSAGE_INBOUND_DOES_NOT_OWN_INBOX_TRANSACTION,
+                ReliabilityOwningInboundConfiguration.class);
     }
 
     @Test

@@ -4,7 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.ande1922.moduvera.authorization.UseCaseAuthorizer;
 import io.github.ande1922.moduvera.data.TransactionBoundary;
+import io.github.ande1922.moduvera.context.TenantId;
 import io.github.ande1922.moduvera.identifier.IdentifierGenerator;
+import io.github.ande1922.moduvera.message.MessageId;
+import io.github.ande1922.moduvera.message.inbox.InboxRepository;
 import io.github.ande1922.moduvera.migration.MigrationDefinition;
 import io.github.ande1922.moduvera.reference.catalog.api.CatalogApi;
 import io.github.ande1922.moduvera.reference.catalog.api.ProductSnapshot;
@@ -14,6 +17,7 @@ import io.github.ande1922.moduvera.reference.order.domain.Order;
 import io.github.ande1922.moduvera.reference.order.domain.OrderRepository;
 import java.math.BigDecimal;
 import java.time.Clock;
+import java.time.Instant;
 import java.util.Currency;
 import java.util.Optional;
 import java.util.function.Consumer;
@@ -32,6 +36,7 @@ class OrderModuleConfigurationTest {
             context.registerBean(ReserveInventoryPublisher.class, () -> ignored -> {});
             context.registerBean(IdentifierGenerator.class, () -> () -> 42);
             context.registerBean(TransactionBoundary.class, DirectTransactionBoundary::new);
+            context.registerBean(InboxRepository.class, AcceptingInboxRepository::new);
             context.registerBean(UseCaseAuthorizer.class, UseCaseAuthorizer::new);
             context.registerBean(Clock.class, Clock::systemUTC);
             context.register(OrderModuleConfiguration.class);
@@ -61,6 +66,18 @@ class OrderModuleConfigurationTest {
         @Override
         public <T> T inTransaction(Supplier<T> work) {
             return work.get();
+        }
+    }
+
+    private static final class AcceptingInboxRepository implements InboxRepository {
+        @Override
+        public boolean isProcessed(TenantId tenantId, String consumerId, MessageId messageId) {
+            return false;
+        }
+
+        @Override
+        public boolean tryStart(TenantId tenantId, String consumerId, MessageId messageId, Instant processedAt) {
+            return true;
         }
     }
 }

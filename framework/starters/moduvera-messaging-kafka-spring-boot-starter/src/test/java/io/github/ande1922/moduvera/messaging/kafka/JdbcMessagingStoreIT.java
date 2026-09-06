@@ -20,7 +20,7 @@ import io.github.ande1922.moduvera.message.MessageKind;
 import io.github.ande1922.moduvera.message.MessageType;
 import io.github.ande1922.moduvera.message.NonRetryableMessageException;
 import io.github.ande1922.moduvera.message.SerializedMessage;
-import io.github.ande1922.moduvera.message.handler.InboundMessageHandler;
+import io.github.ande1922.moduvera.message.handler.ApplicationMessageHandler;
 import io.github.ande1922.moduvera.message.inbox.InboxOutcome;
 import io.github.ande1922.moduvera.message.inbox.InboxTemplate;
 import io.github.ande1922.moduvera.message.outbox.MessageTransport;
@@ -43,6 +43,7 @@ import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -97,11 +98,7 @@ class JdbcMessagingStoreIT {
                 named, JdbcMessagingDialect.POSTGRESQL, transactions, new LocalOutboxWakeSignal());
         inbox = new JdbcInboxRepository(named);
         inboxTransactions = new SpringTransactionBoundary(transactions);
-        inboxConsumers = new ReliableMessageConsumerFactory(
-                new KafkaMessageMapper(),
-                inbox,
-                inboxTransactions,
-                Clock.fixed(Instant.parse("2026-08-30T00:00:00Z"), ZoneOffset.UTC));
+        inboxConsumers = new ReliableMessageConsumerFactory(new KafkaMessageMapper());
         jdbc.execute("""
                 CREATE TABLE test_inbox_business_record (
                     tenant_id VARCHAR(64) NOT NULL,
@@ -562,20 +559,13 @@ class JdbcMessagingStoreIT {
     void commitsBusinessChangesOncePerTrustedTenantAndConsumerScope() {
         var mapper = new KafkaMessageMapper();
         var tenantA = inboxMessage("msg-inbox-scope", "tenant-a");
-        var inventory = inboxConsumers.forConsumer(
-                "inventory", inboxContract(), recordBusinessChange("inventory"));
+        var inventory = inboxConsumer("inventory", recordBusinessChange("inventory"));
 
-        assertThat(inventory.handle(mapper.toSpringMessage(tenantA)))
-                .isEqualTo(InboxOutcome.APPLIED);
-        assertThat(inventory.handle(mapper.toSpringMessage(tenantA)))
-                .isEqualTo(InboxOutcome.DUPLICATE);
-        assertThat(inboxConsumers
-                        .forConsumer("audit", inboxContract(), recordBusinessChange("audit"))
-                        .handle(mapper.toSpringMessage(tenantA)))
-                .isEqualTo(InboxOutcome.APPLIED);
-        assertThat(inventory.handle(mapper.toSpringMessage(
-                        inboxMessage("msg-inbox-scope", "tenant-b"))))
-                .isEqualTo(InboxOutcome.APPLIED);
+        inventory.accept(mapper.toSpringMessage(tenantA));
+        inventory.accept(mapper.toSpringMessage(tenantA));
+        inboxConsumer("audit", recordBusinessChange("audit"))
+                .accept(mapper.toSpringMessage(tenantA));
+        inventory.accept(mapper.toSpringMessage(inboxMessage("msg-inbox-scope", "tenant-b")));
 
         assertThat(businessScopes())
                 .containsExactly(
@@ -587,24 +577,54 @@ class JdbcMessagingStoreIT {
     }
 
     @Test
+    void publicConsumerSkipsUnavailablePreparationForARealCommittedInboxReplay() {
+        var mapper = new KafkaMessageMapper();
+        var serialized = inboxMessage("msg-committed-replay", "tenant-a");
+        var messageId = serialized.descriptor().id();
+        var template = inboxTemplate("inventory");
+        assertThat(handle("tenant-a", template, messageId, () -> {}))
+                .isEqualTo(InboxOutcome.APPLIED);
+
+        var preparationAttempts = new AtomicInteger();
+        Consumer<byte[]> unavailablePreparation = ignored -> {
+            preparationAttempts.incrementAndGet();
+            throw new IllegalStateException("preparation unavailable");
+        };
+        ApplicationMessageHandler<byte[]> handler = (payload, originalMessageId) -> {
+            if (template.isProcessed(originalMessageId)) {
+                return;
+            }
+            unavailablePreparation.accept(payload);
+            template.handle(originalMessageId, () -> {});
+        };
+        Consumer<org.springframework.messaging.Message<byte[]>> replay = inboxConsumers.forContract(
+                inboxContract(),
+                message -> handler.handle(message.payload(), message.descriptor().id()));
+
+        replay.accept(mapper.toSpringMessage(serialized));
+
+        assertThat(preparationAttempts).hasValue(0);
+        assertThat(inboxRecordCount(messageId.value())).isEqualTo(1);
+        assertThat(ExecutionContextHolder.current()).isEmpty();
+    }
+
+    @Test
     void rollsBackInboxAndBusinessChangeTogetherSoTheMessageCanRetry() {
         var mapper = new KafkaMessageMapper();
         var serialized = inboxMessage("msg-inbox-retry", "tenant-a");
-        var failing = inboxConsumers.forConsumer("inventory", inboxContract(), message -> {
-            recordBusinessChange("inventory").handle(message);
+        var failing = inboxConsumer("inventory", message -> {
+            recordBusinessChange("inventory").accept(message);
             throw new IllegalStateException("handler failed");
         });
 
-        assertThatThrownBy(() -> failing.handle(mapper.toSpringMessage(serialized)))
+        assertThatThrownBy(() -> failing.accept(mapper.toSpringMessage(serialized)))
                 .isInstanceOf(NonRetryableMessageException.class)
                 .hasCauseInstanceOf(IllegalStateException.class);
         assertThat(businessRecordCount("msg-inbox-retry")).isZero();
         assertThat(inboxRecordCount("msg-inbox-retry")).isZero();
 
-        var retry = inboxConsumers.forConsumer(
-                "inventory", inboxContract(), recordBusinessChange("inventory"));
-        assertThat(retry.handle(mapper.toSpringMessage(serialized)))
-                .isEqualTo(InboxOutcome.APPLIED);
+        var retry = inboxConsumer("inventory", recordBusinessChange("inventory"));
+        retry.accept(mapper.toSpringMessage(serialized));
         assertThat(businessRecordCount("msg-inbox-retry")).isEqualTo(1);
         assertThat(inboxRecordCount("msg-inbox-retry")).isEqualTo(1);
         assertThat(ExecutionContextHolder.current()).isEmpty();
@@ -871,7 +891,19 @@ class JdbcMessagingStoreIT {
         return new HashSet<>(ids(store.claim(10, Duration.ofSeconds(30)).orElseThrow()));
     }
 
-    private InboundMessageHandler recordBusinessChange(String consumerId) {
+    private Consumer<org.springframework.messaging.Message<byte[]>> inboxConsumer(
+            String consumerId, Consumer<SerializedMessage> businessChange) {
+        var template = inboxTemplate(consumerId);
+        return inboxConsumers.forContract(inboxContract(), serialized -> {
+            var messageId = serialized.descriptor().id();
+            if (template.isProcessed(messageId)) {
+                return;
+            }
+            template.handle(messageId, () -> businessChange.accept(serialized));
+        });
+    }
+
+    private Consumer<SerializedMessage> recordBusinessChange(String consumerId) {
         return serialized -> {
             var context = ExecutionContextHolder.require();
             assertThat(context.tenantId()).isEqualTo(serialized.descriptor().tenantId());

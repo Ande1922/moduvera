@@ -1,7 +1,10 @@
 package io.github.ande1922.moduvera.reference.inventory;
 
 import io.github.ande1922.moduvera.authorization.UseCaseAuthorizer;
-import io.github.ande1922.moduvera.reference.inventory.application.InventoryApplicationService;
+import io.github.ande1922.moduvera.data.TransactionBoundary;
+import io.github.ande1922.moduvera.message.inbox.InboxRepository;
+import io.github.ande1922.moduvera.message.inbox.InboxTemplate;
+import io.github.ande1922.moduvera.reference.inventory.application.InventoryReservationHandler;
 import io.github.ande1922.moduvera.reference.inventory.application.InventoryResultPublisher;
 import io.github.ande1922.moduvera.reference.inventory.domain.AllOrNothingReservationPolicy;
 import io.github.ande1922.moduvera.reference.inventory.domain.InventoryStore;
@@ -19,13 +22,20 @@ public class InventoryModuleConfiguration {
     }
 
     @Bean
-    InventoryApplicationService inventoryApplicationService(
+    InventoryReservationHandler inventoryReservationHandler(
             InventoryStore inventory,
+            InboxRepository inboxRepository,
+            TransactionBoundary transactions,
             UseCaseAuthorizer authorizer,
             Clock clock,
             InventoryResultPublisher publisher,
             ReservationPolicy reservationPolicy) {
-        return new InventoryApplicationService(
-                inventory, authorizer, clock, publisher, reservationPolicy);
+        return new InventoryReservationHandler(
+                new InboxTemplate("inventory-reservation", inboxRepository, transactions, clock),
+                inventory,
+                authorizer,
+                clock,
+                publisher,
+                reservationPolicy);
     }
 }

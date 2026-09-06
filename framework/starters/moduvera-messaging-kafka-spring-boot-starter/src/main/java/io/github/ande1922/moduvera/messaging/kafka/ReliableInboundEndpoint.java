@@ -5,35 +5,29 @@ import io.github.ande1922.moduvera.context.ExecutionContextHolder;
 import io.github.ande1922.moduvera.message.InboundMessageContract;
 import io.github.ande1922.moduvera.message.NonRetryableMessageException;
 import io.github.ande1922.moduvera.message.SerializedMessage;
-import io.github.ande1922.moduvera.message.handler.InboundMessageHandler;
-import io.github.ande1922.moduvera.message.inbox.InboxOutcome;
-import io.github.ande1922.moduvera.message.inbox.InboxTemplate;
 import java.time.Duration;
 import java.util.function.Consumer;
 import org.springframework.messaging.Message;
 
-public final class ReliableInboundEndpoint implements Consumer<Message<byte[]>> {
+final class ReliableInboundEndpoint implements Consumer<Message<byte[]>> {
 
     private final KafkaMessageMapper mapper;
-    private final InboxTemplate inbox;
     private final InboundMessageContract contract;
-    private final InboundMessageHandler handler;
+    private final Consumer<SerializedMessage> inboundAdapter;
     private final int maxAttempts;
     private final Duration initialBackoff;
     private final Duration maxBackoff;
 
     ReliableInboundEndpoint(
             KafkaMessageMapper mapper,
-            InboxTemplate inbox,
             InboundMessageContract contract,
-            InboundMessageHandler handler,
+            Consumer<SerializedMessage> inboundAdapter,
             int maxAttempts,
             Duration initialBackoff,
             Duration maxBackoff) {
         this.mapper = mapper;
-        this.inbox = inbox;
         this.contract = contract;
-        this.handler = handler;
+        this.inboundAdapter = inboundAdapter;
         this.maxAttempts = maxAttempts;
         this.initialBackoff = initialBackoff;
         this.maxBackoff = maxBackoff;
@@ -44,7 +38,7 @@ public final class ReliableInboundEndpoint implements Consumer<Message<byte[]>> 
         handle(message);
     }
 
-    public InboxOutcome handle(Message<byte[]> message) {
+    private void handle(Message<byte[]> message) {
         SerializedMessage serialized;
         try {
             serialized = mapper.fromSpringMessage(message);
@@ -61,10 +55,8 @@ public final class ReliableInboundEndpoint implements Consumer<Message<byte[]>> 
         Duration backoff = initialBackoff;
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
-                return ExecutionContextHolder.call(
-                        context,
-                        () -> inbox.handle(
-                                descriptor.id(), () -> handler.handle(serialized)));
+                ExecutionContextHolder.run(context, () -> inboundAdapter.accept(serialized));
+                return;
             } catch (NonRetryableMessageException terminal) {
                 throw terminal;
             } catch (RuntimeException retryable) {

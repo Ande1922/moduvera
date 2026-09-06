@@ -19,14 +19,14 @@ import io.github.ande1922.moduvera.message.MessageKind;
 import io.github.ande1922.moduvera.message.MessageType;
 import io.github.ande1922.moduvera.message.NonRetryableMessageException;
 import io.github.ande1922.moduvera.message.SerializedMessage;
-import io.github.ande1922.moduvera.message.handler.CommandMessageHandler;
+import io.github.ande1922.moduvera.message.handler.ApplicationMessageHandler;
 import io.github.ande1922.moduvera.message.inbox.InboxRepository;
+import io.github.ande1922.moduvera.message.inbox.InboxTemplate;
 import io.github.ande1922.moduvera.messaging.kafka.KafkaMessageMapper;
-import io.github.ande1922.moduvera.messaging.kafka.ReliableInboundEndpoint;
 import io.github.ande1922.moduvera.messaging.kafka.ReliableMessageConsumerFactory;
 import io.github.ande1922.moduvera.reference.inventory.api.ReserveInventoryCommand;
 import io.github.ande1922.moduvera.reference.inventory.api.ReserveInventoryLine;
-import io.github.ande1922.moduvera.reference.inventory.application.InventoryApplicationService;
+import io.github.ande1922.moduvera.reference.inventory.application.InventoryReservationHandler;
 import io.github.ande1922.moduvera.reference.inventory.domain.AllOrNothingReservationPolicy;
 import io.github.ande1922.moduvera.reference.inventory.domain.ReservationDecision;
 import io.github.ande1922.moduvera.reference.inventory.domain.ReservationExecution;
@@ -49,92 +49,62 @@ import tools.jackson.databind.ObjectMapper;
 
 class ReserveInventoryCommandInboundConfigurationTest implements InboundMessageContractTck {
 
+    private static final Instant NOW = Instant.parse("2026-08-30T00:00:00Z");
     private final KafkaMessageMapper mapper = new KafkaMessageMapper();
 
     @Override
     public InboundMessageContractProbe newInboundMessageContractProbe() {
         var invocations = new AtomicInteger();
         var observedContext = new AtomicReference<ExecutionContext>();
-        var acceptedCommand = new AtomicReference<ReserveInventoryCommand>();
-        var inventory = service(command -> {
+        var accepted = new AtomicReference<ReserveInventoryCommand>();
+        var handler = handler(command -> {
             invocations.incrementAndGet();
             observedContext.set(ExecutionContextHolder.require());
-            acceptedCommand.set(command);
+            accepted.set(command);
         });
         return new InboundMessageContractProbe(
-                reserveInventoryContract(),
+                contract(),
                 message(validPayload()),
-                serialized -> {
-                    try (var context = context(inventory)) {
-                        consumer(context).accept(mapper.toSpringMessage(serialized));
-                    }
-                },
+                serialized -> deliver(handler, serialized),
                 invocations::get,
                 observedContext::get,
-                () -> assertThat(acceptedCommand.get()).isEqualTo(new ReserveInventoryCommand(
+                () -> assertThat(accepted).hasValue(new ReserveInventoryCommand(
                         "reserve-order-42", 42, List.of(new ReserveInventoryLine(7, 2)))));
     }
 
     @Test
-    void registersTheNamedCommandHandlerAndReliableSpringEndpoint() {
-        try (var context = context(service(ignored -> {}))) {
-            assertThat(context.getBean("reserveInventoryCommandMessageHandler"))
-                    .isInstanceOf(CommandMessageHandler.class);
-            assertThat(context.getBean("reserveInventory"))
-                    .isInstanceOf(ReliableInboundEndpoint.class)
-                    .isInstanceOf(Consumer.class);
+    void registersAStandardConsumerBoundToTheTypedApplicationHandler() {
+        var handler = handler(ignored -> {});
+        try (var context = context(handler)) {
+            assertThat(context.getBean(InventoryReservationHandler.class))
+                    .isInstanceOf(ApplicationMessageHandler.class);
+            assertThat(context.getBean("reserveInventory")).isInstanceOf(Consumer.class);
         }
     }
 
     @Test
-    void publicConsumerAcceptsTheCurrentInventoryV1Command() {
-        var handled = new AtomicReference<ReserveInventoryCommand>();
-        var service = service(command -> handled.set(command));
-
-        try (var context = context(service)) {
-            consumer(context).accept(mapper.toSpringMessage(message(validPayload())));
-        }
-
-        assertThat(handled.get()).isEqualTo(new ReserveInventoryCommand(
-                "reserve-order-42", 42, List.of(new ReserveInventoryLine(7, 2))));
-    }
-
-    @Test
-    void publicConsumerRejectsMalformedPayloadAsNonRetryable() {
+    void malformedPayloadIsRejectedBeforeTheApplicationHandler() {
         var invocations = new AtomicInteger();
-        var service = service(command -> invocations.incrementAndGet());
-
-        try (var context = context(service)) {
-            assertThatThrownBy(() -> consumer(context)
-                            .accept(mapper.toSpringMessage(message("{}"))))
+        try (var context = context(handler(ignored -> invocations.incrementAndGet()))) {
+            assertThatThrownBy(() -> consumer(context).accept(
+                            mapper.toSpringMessage(message("{}"))))
                     .isInstanceOf(NonRetryableMessageException.class)
                     .hasMessage("invalid reserve inventory command");
         }
-
-        assertThat(invocations.get()).isZero();
+        assertThat(invocations).hasValue(0);
     }
 
-    @Test
-    void commandHandlerClassifiesMalformedPayloadAsNonRetryable() {
-        try (var context = context(service(ignored -> {}))) {
-            var handler = context.getBean(
-                    "reserveInventoryCommandMessageHandler", CommandMessageHandler.class);
-
-            assertThatThrownBy(() -> handler.handle(message("{}")))
-                    .isInstanceOf(NonRetryableMessageException.class)
-                    .hasMessage("invalid reserve inventory command");
+    private void deliver(InventoryReservationHandler handler, SerializedMessage message) {
+        try (var context = context(handler)) {
+            consumer(context).accept(mapper.toSpringMessage(message));
         }
     }
 
-    private AnnotationConfigApplicationContext context(InventoryApplicationService service) {
+    private AnnotationConfigApplicationContext context(InventoryReservationHandler handler) {
         var context = new AnnotationConfigApplicationContext();
-        context.registerBean(InventoryApplicationService.class, () -> service);
+        context.registerBean(InventoryReservationHandler.class, () -> handler);
         context.registerBean(ObjectMapper.class, () -> new ObjectMapper());
-        context.registerBean(ReliableMessageConsumerFactory.class, this::consumerFactory);
-        context.registerBean(
-                "anotherCommandMessageHandler",
-                CommandMessageHandler.class,
-                () -> ignored -> {});
+        context.registerBean(ReliableMessageConsumerFactory.class, () -> new ReliableMessageConsumerFactory(mapper));
         context.register(ReserveInventoryCommandInboundConfiguration.class);
         context.refresh();
         return context;
@@ -145,84 +115,49 @@ class ReserveInventoryCommandInboundConfigurationTest implements InboundMessageC
         return (Consumer<Message<byte[]>>) context.getBean("reserveInventory", Consumer.class);
     }
 
-    private static InventoryApplicationService service(Consumer<ReserveInventoryCommand> behavior) {
-        return new InventoryApplicationService(
+    private static InventoryReservationHandler handler(Consumer<ReserveInventoryCommand> behavior) {
+        return new InventoryReservationHandler(
+                new InboxTemplate("inventory-reservation", new AcceptingInbox(), new DirectTransactionBoundary(), fixedClock()),
                 (request, now, policy) -> {
                     behavior.accept(request);
                     return new ReservationExecution(
-                            request.commandId(),
-                            request.orderId(),
-                            ReservationDecision.reserved(),
-                            now,
-                            true);
+                            request.commandId(), request.orderId(), ReservationDecision.reserved(), now, true);
                 },
                 new UseCaseAuthorizer(),
-                Clock.systemUTC(),
+                fixedClock(),
                 ignored -> {},
                 new AllOrNothingReservationPolicy());
     }
 
-    private ReliableMessageConsumerFactory consumerFactory() {
-        InboxRepository inbox = new InboxRepository() {
-            @Override
-            public boolean isProcessed(
-                    TenantId tenantId, String consumerId, MessageId messageId) {
-                return false;
-            }
-
-            @Override
-            public boolean tryStart(
-                    TenantId tenantId,
-                    String consumerId,
-                    MessageId messageId,
-                    Instant processedAt) {
-                return true;
-            }
-        };
-        return new ReliableMessageConsumerFactory(
-                mapper,
-                inbox,
-                new DirectTransactionBoundary(),
-                Clock.fixed(Instant.parse("2026-08-30T00:00:00Z"), ZoneOffset.UTC));
+    private static Clock fixedClock() {
+        return Clock.fixed(NOW, ZoneOffset.UTC);
     }
 
-    private static SerializedMessage message(String payload) {
-        return SerializedMessage.json(
-                descriptor(
-                        MessageKind.valueOf(ReserveInventoryCommand.MESSAGE_KIND),
-                        new MessageType(ReserveInventoryCommand.MESSAGE_TYPE),
-                        URI.create("urn:moduvera:reference:order-service"),
-                        new Destination(ReserveInventoryCommand.DESTINATION)),
-                payload);
-    }
-
-    private static MessageDescriptor descriptor(
-            MessageKind kind, MessageType type, URI source, Destination destination) {
-        return new MessageDescriptor(
-                new MessageId("reserve-order-42"),
-                kind,
-                type,
-                source,
-                destination,
-                Instant.parse("2026-08-30T00:00:00Z"),
-                new TenantId("tenant-a"),
-                new Actor(ActorType.SERVICE, "order-service"),
-                "corr-order",
-                null,
-                new Initiator(ActorType.USER, "alice"),
-                "42");
-    }
-
-    private static InboundMessageContract reserveInventoryContract() {
+    private static InboundMessageContract contract() {
         return new InboundMessageContract(
                 MessageKind.valueOf(ReserveInventoryCommand.MESSAGE_KIND),
                 new MessageType(ReserveInventoryCommand.MESSAGE_TYPE),
                 URI.create("urn:moduvera:reference:order-service"),
                 new Destination(ReserveInventoryCommand.DESTINATION),
-                new Actor(
-                        ActorType.SERVICE,
-                        "order-service",
-                        Set.of(InventoryApplicationService.RESERVE.value())));
+                new Actor(ActorType.SERVICE, "order-service", Set.of(InventoryReservationHandler.RESERVE.value())));
+    }
+
+    private static SerializedMessage message(String payload) {
+        return SerializedMessage.json(
+                new MessageDescriptor(
+                        new MessageId("reserve-message-42"),
+                        MessageKind.valueOf(ReserveInventoryCommand.MESSAGE_KIND),
+                        new MessageType(ReserveInventoryCommand.MESSAGE_TYPE),
+                        URI.create("urn:moduvera:reference:order-service"),
+                        new Destination(ReserveInventoryCommand.DESTINATION),
+                        NOW,
+                        new TenantId("tenant-a"),
+                        new Actor(ActorType.SERVICE, "wire", Set.of("wire:permission")),
+                        "corr-order",
+                        null,
+                        new Initiator(ActorType.USER, "alice"),
+                        "42"),
+                payload);
     }
 
     private static String validPayload() {
@@ -230,11 +165,15 @@ class ReserveInventoryCommandInboundConfigurationTest implements InboundMessageC
                 + "\"lines\":[{\"productId\":7,\"quantity\":2}]}";
     }
 
-    private static final class DirectTransactionBoundary implements TransactionBoundary {
-
+    private static final class AcceptingInbox implements InboxRepository {
         @Override
-        public <T> T inTransaction(Supplier<T> work) {
-            return work.get();
-        }
+        public boolean isProcessed(TenantId tenantId, String consumerId, MessageId messageId) { return false; }
+        @Override
+        public boolean tryStart(TenantId tenantId, String consumerId, MessageId messageId, Instant processedAt) { return true; }
+    }
+
+    private static final class DirectTransactionBoundary implements TransactionBoundary {
+        @Override
+        public <T> T inTransaction(Supplier<T> work) { return work.get(); }
     }
 }
