@@ -158,7 +158,7 @@ Scaffold 已有不可变 ExecutionContext、ThreadLocal Holder 和显式任务�
 
 JDK-only 能力留在 Kernel 的 context 包；Spring、Reactor、Spring AI 依赖在各自适配边界实现，不能拖入所有 Kernel 消费者。精确 Maven artifact 名称由实际依赖与独立消费者证据确定；不得为每个 Bound 类型机械拆模块。
 
-本次使用自有 Scope/Snapshot 保持一致语义；Micrometer 不作为核心必选或全局注册机制。MDC、Trace、Spring SecurityContext 与业务上下文保持分离，本次不自动传播；可观测性后续接入不得改变本规格的身份、缺失值和捕获时点契约。
+本次使用自有 Scope/Snapshot 保持一致语义；Micrometer 不作为核心必选或全局注册机制。MDC、Trace、Spring SecurityContext 与业务上下文保持分离，本次不自动传播；[受治理可观测性规格](../governed-observability/spec.md)在适配层组合 OTel 与业务快照，不能改变本规格的身份、缺失值、捕获时点和恢复契约，Kernel 不引入 OTel。Correlation 继续由 ExecutionContext 承载，公网新根生成、内部与因果派生工作继承，原有非空/合法性约束不变；HTTP 认证前使用独立诊断状态，不伪造业务身份，也不顺带实施本规格全部 Scope/Platform/AI 能力。
 
 ### ID09 — ADR 与领域文档一致性
 
@@ -234,3 +234,4 @@ JDK-only 能力留在 Kernel 的 context 包；Spring、Reactor、Spring AI 依�
 - 2026-09-05：此前早期提纲保留的载体、捕获时点、响应式接入、兼容与支持矩阵问题，已通过 Grill 收敛为接口草案。
 - 2026-09-05：用户回复“确认”，整体接受草案公共接缝、测试接缝和首期边界；本次据此更新唯一 spec，未拆票、未实施、未提交，未更改权威文档或产品支持状态。
 - 2026-09-05：文档一致性复核未发现重要遗漏或范围变化；必需章节、22 条故事、9 类验收接缝、本地链接与尾随空白检查通过。全库 `python3 tools/tracker/check.py` 返回 1，唯一报告为未修改的 `.scratch/http-problem-contract/issues/01-unify-external-problem-details.md` 缺少 `Blocked by` 元数据；未把该结果记为全库通过，未运行功能测试。
+- 2026-09-06：补充与可观测性规格的适配层组合及 correlation 分工，保留当前状态与范围；HTTP 既有票本次补齐 Blocked by，前条记录仍表示当时结果，不改写历史验证。

@@ -1,0 +1,101 @@
+{
+  "imported_on": "2026-09-05",
+  "source_directory": "/Users/gaopengcheng/Work/Projects/lingmai-platform/docs/logging",
+  "source_head": "2df0d40faaf4d8a35b4e65b99f1d831db0bee8ed",
+  "source_state": "working-tree snapshot; source logging documents contain staged renames and unstaged edits; HEAD alone does not identify imported content",
+  "files": [
+    {
+      "source": "ADOPTION.md",
+      "source_sha256": "8a1273f7091711f4606f5ce0d701a9c761dc96a7092dbeae1c6f25a27fda9a6e",
+      "action": "not-copied; replaced with repository-specific document",
+      "target": null
+    },
+    {
+      "source": "LOGGING.md",
+      "source_sha256": "10ad1b4f6133527cdfb9addfbd13fc0ed41ac577f2665a6e26d0e5767308e3be",
+      "action": "adapted after maintainer-confirmed trace and business correlation decision and 2026-09-06 integration approval; source snapshot preserved",
+      "target": "LOGGING.md",
+      "source_reference": "references/LINGMAI-LOGGING.md",
+      "adaptation_decision": "decisions/TRACE-AND-BUSINESS-CORRELATION.md",
+      "integration_decision": "INTEGRATION-DESIGN.md"
+    },
+    {
+      "source": "ROADMAP.md",
+      "source_sha256": "0df62d0cbb2074c1f3186e8060deeb2a1755da6edd7a62b4d4fa5adf4e26ec91",
+      "action": "not-copied; replaced with repository-specific document",
+      "target": null
+    },
+    {
+      "source": "bindings/JAVA-SPRING-BOOT.md",
+      "source_sha256": "c3937a423a3add5e21d50357284ab6f311889ba8893bcaedec06b000561a799b",
+      "action": "source-reference; active binding is repository-specific",
+      "target": "references/LINGMAI-JAVA-SPRING-BOOT.md"
+    },
+    {
+      "source": "decisions/NO-CUSTOM-CORRELATION.md",
+      "source_sha256": "630157bc5116c2a4144822ef7df5a66a6309ac4fe08ad0570f811bb06260c235",
+      "action": "copied-verbatim",
+      "target": "decisions/NO-CUSTOM-CORRELATION.md"
+    },
+    {
+      "source": "decisions/TRACE-BREAK.md",
+      "source_sha256": "fbd4bc24f75bf5f9acd8c64c384f1f321cea0c84e48cb821fafa735a26251812",
+      "action": "copied-verbatim",
+      "target": "decisions/TRACE-BREAK.md"
+    },
+    {
+      "source": "scenes/ASYNC.md",
+      "source_sha256": "a45338fd313df2f8acc582ab84d95731b7cb07a4ada0c903d56710de592d3507",
+      "action": "copied-verbatim",
+      "target": "scenes/ASYNC.md"
+    },
+    {
+      "source": "scenes/DEVICE.md",
+      "source_sha256": "c2a1204dc4806bd8ed8bb68b6ab33fa5b1ff3a7640607d41d30e8774ef844883",
+      "action": "copied-verbatim",
+      "target": "scenes/DEVICE.md"
+    },
+    {
+      "source": "scenes/GENAI.md",
+      "source_sha256": "53b3a5584737a07317b52b2189f532562aa7bd438adf80836c5d527997627472",
+      "action": "copied-verbatim",
+      "target": "scenes/GENAI.md"
+    },
+    {
+      "source": "scenes/INBOUND-REQUEST.md",
+      "source_sha256": "af693ad8b8403a5b289e21d6d3597c678942e521d58a38b753635e101cdd2164",
+      "action": "copied-verbatim",
+      "target": "scenes/INBOUND-REQUEST.md"
+    },
+    {
+      "source": "scenes/JOB.md",
+      "source_sha256": "41c8d55b54fb0745c23403fe369cc18712390309272671ca920cc2e97a828a0b",
+      "action": "copied-verbatim",
+      "target": "scenes/JOB.md"
+    },
+    {
+      "source": "scenes/MQ-CONSUME.md",
+      "source_sha256": "8a0f038afed5218e900b82d2514d9e86e70d99dbabdbf2adaeb5c0624e38cb95",
+      "action": "copied-verbatim",
+      "target": "scenes/MQ-CONSUME.md"
+    },
+    {
+      "source": "scenes/MQ-PRODUCE.md",
+      "source_sha256": "b56df8452d13a9e43b9415a4cc546e2ee98b545d8ec082716dcaf4fc3d54cbc5",
+      "action": "copied-verbatim",
+      "target": "scenes/MQ-PRODUCE.md"
+    },
+    {
+      "source": "scenes/OUTBOUND-CALL.md",
+      "source_sha256": "d00f2c95ed63bfb5804dfaf7d84cd976ea4ae30dd1891a74c433ba8b90b1f284",
+      "action": "copied-verbatim",
+      "target": "scenes/OUTBOUND-CALL.md"
+    },
+    {
+      "source": "scenes/SESSION.md",
+      "source_sha256": "df4b4466a366ed114483052cf67105987b70fef2883665a3bdda541f0ac03e37",
+      "action": "copied-verbatim",
+      "target": "scenes/SESSION.md"
+    }
+  ]
+}
