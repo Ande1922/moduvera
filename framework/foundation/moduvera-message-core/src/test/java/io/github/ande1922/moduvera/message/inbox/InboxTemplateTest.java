@@ -1,6 +1,7 @@
 package io.github.ande1922.moduvera.message.inbox;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.ande1922.moduvera.context.Actor;
 import io.github.ande1922.moduvera.context.ActorType;
@@ -21,8 +22,59 @@ import org.junit.jupiter.api.Test;
 class InboxTemplateTest {
 
     @Test
+    void reportsProcessedStateWithoutOpeningATransaction() {
+        var repository = new RecordingInboxRepository(true, true);
+        var transactions = new RecordingTransactionBoundary();
+        var template = new InboxTemplate(
+                "inventory-reservation",
+                repository,
+                transactions,
+                Clock.fixed(Instant.parse("2026-08-30T00:00:00Z"), ZoneOffset.UTC));
+        MessageId id = new MessageId("msg-processed");
+
+        boolean processed = ExecutionContextHolder.call(context(), () -> template.isProcessed(id));
+
+        assertThat(processed).isTrue();
+        assertThat(transactions.executions()).isZero();
+        assertThat(repository.queries())
+                .containsExactly(new InboxIdentity(
+                        new TenantId("tenant-a"), "inventory-reservation", id));
+        assertThat(repository.starts()).isEmpty();
+    }
+
+    @Test
+    void propagatesProcessedQueryFailures() {
+        InboxRepository repository = new InboxRepository() {
+            @Override
+            public boolean isProcessed(
+                    TenantId tenantId, String consumerId, MessageId messageId) {
+                throw new IllegalStateException("inbox unavailable");
+            }
+
+            @Override
+            public boolean tryStart(
+                    TenantId tenantId,
+                    String consumerId,
+                    MessageId messageId,
+                    Instant processedAt) {
+                return true;
+            }
+        };
+        var template = new InboxTemplate(
+                "inventory-reservation",
+                repository,
+                new RecordingTransactionBoundary(),
+                Clock.systemUTC());
+
+        assertThatThrownBy(() -> ExecutionContextHolder.call(
+                        context(), () -> template.isProcessed(new MessageId("msg-failure"))))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("inbox unavailable");
+    }
+
+    @Test
     void appliesAnAcceptedChangeInsideOneExplicitTransactionWithTrustedTenant() {
-        var repository = new RecordingInboxRepository(true);
+        var repository = new RecordingInboxRepository(true, false);
         var transactions = new RecordingTransactionBoundary();
         var template = new InboxTemplate(
                 "inventory-reservation",
@@ -48,7 +100,7 @@ class InboxTemplateTest {
 
     @Test
     void skipsTheChangeWhenInboxAdmissionIsRejected() {
-        InboxRepository repository = (tenantId, consumerId, messageId, processedAt) -> false;
+        InboxRepository repository = new RecordingInboxRepository(false, true);
         var transactions = new RecordingTransactionBoundary();
         var template = new InboxTemplate(
                 "inventory-reservation",
@@ -73,10 +125,19 @@ class InboxTemplateTest {
     private static final class RecordingInboxRepository implements InboxRepository {
 
         private final boolean accepted;
+        private final boolean processed;
+        private final List<InboxIdentity> queries = new ArrayList<>();
         private final List<InboxStart> starts = new ArrayList<>();
 
-        private RecordingInboxRepository(boolean accepted) {
+        private RecordingInboxRepository(boolean accepted, boolean processed) {
             this.accepted = accepted;
+            this.processed = processed;
+        }
+
+        @Override
+        public boolean isProcessed(TenantId tenantId, String consumerId, MessageId messageId) {
+            queries.add(new InboxIdentity(tenantId, consumerId, messageId));
+            return processed;
         }
 
         @Override
@@ -92,7 +153,13 @@ class InboxTemplateTest {
         private List<InboxStart> starts() {
             return List.copyOf(starts);
         }
+
+        private List<InboxIdentity> queries() {
+            return List.copyOf(queries);
+        }
     }
+
+    private record InboxIdentity(TenantId tenantId, String consumerId, MessageId messageId) {}
 
     private record InboxStart(
             TenantId tenantId, String consumerId, MessageId messageId, Instant processedAt) {}

@@ -163,7 +163,22 @@ class ReserveInventoryCommandInboundConfigurationTest implements InboundMessageC
     }
 
     private ReliableMessageConsumerFactory consumerFactory() {
-        InboxRepository inbox = (tenantId, consumerId, messageId, processedAt) -> true;
+        InboxRepository inbox = new InboxRepository() {
+            @Override
+            public boolean isProcessed(
+                    TenantId tenantId, String consumerId, MessageId messageId) {
+                return false;
+            }
+
+            @Override
+            public boolean tryStart(
+                    TenantId tenantId,
+                    String consumerId,
+                    MessageId messageId,
+                    Instant processedAt) {
+                return true;
+            }
+        };
         return new ReliableMessageConsumerFactory(
                 mapper,
                 inbox,

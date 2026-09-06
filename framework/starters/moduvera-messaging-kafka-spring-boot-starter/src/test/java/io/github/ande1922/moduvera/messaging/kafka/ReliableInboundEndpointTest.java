@@ -19,6 +19,7 @@ import io.github.ande1922.moduvera.message.MessageKind;
 import io.github.ande1922.moduvera.message.MessageType;
 import io.github.ande1922.moduvera.message.NonRetryableMessageException;
 import io.github.ande1922.moduvera.message.SerializedMessage;
+import io.github.ande1922.moduvera.message.inbox.InboxRepository;
 import java.net.URI;
 import java.time.Clock;
 import java.time.Duration;
@@ -37,7 +38,7 @@ class ReliableInboundEndpointTest {
     private final KafkaMessageMapper mapper = new KafkaMessageMapper();
     private final ReliableMessageConsumerFactory factory = new ReliableMessageConsumerFactory(
             mapper,
-            (tenantId, consumerId, messageId, processedAt) -> true,
+            acceptingInboxRepository(),
             new DirectTransactionBoundary(),
             Clock.fixed(Instant.parse("2026-08-30T00:00:00Z"), ZoneOffset.UTC));
 
@@ -46,7 +47,7 @@ class ReliableInboundEndpointTest {
         Set<MessageId> admitted = new HashSet<>();
         var duplicateAwareFactory = new ReliableMessageConsumerFactory(
                 mapper,
-                (tenantId, consumerId, messageId, processedAt) -> admitted.add(messageId),
+                recordingInboxRepository(admitted),
                 new DirectTransactionBoundary(),
                 Clock.fixed(Instant.parse("2026-08-30T00:00:00Z"), ZoneOffset.UTC));
         AtomicInteger handled = new AtomicInteger();
@@ -145,7 +146,7 @@ class ReliableInboundEndpointTest {
     void retriesTransientFailuresWithinTheConfiguredBound() {
         var retryingFactory = new ReliableMessageConsumerFactory(
                 mapper,
-                (tenant, consumer, messageId, processedAt) -> true,
+                acceptingInboxRepository(),
                 new DirectTransactionBoundary(),
                 Clock.fixed(Instant.parse("2026-08-30T00:00:00Z"), ZoneOffset.UTC),
                 3,
@@ -177,7 +178,7 @@ class ReliableInboundEndpointTest {
     void doesNotRetryAHandlerClassifiedAsNonRetryable() {
         var retryingFactory = new ReliableMessageConsumerFactory(
                 mapper,
-                (tenant, consumer, messageId, processedAt) -> true,
+                acceptingInboxRepository(),
                 new DirectTransactionBoundary(),
                 Clock.fixed(Instant.parse("2026-08-30T00:00:00Z"), ZoneOffset.UTC),
                 3,
@@ -278,6 +279,44 @@ class ReliableInboundEndpointTest {
                         new Initiator(ActorType.USER, "alice"),
                         tenantId + ":note-1"),
                 "{}");
+    }
+
+    private static InboxRepository acceptingInboxRepository() {
+        return new InboxRepository() {
+            @Override
+            public boolean isProcessed(
+                    TenantId tenantId, String consumerId, MessageId messageId) {
+                return false;
+            }
+
+            @Override
+            public boolean tryStart(
+                    TenantId tenantId,
+                    String consumerId,
+                    MessageId messageId,
+                    Instant processedAt) {
+                return true;
+            }
+        };
+    }
+
+    private static InboxRepository recordingInboxRepository(Set<MessageId> admitted) {
+        return new InboxRepository() {
+            @Override
+            public boolean isProcessed(
+                    TenantId tenantId, String consumerId, MessageId messageId) {
+                return admitted.contains(messageId);
+            }
+
+            @Override
+            public boolean tryStart(
+                    TenantId tenantId,
+                    String consumerId,
+                    MessageId messageId,
+                    Instant processedAt) {
+                return admitted.add(messageId);
+            }
+        };
     }
 
     private static final class DirectTransactionBoundary implements TransactionBoundary {

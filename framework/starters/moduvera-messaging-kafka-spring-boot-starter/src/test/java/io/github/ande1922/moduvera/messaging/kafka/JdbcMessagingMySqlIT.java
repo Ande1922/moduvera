@@ -9,6 +9,7 @@ import io.github.ande1922.moduvera.context.ExecutionContext;
 import io.github.ande1922.moduvera.context.ExecutionContextHolder;
 import io.github.ande1922.moduvera.context.Initiator;
 import io.github.ande1922.moduvera.context.TenantId;
+import io.github.ande1922.moduvera.data.NestedTransactionBoundaryException;
 import io.github.ande1922.moduvera.data.spring.SpringTransactionBoundary;
 import io.github.ande1922.moduvera.message.Destination;
 import io.github.ande1922.moduvera.message.MessageDescriptor;
@@ -231,8 +232,13 @@ class JdbcMessagingMySqlIT {
         var id = new MessageId("mysql-inbox-scope");
         var inventory = inboxTemplate("inventory");
 
+        assertThat(isProcessed("tenant-a", inventory, id)).isFalse();
+        assertThat(inboxRecordCount(id)).isZero();
         assertThat(handle("tenant-a", inventory, id, recordBusinessChange("inventory", id)))
                 .isEqualTo(InboxOutcome.APPLIED);
+        assertThat(isProcessed("tenant-a", inventory, id)).isTrue();
+        assertThat(isProcessed("tenant-a", inboxTemplate("audit"), id)).isFalse();
+        assertThat(isProcessed("tenant-b", inventory, id)).isFalse();
         assertThat(handle("tenant-a", inventory, id, recordBusinessChange("inventory", id)))
                 .isEqualTo(InboxOutcome.DUPLICATE);
         assertThat(handle(
@@ -254,6 +260,22 @@ class JdbcMessagingMySqlIT {
     }
 
     @Test
+    void precheckCannotSeeUncommittedOrRolledBackInboxRows() throws Exception {
+        assertPrecheckVisibility("mysql-visibility-commit", false);
+        assertPrecheckVisibility("mysql-visibility-rollback", true);
+    }
+
+    @Test
+    void committedFirstWriterWinsAfterBothMySqlPrechecksMiss() throws Exception {
+        assertConcurrentPrecheckRace("mysql-race-commit", false);
+    }
+
+    @Test
+    void rolledBackFirstWriterLetsTheCompetingMySqlCallCommit() throws Exception {
+        assertConcurrentPrecheckRace("mysql-race-rollback", true);
+    }
+
+    @Test
     void inboxAndBusinessMutationRollBackTogetherAndCanRetry() {
         var id = new MessageId("mysql-inbox-retry");
         var template = inboxTemplate("inventory");
@@ -271,6 +293,26 @@ class JdbcMessagingMySqlIT {
         assertThat(businessRecordCount(id)).isEqualTo(1);
         assertThat(inboxRecordCount(id)).isEqualTo(1);
         assertThat(ExecutionContextHolder.current()).isEmpty();
+    }
+
+    @Test
+    void postOutboxFailureAndNestedHelperRollBackTheMySqlInboxTransaction() {
+        var failureId = new MessageId("mysql-after-outbox-failure");
+        var nestedId = new MessageId("mysql-helper-nested");
+
+        assertThatThrownBy(() -> handle("tenant-a", inboxTemplate("inventory"), failureId, () -> {
+                    atomicInboxWork(failureId, "mysql-after-outbox-event").run();
+                    throw new IllegalStateException("after outbox failed");
+                }))
+                .isInstanceOf(IllegalStateException.class);
+        assertAtomicInboxState(failureId, "mysql-after-outbox-event", 0);
+
+        assertThatThrownBy(() -> handle("tenant-a", inboxTemplate("inventory"), nestedId, () -> {
+                    atomicInboxWork(nestedId, "mysql-helper-event").run();
+                    openTopLevelTransactionFromHelper();
+                }))
+                .isInstanceOf(NestedTransactionBoundaryException.class);
+        assertAtomicInboxState(nestedId, "mysql-helper-event", 0);
     }
 
     @Test
@@ -328,6 +370,67 @@ class JdbcMessagingMySqlIT {
             assertThat(cleanup.get()).isEqualTo(10);
             assertThat(claim.get().messages()).hasSize(10);
         }
+    }
+
+    private void assertPrecheckVisibility(String messageId, boolean rollBack) throws Exception {
+        var template = inboxTemplate("inventory");
+        InboxDatabaseConcurrency.assertPrecheckVisibility(
+                inboxOperations(template), messageId, rollBack);
+    }
+
+    private void assertConcurrentPrecheckRace(String messageId, boolean rollBackFirst)
+            throws Exception {
+        var id = new MessageId(messageId);
+        var template = inboxTemplate("inventory");
+        InboxDatabaseConcurrency.assertPrecheckRace(
+                inboxOperations(template), messageId, rollBackFirst, this::atomicInboxWork);
+        assertAtomicInboxState(id, messageId + "-event", 1);
+    }
+
+    private static boolean isProcessed(
+            String tenantId, InboxTemplate template, MessageId messageId) {
+        return ExecutionContextHolder.call(
+                context(tenantId), () -> template.isProcessed(messageId));
+    }
+
+    private static InboxDatabaseConcurrency.Operations inboxOperations(InboxTemplate template) {
+        return new InboxDatabaseConcurrency.Operations() {
+            @Override
+            public boolean isProcessed(MessageId messageId) {
+                return JdbcMessagingMySqlIT.isProcessed("tenant-a", template, messageId);
+            }
+
+            @Override
+            public InboxOutcome handle(MessageId messageId, Runnable businessChange) {
+                return JdbcMessagingMySqlIT.handle(
+                        "tenant-a", template, messageId, businessChange);
+            }
+        };
+    }
+
+    private Runnable atomicInboxWork(MessageId messageId, String outboxMessageId) {
+        return () -> {
+            recordBusinessChange("inventory", messageId).run();
+            publication.append(message(outboxMessageId, "inventory.events", messageId.value()));
+        };
+    }
+
+    private void assertAtomicInboxState(
+            MessageId messageId, String outboxMessageId, int expectedCount) {
+        assertThat(businessRecordCount(messageId)).isEqualTo(expectedCount);
+        assertThat(inboxRecordCount(messageId)).isEqualTo(expectedCount);
+        assertThat(outboxRecordCount(outboxMessageId)).isEqualTo(expectedCount);
+    }
+
+    private int outboxRecordCount(String messageId) {
+        return jdbc.queryForObject(
+                "SELECT COUNT(*) FROM moduvera_message_outbox WHERE message_id = ?",
+                Integer.class,
+                messageId);
+    }
+
+    private void openTopLevelTransactionFromHelper() {
+        inboxTransactions.inTransaction(() -> null);
     }
 
     private static Set<String> claimIds(

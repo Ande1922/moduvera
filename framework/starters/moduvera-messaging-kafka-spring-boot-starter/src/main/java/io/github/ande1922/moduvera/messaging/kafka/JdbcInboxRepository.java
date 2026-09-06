@@ -23,6 +23,26 @@ public final class JdbcInboxRepository implements InboxRepository {
     }
 
     @Override
+    public boolean isProcessed(TenantId tenantId, String consumerId, MessageId messageId) {
+        Boolean processed = jdbc.queryForObject(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                      FROM moduvera_message_inbox
+                     WHERE tenant_id = :tenantId
+                       AND consumer_id = :consumerId
+                       AND message_id = :messageId
+                )
+                """,
+                Map.of(
+                        "tenantId", tenantId.value(),
+                        "consumerId", consumerId,
+                        "messageId", messageId.value()),
+                Boolean.class);
+        return Boolean.TRUE.equals(processed);
+    }
+
+    @Override
     public boolean tryStart(
             TenantId tenantId, String consumerId, MessageId messageId, Instant processedAt) {
         String sql = dialect == JdbcMessagingDialect.MYSQL

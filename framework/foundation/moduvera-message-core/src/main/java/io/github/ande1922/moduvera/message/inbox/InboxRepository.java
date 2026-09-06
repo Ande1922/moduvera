@@ -6,5 +6,7 @@ import java.time.Instant;
 
 public interface InboxRepository {
 
+    boolean isProcessed(TenantId tenantId, String consumerId, MessageId messageId);
+
     boolean tryStart(TenantId tenantId, String consumerId, MessageId messageId, Instant processedAt);
 }
