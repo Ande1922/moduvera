@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-PROJECT_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
+SCRIPT_SOURCE="${BASH_SOURCE[0]}"
+if [[ "$SCRIPT_SOURCE" != */* ]]; then
+  SCRIPT_SOURCE="./$SCRIPT_SOURCE"
+fi
 # shellcheck source=login-fixture-env.sh
-source "$SCRIPT_DIR/login-fixture-env.sh"
+source "${SCRIPT_SOURCE%/*}/login-fixture-env.sh"
+capture_login_fixture_environment
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$SCRIPT_SOURCE")" && pwd)"
+PROJECT_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
 EVIDENCE_DIR="${MODUVERA_OBSERVABILITY_EVIDENCE_DIR:-}"
 MAVEN_REPO="${MODUVERA_OBSERVABILITY_MAVEN_REPO:-}"
 RUN_SLOT="${MODUVERA_OBSERVABILITY_RUN_SLOT:-40}"
-capture_login_fixture_environment
 AGENT="$EVIDENCE_DIR/opentelemetry-javaagent-2.31.1.jar"
 EXTENSION="$PROJECT_ROOT/verification/governed-observability/agent-extension/target/moduvera-governed-otel-agent-extension-0.1.0-SNAPSHOT.jar"
 COMPOSE_FILE="$PROJECT_ROOT/verification/reference-product/compose/docker-compose.yml"

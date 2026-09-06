@@ -65,4 +65,65 @@ set -e
   || fail "noncanonical tenant reached an expensive launcher side effect"
 grep -Fq 'tenant-a' <<<"$preflight_output" || fail "noncanonical tenant diagnostic is missing"
 
+shim_dir="$test_root/bin"
+mkdir -p "$shim_dir"
+cat >"$shim_dir/dirname" <<'SHIM'
+#!/usr/bin/env bash
+set -eu
+for variable in LOGIN_USERNAME LOGIN_CREDENTIAL LOGIN_TENANT \
+  MODUVERA_OBSERVABILITY_LOGIN_USERNAME MODUVERA_OBSERVABILITY_LOGIN_CREDENTIAL \
+  MODUVERA_OBSERVABILITY_LOGIN_TENANT; do
+  if [[ -n "${!variable-}" ]]; then
+    printf 'leaked\n' >"$LOGIN_ENV_MARKER"
+    exit 79
+  fi
+done
+printf 'clean\n' >"$LOGIN_ENV_MARKER"
+exit 79
+SHIM
+chmod +x "$shim_dir/dirname"
+launcher_marker="$test_root/launcher-first-child.txt"
+set +e
+PATH="$shim_dir:$OBSERVABILITY_DIR:$PATH" LOGIN_ENV_MARKER="$launcher_marker" \
+  LOGIN_USERNAME=collision-user \
+  LOGIN_CREDENTIAL="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')" \
+  LOGIN_TENANT=collision-tenant \
+  MODUVERA_OBSERVABILITY_LOGIN_USERNAME="$fixture_username" \
+  MODUVERA_OBSERVABILITY_LOGIN_CREDENTIAL="$fixture_credential" \
+  MODUVERA_OBSERVABILITY_LOGIN_TENANT="$fixture_tenant" \
+  verify.sh >/dev/null 2>&1
+launcher_exit=$?
+set -e
+[[ "$launcher_exit" -ne 0 ]] || fail "controlled first-child stop did not stop the launcher"
+[[ -s "$launcher_marker" ]] || fail "controlled dirname did not observe the launcher environment"
+[[ "$(<"$launcher_marker")" == clean ]] || fail "the launcher's first unrelated child inherited login fixture values"
+
+cat >"$shim_dir/login-fixture-env.sh" <<'SHIM'
+printf 'shadowed\n' >"$LOGIN_ENV_SHADOW_MARKER"
+exit 78
+SHIM
+shadow_marker="$test_root/shadow-helper.txt"
+cwd_launcher_marker="$test_root/cwd-launcher-first-child.txt"
+set +e
+(
+  cd "$OBSERVABILITY_DIR"
+  PATH="$shim_dir:$PATH" \
+    LOGIN_ENV_MARKER="$cwd_launcher_marker" \
+    LOGIN_ENV_SHADOW_MARKER="$shadow_marker" \
+    LOGIN_USERNAME=collision-user \
+    LOGIN_CREDENTIAL="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')" \
+    LOGIN_TENANT=collision-tenant \
+    MODUVERA_OBSERVABILITY_LOGIN_USERNAME="$fixture_username" \
+    MODUVERA_OBSERVABILITY_LOGIN_CREDENTIAL="$fixture_credential" \
+    MODUVERA_OBSERVABILITY_LOGIN_TENANT="$fixture_tenant" \
+    bash verify.sh >/dev/null 2>&1
+)
+cwd_launcher_exit=$?
+set -e
+[[ "$cwd_launcher_exit" -ne 0 ]] || fail "controlled cwd first-child stop did not stop the launcher"
+[[ ! -e "$shadow_marker" ]] || fail "bash verify.sh sourced a PATH-shadowed login fixture helper"
+[[ -s "$cwd_launcher_marker" ]] || fail "controlled dirname did not observe the cwd launcher environment"
+[[ "$(<"$cwd_launcher_marker")" == clean ]] \
+  || fail "the cwd launcher's first unrelated child inherited login fixture values"
+
 echo "Login fixture environment contract: PASS"
