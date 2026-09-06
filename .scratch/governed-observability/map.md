@@ -9,7 +9,7 @@
 
 ## Tickets and direct dependencies
 
-以下为当前执行状态，后续以各票 metadata 为准。原拆票批准历史保留于 Comments；本批授权新增 01 → 07 的执行依赖，01 已完成并集成，07 已认领；02/14 已解除阻塞，其余票按未完成前置阻塞。
+以下为当前执行状态，后续以各票 metadata 为准。原拆票批准历史保留于 Comments；本批授权新增 01 → 07 的执行依赖，01、07 已完成并集成；02/14 已解除阻塞，其余票按未完成前置阻塞。
 
 | 票 | Blocked by | 发布状态 |
 | --- | --- | --- |
@@ -19,7 +19,7 @@
 | [04 — Servlet 请求诊断完整生命周期](issues/04-servlet-request-lifecycle.md) | 02 | blocked |
 | [05 — Gateway 响应式请求诊断](issues/05-gateway-reactor-lifecycle.md) | 02 | blocked |
 | [06 — HTTP 出站传播与尝试结果](issues/06-http-outbound-diagnostics.md) | 02 | blocked |
-| [07 — 消息读取端兼容 creation 扩展](issues/07-creation-envelope-reader-compatibility.md) | 01 | claimed |
+| [07 — 消息读取端兼容 creation 扩展](issues/07-creation-envelope-reader-compatibility.md) | 01 | resolved |
 | [08 — 逐条消费保留本次投递因果](issues/08-inbound-transport-causality.md) | 02, 07 | blocked |
 | [09 — Immediate 一次 ACK 发布诊断](issues/09-immediate-ack-diagnostics.md) | 02, 07 | blocked |
 | [10 — Durable 原子追加与双库迁移](issues/10-durable-append-and-trace-migration.md) | 02, 07 | blocked |
@@ -35,8 +35,8 @@
 
 ## Current frontier
 
-- 当前批次：**01 → 07**；01 已评审并集成，07 已认领，使用 01 验证锁定的 Agent/API 组合。
-- 01 已释放 02、07、14；本批只继续 07，02/14 保持 ready-for-agent 并留待下一步指令。02 完成可释放 03、04、05、06、15，并在 07 也完成后释放 08、09、10。
+- 当前批次：**01 → 07**；两票均已评审并集成，07 使用 01 验证锁定的 Agent/API 组合。批次最终结果由固定提交的聚合评审/门禁/Scenario 证据给出。
+- 01、07 已完成；剩余可执行前沿为 **02、14**，二者保持 ready-for-agent，按本批授权边界停止，等待后续指令。02 完成可释放 03、04、05、06、15，并在 07 也完成后释放 08、09、10。
 - 持久发布主链：10 → 11 → 12 → 13；13 同时要求 08。
 - 独立消费者：04、08、09、13、14 → 16；双拓扑收口：03、05、06、15、16 → 17。
 - 没有新产品/架构问题或外部 blocker。标准传播器/API 版本存在共享先写者，新增 01 → 07 执行边并获维护者批准。Agent/API 版本、最小 Formatter 和精确 artifact 落点为 Spec 已确认边界内的实施选择，须提供证据；依赖运行失败不允许静默改变设计。
@@ -102,3 +102,5 @@
 - 2026-09-06：维护者确认首批执行方案；以源码 89326c0eaff694063d9ef2af905d29afd4a8e0ac 加限定文档准备提交为基础，按 01 → 07 顺序隔离实施、双轴评审和专用分支集成，完成后停在 02/14。主目录不合入、不 push、不删除 worktree。
 
 - 2026-09-06：01 的[完成记录](issues/01-pinned-agent-runtime.md#answer)包含固定提交、全量运行及双轴评审证据，已无冲突快进集成；07 按原授权接续，02/14 不启动。
+
+- 2026-09-06：07 的[完成记录](issues/07-creation-envelope-reader-compatibility.md#answer)包含固定提交、真实 schema/模块验证与独立双轴评审；已无冲突快进集成。01→07 代码前沿已交付，02/14 未启动，批次最终聚合验证另存。
