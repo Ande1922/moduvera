@@ -58,6 +58,7 @@ public class LoggingFixtureApplication {
         String sql = requiredEnvironment("FIXTURE_SQL_SENTINEL");
         String apiKey = requiredEnvironment("FIXTURE_API_KEY");
         String xApiKey = requiredEnvironment("FIXTURE_X_API_KEY");
+        String dottedApiKey = requiredEnvironment("FIXTURE_DOTTED_API_KEY");
         String basicCredential = requiredEnvironment("FIXTURE_BASIC_CREDENTIAL");
         Actor actor = new Actor(ActorType.USER, "fixture-user", Set.of("fixture:read"));
         ExecutionContext executionContext = new ExecutionContext(
@@ -96,13 +97,15 @@ public class LoggingFixtureApplication {
                             .addKeyValue("duration_ms", 12.5d)
                             .addKeyValue("retry.attempt", 2)
                             .addKeyValue("api_key", apiKey)
+                            .addKeyValue("api.key", dottedApiKey)
                             .addKeyValue("authorization", secret)
                             .addKeyValue("tenant_id", "forged-tenant")
                             .log(
-                                    "fixture ordinary secret={}, api_key={}, X-Api-Key: {}",
+                                    "fixture ordinary secret={}, api_key={}, X-Api-Key: {}, api.key={}",
                                     secret,
                                     apiKey,
-                                    xApiKey);
+                                    xApiKey,
+                                    dottedApiKey);
                 }
             }
         }

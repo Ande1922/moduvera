@@ -107,7 +107,8 @@ def main() -> None:
 
     info = one_message(
         records,
-        "fixture ordinary secret=[REDACTED], api_key=[REDACTED], X-Api-Key=[REDACTED]",
+        "fixture ordinary secret=[REDACTED], api_key=[REDACTED], "
+        "X-Api-Key=[REDACTED], api.key=[REDACTED]",
     )
     assert info["log"]["level"] == "INFO"
     assert info["event"] == {"action": "fixture_observed"}
@@ -115,7 +116,7 @@ def main() -> None:
     assert isinstance(info["duration_ms"], float) and info["duration_ms"] == 12.5
     assert isinstance(info["retry"]["attempt"], int) and not isinstance(info["retry"]["attempt"], bool)
     assert info["retry"]["attempt"] == 2
-    assert "api_key" not in info and "X-Api-Key" not in info
+    assert not ({"api", "api.key", "api_key", "X-Api-Key"} & info.keys())
     assert_trace(info, SAMPLED_TRACE_ID)
     for field, expected in TRUSTED_FIELDS.items():
         assert info.get(field) == expected, f"unexpected trusted {field}"

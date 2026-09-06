@@ -43,6 +43,7 @@ Path(sys.argv[1]).write_text(json.dumps({
     "sql": "sql-" + prefix,
     "api_key": "api-key-" + prefix,
     "x_api_key": "x-api-key-" + prefix,
+    "dotted_api_key": "dotted-api-key-" + prefix,
     "basic": "basic-credential-" + prefix,
 }, sort_keys=True) + "\n", encoding="utf-8")
 PY
@@ -51,6 +52,7 @@ FIXTURE_QUERY_SENTINEL="$(python3 -c 'import json,sys; print(json.load(open(sys.
 FIXTURE_SQL_SENTINEL="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sql"])' "$EVIDENCE_DIR/logging-sentinels.json")"
 FIXTURE_API_KEY="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["api_key"])' "$EVIDENCE_DIR/logging-sentinels.json")"
 FIXTURE_X_API_KEY="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["x_api_key"])' "$EVIDENCE_DIR/logging-sentinels.json")"
+FIXTURE_DOTTED_API_KEY="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["dotted_api_key"])' "$EVIDENCE_DIR/logging-sentinels.json")"
 FIXTURE_BASIC_CREDENTIAL="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["basic"])' "$EVIDENCE_DIR/logging-sentinels.json")"
 
 : > "$EVIDENCE_DIR/logging-otlp.port"
@@ -80,6 +82,7 @@ FIXTURE_QUERY_SENTINEL="$FIXTURE_QUERY_SENTINEL" \
 FIXTURE_SQL_SENTINEL="$FIXTURE_SQL_SENTINEL" \
 FIXTURE_API_KEY="$FIXTURE_API_KEY" \
 FIXTURE_X_API_KEY="$FIXTURE_X_API_KEY" \
+FIXTURE_DOTTED_API_KEY="$FIXTURE_DOTTED_API_KEY" \
 FIXTURE_BASIC_CREDENTIAL="$FIXTURE_BASIC_CREDENTIAL" \
 JAVA_TOOL_OPTIONS="$OPTIONS" \
   java -jar "$FIXTURE_JAR" \

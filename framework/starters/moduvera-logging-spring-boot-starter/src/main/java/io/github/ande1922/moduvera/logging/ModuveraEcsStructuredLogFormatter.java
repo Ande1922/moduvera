@@ -41,7 +41,7 @@ public final class ModuveraEcsStructuredLogFormatter
     private static final Pattern ERROR_CODE =
             Pattern.compile("(?:BIZ|DEP|SYS|ENV)_[A-Z0-9]+(?:_[A-Z0-9]+)*");
     private static final Pattern SENSITIVE_ASSIGNMENT = Pattern.compile(
-            "(?i)[\"']?(x[-_]?api[-_]?key|api[-_]?key|password|passwd|token|secret|credential|authorization|cookie|query|sql|body|payload)"
+            "(?i)[\"']?(x[._-]*api[._-]*key|api[._-]*key|password|passwd|token|secret|credential|authorization|cookie|query|sql|body|payload)"
                     + "[\"']?\\s*[:=]\\s*(?:(?:bearer|basic)\\s+[^\\s,;}\\]]+|[\"'][^\"']*[\"']|(?!\\{\\})[^\\s,;}\\]]+)");
     private static final Pattern URL = Pattern.compile("(?i)\\bhttps?://[^\\s,;]+");
     private static final Set<String> RESERVED_ROOTS =
@@ -194,7 +194,10 @@ public final class ModuveraEcsStructuredLogFormatter
         if (SAFE_SIZE_FIELDS.contains(name)) {
             return true;
         }
-        String normalizedName = name.toLowerCase(Locale.ROOT).replace("_", "").replace("-", "");
+        String normalizedName = name.toLowerCase(Locale.ROOT)
+                .replace(".", "")
+                .replace("_", "")
+                .replace("-", "");
         return !normalizedName.contains("apikey")
                 && Arrays.stream(name.toLowerCase(Locale.ROOT).split("[._-]"))
                 .noneMatch(SENSITIVE_SEGMENTS::contains);

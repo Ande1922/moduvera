@@ -234,33 +234,62 @@ class ModuveraEcsStructuredLogFormatterTest {
     @Test
     void redactsApiKeysAndBasicCredentialsAcrossMessageAndStructuredInputs()
             throws Exception {
-        String fluentApiKey = "fluent-api-key-" + java.util.UUID.randomUUID();
-        String mdcApiKey = "mdc-api-key-" + java.util.UUID.randomUUID();
-        String messageApiKey = "message-api-key-" + java.util.UUID.randomUUID();
-        String basicCredential = "basic-credential-" + java.util.UUID.randomUUID();
-        LoggingEvent event = event(
-                Level.INFO,
-                "credential forms, api_key={}, X-Api-Key: {}, Authorization: Basic {}",
-                null,
-                messageApiKey,
-                mdcApiKey,
-                basicCredential);
-        event.setMDCPropertyMap(Map.of(
-                "X-Api-Key", mdcApiKey,
-                "session_id", "safe-session"));
-        event.setKeyValuePairs(List.of(new KeyValuePair("api_key", fluentApiKey)));
+        for (String apiKeyName :
+                List.of("apikey", "api_key", "x-api-key", "api.key", "x.api_-key")) {
+            String apiKeyRoot = apiKeyName.split("\\.", 2)[0];
+            String fluentApiKey = "fluent-api-key-" + java.util.UUID.randomUUID();
+            LoggingEvent fluentEvent = event(Level.INFO, "fluent credential", null);
+            fluentEvent.setMDCPropertyMap(Map.of("session_id", "safe-session"));
+            fluentEvent.setKeyValuePairs(List.of(new KeyValuePair(apiKeyName, fluentApiKey)));
 
-        String line = formatter().format(event);
+            String fluentLine = formatter().format(fluentEvent);
+            JsonNode fluentJson = JSON.readTree(fluentLine);
+
+            assertThat(fluentLine).doesNotContain(fluentApiKey);
+            assertThat(fluentJson.has(apiKeyRoot)).isFalse();
+            assertThat(fluentJson.path("session_id").stringValue()).isEqualTo("safe-session");
+
+            String mdcApiKey = "mdc-api-key-" + java.util.UUID.randomUUID();
+            LoggingEvent mdcEvent = event(Level.INFO, "MDC credential", null);
+            mdcEvent.setMDCPropertyMap(Map.of(
+                    apiKeyName, mdcApiKey,
+                    "session_id", "safe-session"));
+
+            String mdcLine = formatter().format(mdcEvent);
+            JsonNode mdcJson = JSON.readTree(mdcLine);
+
+            assertThat(mdcLine).doesNotContain(mdcApiKey);
+            assertThat(mdcJson.has(apiKeyRoot)).isFalse();
+            assertThat(mdcJson.path("session_id").stringValue()).isEqualTo("safe-session");
+
+            String messageApiKey = "message-api-key-" + java.util.UUID.randomUUID();
+            LoggingEvent messageEvent =
+                    event(Level.INFO, "credential form, " + apiKeyName + "={}", null, messageApiKey);
+            messageEvent.setMDCPropertyMap(Map.of("session_id", "safe-session"));
+
+            String messageLine = formatter().format(messageEvent);
+            JsonNode messageJson = JSON.readTree(messageLine);
+
+            assertThat(messageLine).doesNotContain(messageApiKey);
+            assertThat(messageJson.path("message").stringValue())
+                    .isEqualTo("credential form, " + apiKeyName + "=[REDACTED]");
+            assertThat(messageJson.path("session_id").stringValue()).isEqualTo("safe-session");
+        }
+
+        String basicCredential = "basic-credential-" + java.util.UUID.randomUUID();
+        LoggingEvent basicEvent = event(
+                Level.INFO,
+                "credential form, Authorization: Basic {}",
+                null,
+                basicCredential);
+        basicEvent.setMDCPropertyMap(Map.of());
+
+        String line = formatter().format(basicEvent);
         JsonNode json = JSON.readTree(line);
 
-        assertThat(line).doesNotContain(
-                fluentApiKey, mdcApiKey, messageApiKey, basicCredential);
+        assertThat(line).doesNotContain(basicCredential);
         assertThat(json.path("message").stringValue())
-                .isEqualTo(
-                        "credential forms, api_key=[REDACTED], X-Api-Key=[REDACTED], Authorization=[REDACTED]");
-        assertThat(json.has("api_key")).isFalse();
-        assertThat(json.has("X-Api-Key")).isFalse();
-        assertThat(json.path("session_id").stringValue()).isEqualTo("safe-session");
+                .isEqualTo("credential form, Authorization=[REDACTED]");
     }
 
     @Test
