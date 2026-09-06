@@ -11,7 +11,8 @@ governed_agent_fail() {
 
 governed_agent_preflight() {
   local agent_path="${1:-}" extension_path="${2:-${REFERENCE_OTEL_AGENT_EXTENSION:-}}"
-  local actual_digest
+  local jacoco_path="${3:-${REFERENCE_JACOCO_AGENT:-}}" actual_digest
+  local policy_arguments=()
   [[ -n "$agent_path" ]] || {
     governed_agent_fail "REFERENCE_OTEL_JAVAAGENT is required"
     return
@@ -46,25 +47,23 @@ governed_agent_preflight() {
     governed_agent_fail "Agent extension SHA-256 mismatch for $extension_path"
     return
   }
-  [[ "${REFERENCE_JAVA_TOOL_OPTIONS:-}" != *opentelemetry-javaagent* ]] || {
-    governed_agent_fail "REFERENCE_JAVA_TOOL_OPTIONS must not attach another OpenTelemetry Agent"
-    return
-  }
   [[ -n "${REFERENCE_OTLP_TRACES_ENDPOINT:-}" ]] || {
     governed_agent_fail "REFERENCE_OTLP_TRACES_ENDPOINT is required"
     return
   }
-  case "$REFERENCE_OTLP_TRACES_ENDPOINT" in
-    http://*/v1/traces|https://*/v1/traces) ;;
-    *)
-      governed_agent_fail "Trace endpoint must be an explicit HTTP OTLP /v1/traces URL"
-      return
-      ;;
-  esac
-  [[ "$REFERENCE_OTLP_TRACES_ENDPOINT" != *://*@* ]] || {
-    governed_agent_fail "Trace endpoint must not contain userinfo credentials"
+  policy_arguments=(
+    --endpoint "$REFERENCE_OTLP_TRACES_ENDPOINT"
+    --jacoco-sha256 "$JACOCO_AGENT_SHA256"
+    --option-env "JAVA_TOOL_OPTIONS=${JAVA_TOOL_OPTIONS:-}"
+    --option-env "REFERENCE_JAVA_TOOL_OPTIONS=${REFERENCE_JAVA_TOOL_OPTIONS:-}"
+    --option-env "_JAVA_OPTIONS=${_JAVA_OPTIONS:-}"
+    --option-env "JDK_JAVA_OPTIONS=${JDK_JAVA_OPTIONS:-}"
+  )
+  if [[ -n "$jacoco_path" ]]; then policy_arguments+=(--jacoco-agent "$jacoco_path"); fi
+  if ! python3 "$GOVERNED_OBSERVABILITY_DIR/runtime_policy.py" "${policy_arguments[@]}"; then
+    governed_agent_fail "runtime policy rejected the launch"
     return
-  }
+  fi
   printf 'Governed OpenTelemetry preflight: PASS (agent=%s; api=%s; agentSha256=%s; extensionSha256=%s)\n' \
     "$OTEL_JAVAAGENT_VERSION" "$OTEL_API_VERSION" "$OTEL_JAVAAGENT_SHA256" \
     "$GOVERNED_AGENT_EXTENSION_SHA256"
@@ -76,6 +75,7 @@ governed_agent_java_options() {
   printf '%s' \
     "-javaagent:$runtime_agent_path" \
     " -Dotel.javaagent.extensions=$runtime_extension_path" \
+    " -javaagent:$runtime_extension_path" \
     " -Dotel.service.name=$service_name" \
     " -Dotel.propagators=tracecontext" \
     " -Dotel.traces.exporter=otlp" \
@@ -83,6 +83,7 @@ governed_agent_java_options() {
     " -Dotel.exporter.otlp.traces.endpoint=$REFERENCE_OTLP_TRACES_ENDPOINT" \
     " -Dotel.logs.exporter=none" \
     " -Dotel.metrics.exporter=none" \
+    " -Dotel.resource.disabled.keys=process.command_args,process.command_line" \
     " -Dotel.traces.sampler=parentbased_always_on" \
     " -Dotel.bsp.max.queue.size=512" \
     " -Dotel.bsp.max.export.batch.size=128" \

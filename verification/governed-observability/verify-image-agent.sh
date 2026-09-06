@@ -23,8 +23,9 @@ APP_STARTED=0
 [[ -f "$JACOCO_AGENT" ]] || { echo "MODUVERA_JACOCO_AGENT must identify the JaCoCo runtime Agent" >&2; exit 64; }
 REFERENCE_OTEL_JAVAAGENT="$AGENT"
 REFERENCE_OTEL_AGENT_EXTENSION="$EXTENSION"
+REFERENCE_JACOCO_AGENT="$JACOCO_AGENT"
 REFERENCE_JAVA_TOOL_OPTIONS=""
-governed_agent_preflight "$AGENT" "$EXTENSION"
+governed_agent_preflight "$AGENT" "$EXTENSION" "$JACOCO_AGENT"
 
 cleanup() {
   local primary_status=$? cleanup_status=0
@@ -101,6 +102,8 @@ http_status="$(curl --silent --output /dev/null --write-out '%{http_code}' --max
 docker logs "$APP_CONTAINER" > "$EVIDENCE_DIR/image-container.log" 2>&1
 grep -Fq 'Governed OpenTelemetry Agent extension: ACTIVE' "$EVIDENCE_DIR/image-container.log" \
   || { echo "governed Agent extension did not report active" >&2; exit 1; }
+grep -Fq 'Governed OpenTelemetry Agent extension handshake: PASS' "$EVIDENCE_DIR/image-container.log" \
+  || { echo "governed Agent extension handshake did not pass" >&2; exit 1; }
 docker stop --time 15 "$APP_CONTAINER" >/dev/null
 docker cp "$APP_CONTAINER:/tmp/governed-jacoco.exec" "$EVIDENCE_DIR/image-jacoco.exec" >/dev/null
 [[ -s "$EVIDENCE_DIR/image-jacoco.exec" ]] || { echo "JaCoCo Agent produced no execution data" >&2; exit 1; }

@@ -8,8 +8,9 @@ public final class GovernedAgentExtension implements AutoConfigurationCustomizer
 
     @Override
     public void customize(AutoConfigurationCustomizer autoConfiguration) {
-        System.err.println("Governed OpenTelemetry Agent extension: ACTIVE");
         autoConfiguration.addSpanExporterCustomizer(
                 (delegate, ignoredConfiguration) -> new QuerySanitizingSpanExporter(delegate));
+        System.setProperty(GovernedAgentRuntimeGuard.ACTIVE_PROPERTY, Boolean.TRUE.toString());
+        System.err.println("Governed OpenTelemetry Agent extension: ACTIVE");
     }
 }

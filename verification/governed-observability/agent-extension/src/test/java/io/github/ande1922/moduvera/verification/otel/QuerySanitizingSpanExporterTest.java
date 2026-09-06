@@ -114,6 +114,8 @@ class QuerySanitizingSpanExporterTest {
         AttributeKey<String> exceptionMessage = AttributeKey.stringKey("exception.message");
         AttributeKey<String> exceptionStacktrace = AttributeKey.stringKey("exception.stacktrace");
         AttributeKey<String> authorization = AttributeKey.stringKey("http.request.header.authorization");
+        AttributeKey<String> userAgent = AttributeKey.stringKey("user_agent.original");
+        AttributeKey<String> legacyUserAgent = AttributeKey.stringKey("http.user_agent");
         EventData exception = EventData.create(
                 3L,
                 "exception",
@@ -121,6 +123,8 @@ class QuerySanitizingSpanExporterTest {
                         .put(exceptionMessage, "query=secret")
                         .put(exceptionStacktrace, "SELECT secret")
                         .put(authorization, "Bearer secret")
+                        .put(userAgent, "sensitive-agent")
+                        .put(legacyUserAgent, "legacy-sensitive-agent")
                         .put(SAFE, "retained")
                         .build());
         SpanData source = span(
@@ -144,6 +148,8 @@ class QuerySanitizingSpanExporterTest {
             assertThat(eventAttributes.get(exceptionMessage)).isNull();
             assertThat(eventAttributes.get(exceptionStacktrace)).isNull();
             assertThat(eventAttributes.get(authorization)).isNull();
+            assertThat(eventAttributes.get(userAgent)).isNull();
+            assertThat(eventAttributes.get(legacyUserAgent)).isNull();
             assertThat(eventAttributes.get(SAFE)).isEqualTo("retained");
         }
     }

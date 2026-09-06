@@ -237,8 +237,10 @@ start_order() {
     "SERVER_PORT=$ORDER_PORT" "ORDER_DATABASE_URL=jdbc:postgresql://localhost:$POSTGRES_PORT/orders" \
     ORDER_DATABASE_USERNAME=orders ORDER_DATABASE_PASSWORD=order-reference \
     "IDENTITY_ISSUER_URI=http://localhost:$IDENTITY_PORT" "IDENTITY_JWKS_URI=http://localhost:$IDENTITY_PORT/oauth2/jwks" \
-    "IDENTITY_BASE_URL=http://localhost:$IDENTITY_PORT" ORDER_SERVICE_ID=order-service ORDER_SERVICE_SECRET=order-secret \
-    "CATALOG_BASE_URL=http://localhost:$CATALOG_PORT" MODUVERA_IDENTIFIER_WORKER_ID=1 \
+    "IDENTITY_BASE_URL=${REFERENCE_ORDER_IDENTITY_BASE_URL:-http://localhost:$IDENTITY_PORT}" \
+    ORDER_SERVICE_ID=order-service ORDER_SERVICE_SECRET=order-secret \
+    "CATALOG_BASE_URL=${REFERENCE_ORDER_CATALOG_BASE_URL:-http://localhost:$CATALOG_PORT}" \
+    MODUVERA_IDENTIFIER_WORKER_ID=1 \
     "${COMMON_KAFKA[@]}" "${DISPOSABLE_DATABASE_MIGRATION[@]}"
   wait_http order "http://localhost:$ORDER_PORT/actuator/health"
 }
@@ -298,6 +300,15 @@ start_app gateway apps/gateway-app/target/gateway-app-0.1.0-SNAPSHOT.jar \
 wait_http gateway "http://localhost:$GATEWAY_PORT/actuator/health"
 
 seed
+if [[ "$REFERENCE_GOVERNED_OBSERVABILITY" == "1" && -n "${REFERENCE_GOVERNED_PROBE_READY:-}" ]]; then
+  : > "$REFERENCE_GOVERNED_PROBE_READY"
+  echo "Governed reference probe ready before acceptance traffic"
+  deadline=$((SECONDS + HEALTH_TIMEOUT_SECONDS))
+  until [[ -f "${REFERENCE_GOVERNED_PROBE_RELEASE:-}" ]]; do
+    (( SECONDS < deadline )) || { echo "Governed reference probe release timed out" >&2; exit 1; }
+    sleep 0.1
+  done
+fi
 REFERENCE_TOPOLOGY="$REFERENCE_TOPOLOGY_NAME" REFERENCE_GATEWAY_BASE="http://localhost:$GATEWAY_PORT" \
   UV_CACHE_DIR="${UV_CACHE_DIR:-$RUN_DIR/uv-cache}" \
   uv run --project "$ACCEPTANCE_DIR" pytest -q -s \

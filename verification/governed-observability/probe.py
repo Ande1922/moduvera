@@ -21,6 +21,8 @@ UNSAMPLED_TRACE_ID = "33333333333333333333333333333333"
 UNSAMPLED_PARENT_ID = "4444444444444444"
 ORDER_TRACE_ID = "55555555555555555555555555555555"
 ORDER_PARENT_ID = "6666666666666666"
+CACHE_TRACE_ID = "99999999999999999999999999999999"
+CACHE_PARENT_ID = "aaaaaaaaaaaaaaaa"
 OUTAGE_TRACE_ID = "77777777777777777777777777777777"
 OUTAGE_PARENT_ID = "8888888888888888"
 
@@ -78,7 +80,8 @@ def create_order(base: str, token: str, traceparent: str) -> tuple[str, float]:
         },
     )
     duration = time.monotonic() - started
-    require_status(status, 201, "create order")
+    if status != 201:
+        raise AssertionError(f"create order: expected HTTP 201, got {status}, response={body!r}")
     order_id = body.get("orderId", "")
     if not isinstance(order_id, str) or not order_id.isdigit():
         raise AssertionError("create order returned an invalid identifier")
@@ -104,6 +107,34 @@ def read_records(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+
+
+def exactly_one(spans: list[dict[str, Any]], label: str, predicate: Any) -> dict[str, Any]:
+    matches = [span for span in spans if predicate(span)]
+    if len(matches) != 1:
+        raise AssertionError(f"{label}: expected exactly one span, got {len(matches)}")
+    return matches[0]
+
+
+def causally_follows(child: dict[str, Any], parent: dict[str, Any]) -> bool:
+    if child.get("traceId") == parent.get("traceId") and child.get("parentSpanId") == parent.get("spanId"):
+        return True
+    return any(
+        link.get("traceId") == parent.get("traceId") and link.get("spanId") == parent.get("spanId")
+        for link in child.get("links", [])
+    )
+
+
+def kafka_records(path: Path) -> list[dict[str, str]]:
+    records: list[dict[str, str]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        parts = line.split("\t", 2)
+        if len(parts) < 2:
+            continue
+        header_text, key = parts[0], parts[1]
+        traceparent = re.search(r"traceparent:([^,\t]+)", header_text)
+        records.append({"key": key, "traceparent": traceparent.group(1) if traceparent else ""})
+    return records
 
 
 def observed_after(path: Path, count: int, expected_path: str) -> dict[str, Any]:
@@ -145,6 +176,7 @@ def wrong_login(
         body["username"] = sentinels["payload"]
         body["password"] = sentinels["credential"]
         headers["X-Governed-Sensitive"] = sentinels["header"]
+        headers["User-Agent"] = sentinels["header"]
         path += "?probe=" + urllib.parse.quote(sentinels["query"])
     status, _, _ = request(base, "POST", path, body, headers)
     require_status(status, 401, "wrong login")
@@ -178,6 +210,8 @@ def traffic(args: argparse.Namespace) -> None:
 
     token = login(base)
     before_order = len(read_records(args.order_headers))
+    before_identity = len(read_records(args.identity_headers))
+    before_catalog = len(read_records(args.catalog_headers))
     sampled_order, sampled_duration = create_order(
         base,
         token,
@@ -186,6 +220,49 @@ def traffic(args: argparse.Namespace) -> None:
     sampled_header = observed_after(args.order_headers, before_order, "/v1/orders")
     validate_outbound(sampled_header, ORDER_TRACE_ID, "01")
     sampled_status = await_terminal(base, token, sampled_order)
+    identity_after_first = read_records(args.identity_headers)[before_identity:]
+    first_token_calls = [
+        record for record in identity_after_first if record.get("path") == "/internal/api/v1/service-token"
+    ]
+    first_catalog_calls = [
+        record for record in read_records(args.catalog_headers)[before_catalog:]
+        if record.get("path") == "/internal/api/v1/catalog/products/100"
+    ]
+    if len(first_token_calls) != 1 or len(first_catalog_calls) != 1:
+        raise AssertionError(
+            f"cold token/catalog calls were not exactly 1/1: {len(first_token_calls)}/{len(first_catalog_calls)}"
+        )
+    validate_outbound(first_token_calls[0], ORDER_TRACE_ID, "01")
+    validate_outbound(first_catalog_calls[0], ORDER_TRACE_ID, "01")
+    if first_catalog_calls[0].get("correlationId") != "governed-agent-55555555":
+        raise AssertionError("first Catalog call did not preserve its correlation ID")
+
+    before_order = len(read_records(args.order_headers))
+    before_identity = len(read_records(args.identity_headers))
+    before_catalog = len(read_records(args.catalog_headers))
+    cache_order, cache_duration = create_order(
+        base,
+        token,
+        f"00-{CACHE_TRACE_ID}-{CACHE_PARENT_ID}-01",
+    )
+    cache_header = observed_after(args.order_headers, before_order, "/v1/orders")
+    validate_outbound(cache_header, CACHE_TRACE_ID, "01")
+    cache_status = await_terminal(base, token, cache_order)
+    cache_token_calls = [
+        record for record in read_records(args.identity_headers)[before_identity:]
+        if record.get("path") == "/internal/api/v1/service-token"
+    ]
+    cache_catalog_calls = [
+        record for record in read_records(args.catalog_headers)[before_catalog:]
+        if record.get("path") == "/internal/api/v1/catalog/products/100"
+    ]
+    if cache_token_calls or len(cache_catalog_calls) != 1:
+        raise AssertionError(
+            f"cache hit token/catalog calls were not exactly 0/1: {len(cache_token_calls)}/{len(cache_catalog_calls)}"
+        )
+    validate_outbound(cache_catalog_calls[0], CACHE_TRACE_ID, "01")
+    if cache_catalog_calls[0].get("correlationId") != "governed-agent-99999999":
+        raise AssertionError("cache-hit Catalog call did not preserve its independent correlation ID")
 
     before_order = len(read_records(args.order_headers))
     unsampled_order, unsampled_duration = create_order(
@@ -211,6 +288,21 @@ def traffic(args: argparse.Namespace) -> None:
             "status": sampled_status,
             "httpSeconds": sampled_duration,
             "outboundTraceparent": sampled_header["traceparent"],
+        },
+        "cacheHitOrder": {
+            "id": cache_order,
+            "status": cache_status,
+            "httpSeconds": cache_duration,
+            "correlationId": "governed-agent-99999999",
+            "outboundTraceparent": cache_header["traceparent"],
+            "identityTokenNetworkCalls": 0,
+            "catalogNetworkCalls": 1,
+        },
+        "coldCacheOrder": {
+            "id": sampled_order,
+            "correlationId": "governed-agent-55555555",
+            "identityTokenNetworkCalls": 1,
+            "catalogNetworkCalls": 1,
         },
         "unsampledOrder": {
             "id": unsampled_order,
@@ -257,6 +349,14 @@ def analyze(args: argparse.Namespace) -> None:
     required_services = {"gateway", "identity", "catalog", "order", "inventory"}
     if not required_services.issubset(resources):
         raise AssertionError(f"actual Agent spans are missing services: {sorted(required_services - resources)}")
+    forbidden_resource_keys = {"process.command_args", "process.command_line"}
+    if any(forbidden_resource_keys.intersection(span.get("resource", {})) for span in spans):
+        raise AssertionError("automatic telemetry exported raw process command-line resource attributes")
+    if any(
+        not {"service.name", "telemetry.sdk.name", "telemetry.sdk.version"}.issubset(span.get("resource", {}))
+        for span in spans
+    ):
+        raise AssertionError("resource filtering removed required service or telemetry SDK identity")
 
     valid_spans = [span for span in spans if span.get("traceId") == VALID_TRACE_ID]
     if not any(
@@ -299,11 +399,136 @@ def analyze(args: argparse.Namespace) -> None:
     if any(span.get("traceId") == UNSAMPLED_TRACE_ID for span in spans):
         raise AssertionError("valid unsampled upstream unexpectedly exported spans")
 
-    kinds = {span.get("kind") for span in spans}
-    if "PRODUCER" not in kinds or "CONSUMER" not in kinds:
-        raise AssertionError(f"real Kafka path is missing Agent producer/consumer spans: {sorted(kinds)}")
-    if not any("kafka" in span.get("scope", {}).get("name", "") for span in spans):
-        raise AssertionError("Kafka spans do not identify an Agent instrumentation owner")
+    sampled_order_id = traffic_result["sampledOrder"]["id"]
+    gateway_server = exactly_one(
+        order_spans,
+        "sampled Gateway order server",
+        lambda span: span.get("kind") == "SERVER"
+        and span.get("resource", {}).get("service.name") == "gateway"
+        and span.get("attributes", {}).get("http.request.method") == "POST",
+    )
+    gateway_client = exactly_one(
+        order_spans,
+        "sampled Gateway to Order client",
+        lambda span: span.get("kind") == "CLIENT"
+        and span.get("resource", {}).get("service.name") == "gateway"
+        and span.get("attributes", {}).get("http.request.method") == "POST"
+        and span.get("attributes", {}).get("url.full", "").endswith("/v1/orders"),
+    )
+    order_server = exactly_one(
+        order_spans,
+        "sampled Order server",
+        lambda span: span.get("kind") == "SERVER"
+        and span.get("resource", {}).get("service.name") == "order"
+        and span.get("attributes", {}).get("http.route") == "/v1/orders",
+    )
+    if not causally_follows(gateway_client, gateway_server) or not causally_follows(order_server, gateway_client):
+        raise AssertionError("sampled Gateway to Order HTTP spans are not causally connected")
+    identity_client = exactly_one(
+        order_spans,
+        "cold-cache Order to Identity client",
+        lambda span: span.get("kind") == "CLIENT"
+        and span.get("resource", {}).get("service.name") == "order"
+        and span.get("attributes", {}).get("url.full", "").endswith("/internal/api/v1/service-token"),
+    )
+    identity_server = exactly_one(
+        order_spans,
+        "cold-cache Identity token server",
+        lambda span: span.get("kind") == "SERVER"
+        and span.get("resource", {}).get("service.name") == "identity"
+        and span.get("attributes", {}).get("http.route") == "/internal/api/v1/service-token",
+    )
+    catalog_client = exactly_one(
+        order_spans,
+        "sampled Order to Catalog client",
+        lambda span: span.get("kind") == "CLIENT"
+        and span.get("resource", {}).get("service.name") == "order"
+        and "/internal/api/v1/catalog/products/100" in span.get("attributes", {}).get("url.full", ""),
+    )
+    catalog_server = exactly_one(
+        order_spans,
+        "sampled Catalog server",
+        lambda span: span.get("kind") == "SERVER"
+        and span.get("resource", {}).get("service.name") == "catalog"
+        and span.get("attributes", {}).get("http.route") == "/internal/api/v1/catalog/products/{productId}",
+    )
+    for label, child, parent in (
+        ("Order to Identity", identity_client, order_server),
+        ("Identity server", identity_server, identity_client),
+        ("Order to Catalog", catalog_client, order_server),
+        ("Catalog server", catalog_server, catalog_client),
+    ):
+        if not causally_follows(child, parent):
+            raise AssertionError(f"{label} span is not causally connected to the sampled operation")
+
+    reserve_producer = exactly_one(
+        spans,
+        "sampled reserve producer",
+        lambda span: span.get("kind") == "PRODUCER"
+        and span.get("resource", {}).get("service.name") == "order"
+        and span.get("attributes", {}).get("messaging.kafka.message.key") == sampled_order_id,
+    )
+    inventory_consumers = [
+        span for span in spans
+        if span.get("kind") == "CONSUMER"
+        and span.get("resource", {}).get("service.name") == "inventory"
+        and causally_follows(span, reserve_producer)
+    ]
+    if len(inventory_consumers) != 1:
+        raise AssertionError(f"sampled reserve consumer count is {len(inventory_consumers)}, expected 1")
+    inventory_consumer = inventory_consumers[0]
+    result_producer = exactly_one(
+        spans,
+        "sampled inventory result producer",
+        lambda span: span.get("kind") == "PRODUCER"
+        and span.get("resource", {}).get("service.name") == "inventory"
+        and span.get("attributes", {}).get("messaging.kafka.message.key") == f"tenant-a:{sampled_order_id}",
+    )
+    if not causally_follows(result_producer, inventory_consumer):
+        raise AssertionError("sampled result producer is not causally connected to the reserve consumer")
+    order_consumers = [
+        span for span in spans
+        if span.get("kind") == "CONSUMER"
+        and span.get("resource", {}).get("service.name") == "order"
+        and causally_follows(span, result_producer)
+    ]
+    if len(order_consumers) != 1:
+        raise AssertionError(f"sampled result consumer count is {len(order_consumers)}, expected 1")
+    operation_spans = [
+        gateway_server,
+        gateway_client,
+        order_server,
+        identity_client,
+        identity_server,
+        catalog_client,
+        catalog_server,
+        reserve_producer,
+        inventory_consumer,
+        result_producer,
+        order_consumers[0],
+    ]
+    if any(not span.get("scope", {}).get("name", "").startswith("io.opentelemetry.") for span in operation_spans):
+        raise AssertionError("sampled operation includes a span without an Agent instrumentation owner")
+
+    cache_spans = [span for span in spans if span.get("traceId") == CACHE_TRACE_ID]
+    exactly_one(
+        cache_spans,
+        "cache-hit Order to Catalog client",
+        lambda span: span.get("kind") == "CLIENT"
+        and span.get("resource", {}).get("service.name") == "order"
+        and "/internal/api/v1/catalog/products/100" in span.get("attributes", {}).get("url.full", ""),
+    )
+    exactly_one(
+        cache_spans,
+        "cache-hit Catalog server",
+        lambda span: span.get("kind") == "SERVER"
+        and span.get("resource", {}).get("service.name") == "catalog"
+        and span.get("attributes", {}).get("http.route") == "/internal/api/v1/catalog/products/{productId}",
+    )
+    if any(span.get("attributes", {}).get("http.route") == "/internal/api/v1/service-token" for span in cache_spans):
+        raise AssertionError("cache-hit trace unexpectedly called the Identity service-token endpoint")
+
+    kinds = {span.get("kind") for span in operation_spans}
     forbidden_keys = {"db.statement", "db.query.text", "url.query"}
     observed_forbidden = sorted(
         {
@@ -328,13 +553,29 @@ def analyze(args: argparse.Namespace) -> None:
     if query_bearing_urls:
         raise AssertionError("automatic telemetry emitted a URL containing a query")
 
-    kafka_text = args.kafka_headers.read_text(encoding="utf-8")
-    if not re.search(r"traceparent[^\n]*00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}", kafka_text):
-        raise AssertionError("actual Kafka records do not carry a valid traceparent header")
+    records = kafka_records(args.kafka_records)
+    sampled_reserve_records = [record for record in records if record["key"] == sampled_order_id]
+    sampled_result_records = [record for record in records if record["key"] == f"tenant-a:{sampled_order_id}"]
+    if len(sampled_reserve_records) != 1 or len(sampled_result_records) != 1:
+        raise AssertionError("sampled operation Kafka keys were not observed exactly once")
+    for record in sampled_reserve_records + sampled_result_records:
+        match = TRACEPARENT.fullmatch(record["traceparent"])
+        if not match or match.group(1) != ORDER_TRACE_ID:
+            raise AssertionError("sampled operation Kafka record did not preserve its actual Trace")
     if outage_result.get("status") not in {"CONFIRMED", "REJECTED"}:
         raise AssertionError("receiver-outage order did not retain its business terminal result")
-    if args.database.read_text(encoding="utf-8").strip() != "1|PUBLISHED|0":
-        raise AssertionError("receiver-outage database/outbox evidence is not exactly 1|PUBLISHED|0")
+    outage_order_id = outage_result["orderId"]
+    outage_reserve_records = [record for record in records if record["key"] == outage_order_id]
+    outage_result_records = [record for record in records if record["key"] == f"tenant-a:{outage_order_id}"]
+    if len(outage_reserve_records) != 1 or len(outage_result_records) != 1:
+        raise AssertionError("receiver-outage Kafka records were not observed exactly once in the controlled run")
+    expected_order_database = f"1|{outage_result['status']}|1|PUBLISHED|0|1"
+    if args.outage_order_database.read_text(encoding="utf-8").strip() != expected_order_database:
+        raise AssertionError("receiver-outage Order evidence does not show one effective controlled outcome")
+    inventory_result = "RESERVED" if outage_result["status"] == "CONFIRMED" else "REJECTED"
+    expected_inventory_database = f"1|{inventory_result}|1|1|PUBLISHED|0"
+    if args.outage_inventory_database.read_text(encoding="utf-8").strip() != expected_inventory_database:
+        raise AssertionError("receiver-outage Inventory evidence does not show one effective controlled outcome")
 
     owners: dict[str, int] = {}
     for span in spans:
@@ -344,12 +585,18 @@ def analyze(args: argparse.Namespace) -> None:
         "agentOwnedServices": sorted(service for service in resources if service),
         "exportedSpanCount": len(spans),
         "instrumentationOwners": dict(sorted(owners.items())),
+        "sampledOperationAgentSpanCount": len(operation_spans),
+        "sampledOperationKafkaRecords": len(sampled_reserve_records) + len(sampled_result_records),
         "kinds": sorted(kind for kind in kinds if kind),
         "otlpRequests": status["requests"],
         "payloadBytesScanned": status["payloadBytesScanned"],
         "sensitiveSentinelMatches": status["sensitiveMatches"],
         "queryBearingGatewayClient": traffic_result["queryBearingGatewayClient"],
         "sampledOrder": traffic_result["sampledOrder"],
+        "cacheProof": {
+            "cold": traffic_result["coldCacheOrder"],
+            "hit": traffic_result["cacheHitOrder"],
+        },
         "unsampledOrder": traffic_result["unsampledOrder"],
         "receiverOutageOrder": outage_result,
     }
@@ -363,6 +610,7 @@ def parser() -> argparse.ArgumentParser:
     traffic_command.add_argument("--base", required=True)
     traffic_command.add_argument("--identity-headers", type=Path, required=True)
     traffic_command.add_argument("--order-headers", type=Path, required=True)
+    traffic_command.add_argument("--catalog-headers", type=Path, required=True)
     traffic_command.add_argument("--sentinels", type=Path, required=True)
     traffic_command.add_argument("--output", type=Path, required=True)
     traffic_command.set_defaults(run=traffic)
@@ -375,8 +623,9 @@ def parser() -> argparse.ArgumentParser:
     analyze_command.add_argument("--spans", type=Path, required=True)
     analyze_command.add_argument("--traffic", type=Path, required=True)
     analyze_command.add_argument("--outage", type=Path, required=True)
-    analyze_command.add_argument("--kafka-headers", type=Path, required=True)
-    analyze_command.add_argument("--database", type=Path, required=True)
+    analyze_command.add_argument("--kafka-records", type=Path, required=True)
+    analyze_command.add_argument("--outage-order-database", type=Path, required=True)
+    analyze_command.add_argument("--outage-inventory-database", type=Path, required=True)
     analyze_command.add_argument("--output", type=Path, required=True)
     analyze_command.set_defaults(run=analyze)
     return root

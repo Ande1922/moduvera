@@ -5,11 +5,12 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 OBSERVABILITY_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
 AGENT="${1:-}"
 EXTENSION="${2:-}"
+JACOCO="${3:-}"
 TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/moduvera-otel-preflight.XXXXXX")"
 trap 'rm -rf "$TEST_DIR"' EXIT
 
-[[ -f "$AGENT" && -f "$EXTENSION" ]] \
-  || { echo "usage: test-governed-preflight.sh <verified-agent> <verified-extension>" >&2; exit 64; }
+[[ -f "$AGENT" && -f "$EXTENSION" && -f "$JACOCO" ]] \
+  || { echo "usage: test-governed-preflight.sh <verified-agent> <verified-extension> <verified-jacoco>" >&2; exit 64; }
 printf 'not the pinned Agent\n' > "$TEST_DIR/bad-agent.jar"
 printf 'not the governed extension\n' > "$TEST_DIR/bad-extension.jar"
 
@@ -19,9 +20,10 @@ run_preflight() {
   shift 3
   env REFERENCE_OTEL_JAVAAGENT="$agent_path" \
     REFERENCE_OTEL_AGENT_EXTENSION="$extension_path" \
+    REFERENCE_JACOCO_AGENT="$JACOCO" \
     REFERENCE_OTLP_TRACES_ENDPOINT="$trace_endpoint" \
-    "$@" bash -c 'source "$1"; governed_agent_preflight "$2" "$3"' \
-    _ "$OBSERVABILITY_DIR/agent-runtime.sh" "$agent_path" "$extension_path" >"$output" 2>&1
+    "$@" bash -c 'source "$1"; governed_agent_preflight "$2" "$3" "$4"' \
+    _ "$OBSERVABILITY_DIR/agent-runtime.sh" "$agent_path" "$extension_path" "$JACOCO" >"$output" 2>&1
 }
 
 run_preflight "$AGENT" "$EXTENSION" "$TEST_DIR/valid.out"
@@ -68,12 +70,60 @@ set -e
 }
 grep -Fq 'Trace endpoint must not contain userinfo credentials' "$TEST_DIR/endpoint-userinfo.out"
 
+cp "$AGENT" "$TEST_DIR/renamed-agent.jar"
+for option_name in JAVA_TOOL_OPTIONS REFERENCE_JAVA_TOOL_OPTIONS _JAVA_OPTIONS JDK_JAVA_OPTIONS; do
+  set +e
+  run_preflight "$AGENT" "$EXTENSION" "$TEST_DIR/$option_name.out" \
+    "$option_name=-javaagent:$TEST_DIR/renamed-agent.jar"
+  status=$?
+  set -e
+  [[ $status -eq 78 ]] || {
+    echo "$option_name renamed Agent preflight returned $status, expected 78" >&2
+    exit 1
+  }
+  grep -Fq 'unapproved pre-existing Java Agent' "$TEST_DIR/$option_name.out"
+done
+
+run_preflight "$AGENT" "$EXTENSION" "$TEST_DIR/jacoco.out" \
+  "JAVA_TOOL_OPTIONS=-javaagent:$JACOCO=destfile=$TEST_DIR/jacoco.exec"
+
 set +e
-run_preflight "$AGENT" "$EXTENSION" "$TEST_DIR/duplicate.out" \
-  REFERENCE_JAVA_TOOL_OPTIONS=-javaagent:/tmp/opentelemetry-javaagent.jar
+run_preflight "$AGENT" "$EXTENSION" "$TEST_DIR/forged-handshake.out" \
+  'JAVA_TOOL_OPTIONS=-Dio.github.ande1922.moduvera.otel.extension.active=true'
 status=$?
 set -e
-[[ $status -eq 78 ]] || { echo "duplicate Agent preflight returned $status, expected 78" >&2; exit 1; }
-grep -Fq 'must not attach another OpenTelemetry Agent' "$TEST_DIR/duplicate.out"
+[[ $status -eq 78 ]] || {
+  echo "forged handshake marker preflight returned $status, expected 78" >&2
+  exit 1
+}
+grep -Fq 'must not predefine the governed extension handshake marker' "$TEST_DIR/forged-handshake.out"
 
-echo "Governed Agent launch preflight: PASS (verified Agent/extension, missing, bad digest, duplicate attachment)"
+set +e
+TEST_OTLP_TRACES_ENDPOINT='http://127.0.0.1 -Dotel.traces.exporter=none/v1/traces' \
+  run_preflight "$AGENT" "$EXTENSION" "$TEST_DIR/endpoint-injection.out"
+status=$?
+set -e
+[[ $status -eq 78 ]] || {
+  echo "endpoint option injection preflight returned $status, expected 78" >&2
+  exit 1
+}
+grep -Fq 'must not contain whitespace or control characters' "$TEST_DIR/endpoint-injection.out"
+
+for invalid_endpoint in \
+  'ftp://127.0.0.1/v1/traces' \
+  'http:///v1/traces' \
+  'http://127.0.0.1/v1/traces?token=secret' \
+  'http://127.0.0.1/v1/traces#fragment' \
+  'http://127.0.0.1/v1/traces/extra'; do
+  set +e
+  TEST_OTLP_TRACES_ENDPOINT="$invalid_endpoint" \
+    run_preflight "$AGENT" "$EXTENSION" "$TEST_DIR/invalid-endpoint.out"
+  status=$?
+  set -e
+  [[ $status -eq 78 ]] || {
+    echo "invalid endpoint '$invalid_endpoint' returned $status, expected 78" >&2
+    exit 1
+  }
+done
+
+echo "Governed Agent launch preflight: PASS (digests, strict endpoint, all JVM option envs, verified JaCoCo)"

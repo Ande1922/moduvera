@@ -25,6 +25,7 @@ HOP_BY_HOP = {
     "transfer-encoding",
     "upgrade",
 }
+MAX_REQUEST_BODY_BYTES = 1024 * 1024
 
 
 class Recorder:
@@ -35,7 +36,14 @@ class Recorder:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text("", encoding="utf-8")
 
-    def record(self, method: str, path: str, traceparent: str | None, tracestate: str | None) -> None:
+    def record(
+        self,
+        method: str,
+        path: str,
+        traceparent: str | None,
+        tracestate: str | None,
+        correlation_id: str | None,
+    ) -> None:
         target = urlsplit(path)
         value = {
             "proxy": self.name,
@@ -44,6 +52,7 @@ class Recorder:
             "queryPresent": bool(target.query),
             "traceparent": traceparent,
             "tracestate": tracestate,
+            "correlationId": correlation_id,
             "observedUnixNano": time.time_ns(),
         }
         with self.lock, self.output.open("a", encoding="utf-8") as stream:
@@ -54,9 +63,55 @@ def handler_type(target_host: str, target_port: int, recorder: Recorder):
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
+        def read_request_body(self) -> bytes | None:
+            transfer_encodings = self.headers.get_all("Transfer-Encoding", [])
+            content_lengths = self.headers.get_all("Content-Length", [])
+            if transfer_encodings and content_lengths:
+                raise ValueError("ambiguous request framing")
+            if not transfer_encodings:
+                if len(content_lengths) > 1 or any("," in value for value in content_lengths):
+                    raise ValueError("ambiguous content length")
+                length = int(content_lengths[0]) if content_lengths else 0
+                if length < 0:
+                    raise ValueError("negative content length")
+                if length > MAX_REQUEST_BODY_BYTES:
+                    raise ValueError("request body exceeds verification proxy limit")
+                if not length:
+                    return None
+                body = self.rfile.read(length)
+                if len(body) != length:
+                    raise ValueError("incomplete request body")
+                return body
+            if len(transfer_encodings) != 1 or transfer_encodings[0].strip().lower() != "chunked":
+                raise ValueError("unsupported transfer encoding")
+
+            body = bytearray()
+            while True:
+                size_line = self.rfile.readline(128)
+                if not size_line.endswith(b"\r\n"):
+                    raise ValueError("malformed chunk size")
+                chunk_size = int(size_line.split(b";", 1)[0], 16)
+                if chunk_size < 0:
+                    raise ValueError("negative chunk size")
+                if chunk_size == 0:
+                    while self.rfile.readline(8192) not in (b"\r\n", b""):
+                        pass
+                    return bytes(body)
+                if len(body) + chunk_size > MAX_REQUEST_BODY_BYTES:
+                    raise ValueError("request body exceeds verification proxy limit")
+                chunk = self.rfile.read(chunk_size)
+                if len(chunk) != chunk_size:
+                    raise ValueError("incomplete chunk")
+                body.extend(chunk)
+                if self.rfile.read(2) != b"\r\n":
+                    raise ValueError("malformed chunk terminator")
+
         def proxy(self) -> None:
-            length = int(self.headers.get("Content-Length", "0"))
-            body = self.rfile.read(length) if length else None
+            try:
+                body = self.read_request_body()
+            except (TypeError, ValueError):
+                self.send_error(400, "Invalid request framing")
+                return
             headers = {
                 key: value
                 for key, value in self.headers.items()
@@ -67,6 +122,7 @@ def handler_type(target_host: str, target_port: int, recorder: Recorder):
                 self.path,
                 self.headers.get("traceparent"),
                 self.headers.get("tracestate"),
+                self.headers.get("X-Correlation-Id"),
             )
             connection = http.client.HTTPConnection(target_host, target_port, timeout=15)
             try:

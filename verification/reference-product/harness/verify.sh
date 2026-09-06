@@ -14,9 +14,15 @@ case "$TOPOLOGY" in
     ;;
 esac
 
-"$HARNESS_DIR/tests/test-port-plan.sh"
-"$HARNESS_DIR/tests/test-cleanup.sh"
-"$HARNESS_DIR/tests/test-parallel-scenario.sh"
+run_harness_self_test() {
+  env -u REFERENCE_GOVERNED_OBSERVABILITY \
+    -u REFERENCE_GOVERNED_PROBE_READY -u REFERENCE_GOVERNED_PROBE_RELEASE \
+    -u REFERENCE_PORT_MANIFEST "$1"
+}
+
+run_harness_self_test "$HARNESS_DIR/tests/test-port-plan.sh"
+run_harness_self_test "$HARNESS_DIR/tests/test-cleanup.sh"
+run_harness_self_test "$HARNESS_DIR/tests/test-parallel-scenario.sh"
 
 if [[ "${REFERENCE_SKIP_BUILD:-0}" != "1" ]]; then
   "$PROJECT_ROOT/mvnw" -q clean install

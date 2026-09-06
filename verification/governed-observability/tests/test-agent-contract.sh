@@ -26,10 +26,12 @@ require_option() {
 for option in \
   '-Dotel.propagators=tracecontext' \
   '-Dotel.javaagent.extensions=' \
+  '-javaagent:$runtime_extension_path' \
   '-Dotel.traces.exporter=otlp' \
   '-Dotel.exporter.otlp.traces.protocol=http/protobuf' \
   '-Dotel.logs.exporter=none' \
   '-Dotel.metrics.exporter=none' \
+  '-Dotel.resource.disabled.keys=process.command_args,process.command_line' \
   '-Dotel.traces.sampler=parentbased_always_on' \
   '-Dotel.bsp.max.queue.size=512' \
   '-Dotel.bsp.max.export.batch.size=128' \
@@ -64,7 +66,7 @@ grep -R -i -E 'opentelemetry-sdk|micrometer-tracing|brave|zipkin' \
 for script in "$OBSERVABILITY_DIR"/*.sh "$SCRIPT_DIR"/*.sh; do bash -n "$script"; done
 python3 -c 'import ast, pathlib, sys; [ast.parse(pathlib.Path(p).read_text()) for p in sys.argv[1:]]' \
   "$OBSERVABILITY_DIR/header_proxy.py" "$OBSERVABILITY_DIR/otlp_receiver.py" \
-  "$OBSERVABILITY_DIR/probe.py"
+  "$OBSERVABILITY_DIR/probe.py" "$OBSERVABILITY_DIR/runtime_policy.py"
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s "$SCRIPT_DIR" -p 'test_*.py'
 
 echo "Governed Agent static contract: PASS"

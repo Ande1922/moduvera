@@ -26,6 +26,8 @@ final class QuerySanitizingSpanExporter implements SpanExporter {
             "error.message",
             "exception.message",
             "exception.stacktrace",
+            "http.user_agent",
+            "user_agent.original",
             "url.query");
 
     private final SpanExporter delegate;
