@@ -125,6 +125,47 @@ def causally_follows(child: dict[str, Any], parent: dict[str, Any]) -> bool:
     )
 
 
+def select_valid_upstream_http_spans(
+    spans: list[dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    gateway_server = exactly_one(
+        spans,
+        "valid-upstream Gateway server",
+        lambda span: span.get("traceId") == VALID_TRACE_ID
+        and span.get("kind") == "SERVER"
+        and span.get("resource", {}).get("service.name") == "gateway"
+        and span.get("attributes", {}).get("http.request.method") == "POST"
+        and span.get("attributes", {}).get("url.path") == "/api/identity/v1/session/login",
+    )
+    gateway_client = exactly_one(
+        spans,
+        "valid-upstream Gateway to Identity client",
+        lambda span: span.get("traceId") == VALID_TRACE_ID
+        and span.get("kind") == "CLIENT"
+        and span.get("resource", {}).get("service.name") == "gateway"
+        and span.get("attributes", {}).get("http.request.method") == "POST"
+        and urllib.parse.urlsplit(span.get("attributes", {}).get("url.full", "")).path
+        == "/v1/session/login",
+    )
+    identity_server = exactly_one(
+        spans,
+        "valid-upstream Identity server",
+        lambda span: span.get("traceId") == VALID_TRACE_ID
+        and span.get("kind") == "SERVER"
+        and span.get("resource", {}).get("service.name") == "identity"
+        and span.get("attributes", {}).get("http.request.method") == "POST"
+        and span.get("attributes", {}).get("http.route") == "/v1/session/login",
+    )
+    selected = (gateway_server, gateway_client, identity_server)
+    if gateway_server.get("parentSpanId") != VALID_PARENT_ID:
+        raise AssertionError("sampled upstream was not accepted as the Gateway server parent")
+    if any(not span.get("scope", {}).get("name", "").startswith("io.opentelemetry.") for span in selected):
+        raise AssertionError("valid-upstream HTTP path includes a span without an Agent instrumentation owner")
+    if not causally_follows(gateway_client, gateway_server) or not causally_follows(identity_server, gateway_client):
+        raise AssertionError("valid-upstream Gateway to Identity HTTP spans are not causally connected")
+    return selected
+
+
 def kafka_records(path: Path) -> list[dict[str, str]]:
     records: list[dict[str, str]] = []
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -358,21 +399,7 @@ def analyze(args: argparse.Namespace) -> None:
     ):
         raise AssertionError("resource filtering removed required service or telemetry SDK identity")
 
-    valid_spans = [span for span in spans if span.get("traceId") == VALID_TRACE_ID]
-    if not any(
-        span.get("kind") == "SERVER"
-        and span.get("parentSpanId") == VALID_PARENT_ID
-        and span.get("resource", {}).get("service.name") == "gateway"
-        for span in valid_spans
-    ):
-        raise AssertionError("sampled upstream was not accepted as the Gateway server parent")
-    if not any(span.get("kind") == "CLIENT" for span in valid_spans):
-        raise AssertionError("sampled HTTP path has no Agent-owned client span")
-    if not any(
-        span.get("kind") == "SERVER" and span.get("resource", {}).get("service.name") == "identity"
-        for span in valid_spans
-    ):
-        raise AssertionError("sampled HTTP propagation has no downstream Identity server span")
+    valid_upstream_http_spans = select_valid_upstream_http_spans(spans)
 
     query_traceparent = traffic_result["queryBearingGatewayClient"]["outboundTraceparent"]
     query_match = TRACEPARENT.fullmatch(query_traceparent)
@@ -585,6 +612,7 @@ def analyze(args: argparse.Namespace) -> None:
         "agentOwnedServices": sorted(service for service in resources if service),
         "exportedSpanCount": len(spans),
         "instrumentationOwners": dict(sorted(owners.items())),
+        "validUpstreamHttpAgentSpanCount": len(valid_upstream_http_spans),
         "sampledOperationAgentSpanCount": len(operation_spans),
         "sampledOperationKafkaRecords": len(sampled_reserve_records) + len(sampled_result_records),
         "kinds": sorted(kind for kind in kinds if kind),
