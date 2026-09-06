@@ -8,11 +8,21 @@ description: Review a Moduvera diff from an explicit fixed point on independent 
 This stage is read-only. It does not fix findings, run the quality gate, or
 create commits.
 
+## Execution profile
+
+Before dispatch, read the shared
+[Subagent execution profile](../../../docs/agents/subagent-execution-profile.md).
+Apply its reviewer settings and separate fresh contexts to both axes; keep
+the user's active main-task model and effort.
+
 ## Process
 
 1. Resolve the user-supplied comparison point and capture `git diff
    <fixed-point>...HEAD` plus `git log <fixed-point>..HEAD --oneline`. Stop on
-   an invalid ref or empty range.
+   an invalid ref or empty range. For a three-dot comparison, resolve its
+   merge base as the immutable review base. Run the shared
+   [review preflight](../../../docs/agents/delivery-standards.md#review-and-gate-evidence)
+   before dispatching either axis.
 2. Resolve the originating ticket/spec from the user, commit references, or
    `.scratch/`. Read it in full. Read `AGENTS.md`, applicable ADRs, and other
    standards sources.

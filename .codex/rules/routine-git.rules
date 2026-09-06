@@ -1,0 +1,84 @@
+# Portable repository rules. Use the tool's working directory, not git -C.
+# Scope and conflict handling: docs/agents/codex-permissions.md.
+# Prefix matching does not validate trailing arguments or repository state.
+# Commands outside these forms retain the active approval policy.
+
+prefix_rule(
+    pattern = ["git", "add", "--"],
+    decision = "allow",
+    justification = "Stage the explicit paths owned by the authorized local task.",
+    match = ["git add -- services/order docs/guide.md"],
+    not_match = ["git add -A", "git reset --hard"],
+)
+
+prefix_rule(
+    pattern = ["git", "commit", ["-m", "--message", "-F", "--file"]],
+    decision = "allow",
+    justification = "Create an ordinary local task commit after checking its staged scope.",
+    match = ["git commit -m 'fix: handle missing context'", "git commit -F commit-message.txt"],
+    not_match = ["git commit --amend", "git commit --no-verify", "git push"],
+)
+
+prefix_rule(
+    pattern = ["git", "worktree", "add", "--"],
+    decision = "allow",
+    justification = "Check out an existing local branch in a new task worktree without force.",
+    match = ["git worktree add -- ../task-worktree task-branch"],
+    not_match = ["git worktree add --force ../task-worktree task-branch", "git worktree remove ../task-worktree"],
+)
+
+prefix_rule(
+    pattern = ["git", "worktree", "add", "-b"],
+    decision = "allow",
+    justification = "Create a new local task branch and worktree without replacing an existing branch.",
+    match = ["git worktree add -b task-branch -- ../task-worktree HEAD"],
+    not_match = ["git worktree add -B task-branch ../task-worktree", "git worktree prune"],
+)
+
+prefix_rule(
+    pattern = ["git", "worktree", "add", "--detach", "--"],
+    decision = "allow",
+    justification = "Create an isolated detached worktree at the task's explicit revision.",
+    match = ["git worktree add --detach -- ../inspection-worktree HEAD"],
+    not_match = ["git worktree add --force --detach ../inspection-worktree HEAD"],
+)
+
+prefix_rule(
+    pattern = ["git", "switch", "--"],
+    decision = "allow",
+    justification = "Switch a task checkout to an existing branch while retaining Git's overwrite checks.",
+    match = ["git switch -- task-branch"],
+    not_match = ["git switch --discard-changes task-branch", "git checkout -- source.java"],
+)
+
+prefix_rule(
+    pattern = ["git", "switch", ["-c", "--create"]],
+    decision = "allow",
+    justification = "Create and check out a new local task branch without resetting an existing branch.",
+    match = ["git switch -c task-branch -- HEAD", "git switch --create task-branch -- HEAD"],
+    not_match = ["git switch -C task-branch", "git switch --force-create task-branch"],
+)
+
+prefix_rule(
+    pattern = ["git", "checkout", "-b"],
+    decision = "allow",
+    justification = "Create a new local task branch on clients using checkout syntax.",
+    match = ["git checkout -b task-branch HEAD"],
+    not_match = ["git checkout -B task-branch", "git checkout -- source.java"],
+)
+
+prefix_rule(
+    pattern = ["git", "merge", "--ff-only", "--"],
+    decision = "allow",
+    justification = "Integrate the authorized local task revision only when Git can fast-forward.",
+    match = ["git merge --ff-only -- task-branch"],
+    not_match = ["git merge task-branch", "git rebase main", "git cherry-pick task-commit"],
+)
+
+prefix_rule(
+    pattern = ["git", "fetch", "--"],
+    decision = "allow",
+    justification = "Read the task repository's configured remote without publishing local commits.",
+    match = ["git fetch -- origin"],
+    not_match = ["git push origin main", "git pull"],
+)

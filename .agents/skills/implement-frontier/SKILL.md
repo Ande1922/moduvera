@@ -23,9 +23,19 @@ frontier trigger.
   read-only. The original worker fixes only coordinator-accepted findings in
   the same worktree with an ordinary follow-up commit.
 
+Before every agent follow-up, confirm that the target still owns the same
+ticket, role, and worktree.
+
 If isolated worktrees or independent review contexts are unavailable, stop and
 report that the requested frontier guarantee cannot be provided. Do not
 simulate independence in one mutable checkout.
+
+## Execution profile
+
+Before dispatch, read the shared
+[Subagent execution profile](../../../docs/agents/subagent-execution-profile.md)
+for coordinator recommendations, explicit role settings, fresh contexts, and
+trial evidence. Keep the ownership and review boundaries above.
 
 ## Process
 
@@ -36,13 +46,15 @@ simulate independence in one mutable checkout.
    Add an edge for a clear shared first writer; stop for ticket reshaping when
    coupled tickets cannot remain independently green.
 3. Present the wave, worktrees/branches, likely touch areas, checks, conflicts,
-   and required operations. Obtain one explicit authorization for the exact
-   mutations needed; cleanup remains separate.
+   and required operations. Reuse the shared standing authorization for its
+   named local Git operations; obtain one decision only for missing mutation
+   capabilities. Cleanup remains separate.
 4. Create isolated writers only after authorization. Read the
    [worker contract](references/worker-contract.md) and give each writer a
    focused brief with repository paths rather than coordinator transcripts.
-5. Require a current commit and exact ticket verification. Run both review
-   axes against the pinned base, aggregate without merging their judgments,
+5. Require a current commit and exact ticket verification. Run the shared
+   [review preflight](../../../docs/agents/delivery-standards.md#review-and-gate-evidence),
+   then both review axes against the pinned base; aggregate their judgments separately,
    return accepted findings to the same worker, and rerun affected checks.
 6. When integration is authorized, integrate reviewed ticket commits in
    topological order. A conflict stops integration for direction. Run focused

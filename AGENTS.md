@@ -25,6 +25,15 @@ Use four-space Java indentation, `UpperCamelCase` types, `lowerCamelCase` member
 
 ## Agent skills
 
+### Routine local Git permissions
+
+Before local Git mutations, follow the repository's
+[shared Codex permissions](docs/agents/codex-permissions.md) for standing
+task authorization, portable command forms, and conflict handling. Routine
+in-scope Git work needs no repeated confirmation; preserve user changes and
+stop for a user decision on conflicts. Requests outside the list retain the
+active approval policy.
+
 ### New Business Service
 
 For requests to add a Business Service or choose its direct, message,

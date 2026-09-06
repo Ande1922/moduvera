@@ -27,6 +27,18 @@ reviewed diff is the post-cleanup diff.
 
 ## Review and gate evidence
 
+Before dispatching review or starting final Scenario verification, run
+`python3 tools/quality/review_preflight.py --base <resolved-base> --head <resolved-head>`.
+Reuse a passing result for the same immutable pair. This read-only preflight
+checks whitespace, changed Markdown links, and Skill structure using the gate's
+existing checks; it does not replace either review axis or the quality gate.
+On failure, report the failed check and return to the authorized implementer.
+
+Keep each verification command's exit code with its output. A later successful
+command or truncated output cannot establish that an earlier check passed.
+For long-running builds and Scenarios, use 30–60 second output waits after an
+initial status check; shorten them only when prompt interaction is needed.
+
 Pin Standards and Spec review to the same resolved base and head. Record that
 each axis completed, keep their findings independent, and resolve every
 accepted finding before the quality gate. The
@@ -54,7 +66,10 @@ additional authority. Treat each of these as a separate mutation capability:
 - push, publish, deploy, or change external systems;
 - update or close tracker records.
 
-Use only capabilities the user explicitly granted for the current run. Stop
+Use only capabilities explicitly granted for the current run, including the
+applicable standing authorization in
+[shared Codex permissions](codex-permissions.md#routine-local-authorization).
+Check that scope before requesting confirmation again. Stop
 at the stage boundary and report the required capability when authority is
 missing. Never infer push, tracker, integration, cleanup, or deployment
 authority from permission to implement or run tests.

@@ -26,6 +26,8 @@ REQUIRED_SKILLS = (
 DECLARED_DEPENDENCY_ROOTS = (
     "AGENTS.md",
     ".agents",
+    ".codex/config.toml",
+    ".codex/rules",
     "docs",
     "tools/agent-delivery",
     "tools/quality",
