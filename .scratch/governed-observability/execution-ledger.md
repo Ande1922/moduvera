@@ -35,7 +35,7 @@ Worker/fixer、Standards/Spec reviewer 请求 `gpt-5.6-sol` / `high` / `fork_tur
 - 07 actual base: `37029676c19a74567a54d26ee31ba80416151898`；原 writer `/root/worker07_creation_reader`，工作树与分支沿用上文预留值；已验证 01 最终提交是 base 祖先。
 - 07 implementation: `a1eb98223fa5da00e70366197fec81c350927361`；ordinary fix: `69497fdb0c4cf9270ec3bdd8da73a34c44aadc3c`。所有修复保留原 worker、ticket、role、worktree 所有权。
 - Standards `/root/review07_standards` 与 Spec `/root/review07_spec` 在 `37029676c19a74567a54d26ee31ba80416151898..69497fdb0c4cf9270ec3bdd8da73a34c44aadc3c` 均完成且 clean；记录：`/private/tmp/governed-observability-frontier-20260906/evidence/07/review-final.md`。请求 Sol/high/fresh，有效模型/effort 未暴露，记未验证。
-- `git merge --ff-only codex/governed-observability-20260906-07` 无冲突；集成后 BOM consumer、Kafka mapper 和真实 schema 联合测试 exit 0，Agent 静态契约 10 tests PASS。记录：`/private/tmp/governed-observability-frontier-20260906/evidence/final/integration-focused.json`。
+- `git merge --ff-only codex/governed-observability-20260906-07` 无冲突；集成后 BOM consumer、Kafka mapper 和真实 schema 联合测试 41 tests、exit 0，记录：`/private/tmp/governed-observability-frontier-20260906/evidence/final/integration-focused.json`；Agent 静态契约 10 tests PASS、exit 0，独立记录：`/private/tmp/governed-observability-frontier-20260906/evidence/final/agent-static.json`。
 - 两票 metadata 均 resolved，02/14 仍 ready-for-agent 且未实施；父 Spec/finding/Product Surface 状态不变。三处 worktree 保留，未合入 main、未 push/部署或清理。
 - H1 状态记录中的四个外部 Markdown 证据链接已改为字面绝对路径，避免仓库将它们作为 snapshot 内部链接校验；证据文件和历史结论保持。
 - 本次 tracker 普通提交之后固定最终 base/head，执行聚合双轴评审、Normal Gate 与最终镜像/双拓扑 Scenario。最终回执位于外部 `evidence/execution-state.json` 和交付报告；不预填未运行的 PASS，也不在通过后再写提交使其失效。
