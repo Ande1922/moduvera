@@ -45,10 +45,16 @@ public interface InboundMessageContractTck {
                 probe.expectedContract().executionActor().permissions(),
                 "the TCK fixture must prove that wire permissions are not trusted");
 
+        SerializedMessage messageWithForgedActor = withActor(valid, forgedWireActor);
+        assertEquals(
+                descriptor.creationContext(),
+                messageWithForgedActor.descriptor().creationContext(),
+                "the TCK descriptor copy must retain the explicit creation context");
+
         int before = probe.applicationInvocations().getAsInt();
         ExecutionContext previous = priorWorkerContext();
         ExecutionContextHolder.run(previous, () -> {
-            probe.deliver().accept(withActor(valid, forgedWireActor));
+            probe.deliver().accept(messageWithForgedActor);
             assertSame(previous, ExecutionContextHolder.require(),
                     "successful delivery must restore the worker's prior identity");
         });
@@ -184,7 +190,8 @@ public interface InboundMessageContractTck {
                         descriptor.correlationId(),
                         descriptor.causationId(),
                         descriptor.initiator(),
-                        descriptor.partitionKey()));
+                        descriptor.partitionKey(),
+                        descriptor.creationContext()));
     }
 
     private static SerializedMessage withContract(
@@ -208,7 +215,8 @@ public interface InboundMessageContractTck {
                         descriptor.correlationId(),
                         descriptor.causationId(),
                         descriptor.initiator(),
-                        descriptor.partitionKey()));
+                        descriptor.partitionKey(),
+                        descriptor.creationContext()));
     }
 
     private static SerializedMessage withDescriptor(

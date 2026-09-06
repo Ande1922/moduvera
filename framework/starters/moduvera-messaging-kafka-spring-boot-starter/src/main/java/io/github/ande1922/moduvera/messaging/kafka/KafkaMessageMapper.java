@@ -10,8 +10,15 @@ import io.github.ande1922.moduvera.message.MessageId;
 import io.github.ande1922.moduvera.message.MessageKind;
 import io.github.ande1922.moduvera.message.MessageType;
 import io.github.ande1922.moduvera.message.SerializedMessage;
+import io.github.ande1922.moduvera.message.TraceContextCarrier;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.SpanContext;
+import io.opentelemetry.api.trace.propagation.W3CTraceContextPropagator;
+import io.opentelemetry.context.Context;
+import io.opentelemetry.context.propagation.TextMapGetter;
 import java.net.URI;
 import java.time.Instant;
+import java.util.List;
 import org.springframework.kafka.support.KafkaHeaders;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageHeaders;
@@ -27,6 +34,21 @@ public final class KafkaMessageMapper {
     public static final String ASYNC_COMMAND = "application/vnd.moduvera.async-command+json";
 
     private static final String CLOUD_EVENTS_VERSION = "1.0";
+    private static final String TRACE_PARENT = "traceparent";
+    private static final String TRACE_STATE = "tracestate";
+    private static final W3CTraceContextPropagator TRACE_CONTEXT_PROPAGATOR =
+            W3CTraceContextPropagator.getInstance();
+    private static final TextMapGetter<ObjectNode> CREATION_CONTEXT_GETTER = new TextMapGetter<>() {
+        @Override
+        public Iterable<String> keys(ObjectNode carrier) {
+            return List.of(TRACE_PARENT, TRACE_STATE);
+        }
+
+        @Override
+        public String get(ObjectNode carrier, String key) {
+            return optionalText(carrier, key);
+        }
+    };
 
     private final ObjectMapper json;
 
@@ -112,6 +134,12 @@ public final class KafkaMessageMapper {
         if (descriptor.causationId() != null) {
             envelope.put("causationid", descriptor.causationId().value());
         }
+        if (descriptor.creationContext() != null) {
+            envelope.put(TRACE_PARENT, descriptor.creationContext().traceParent());
+            if (descriptor.creationContext().traceState() != null) {
+                envelope.put(TRACE_STATE, descriptor.creationContext().traceState());
+            }
+        }
         envelope.put("initiatortype", descriptor.initiator().type().name());
         envelope.put("initiatorsubject", descriptor.initiator().subjectId());
         envelope.put("partitionkey", descriptor.partitionKey());
@@ -168,7 +196,8 @@ public final class KafkaMessageMapper {
                     new Initiator(
                             ActorType.valueOf(requiredText(envelope, "initiatortype")),
                             requiredText(envelope, "initiatorsubject")),
-                    requiredText(envelope, "partitionkey"));
+                    requiredText(envelope, "partitionkey"),
+                    creationContext(envelope));
             return new SerializedMessage(descriptor, contentType, json.writeValueAsBytes(businessPayload));
         } catch (JacksonException invalid) {
             throw new IllegalArgumentException("cannot decode platform message payload", invalid);
@@ -206,6 +235,30 @@ public final class KafkaMessageMapper {
     private static String optionalText(ObjectNode envelope, String name) {
         JsonNode value = envelope.get(name);
         return value == null || value.isNull() ? null : value.asString();
+    }
+
+    private static TraceContextCarrier creationContext(ObjectNode envelope) {
+        String traceParent = optionalText(envelope, TRACE_PARENT);
+        if (traceParent == null
+                || traceParent.isBlank()
+                || traceParent.length() > TraceContextCarrier.MAX_TRACE_PARENT_LENGTH) {
+            return null;
+        }
+
+        Context extracted = TRACE_CONTEXT_PROPAGATOR.extract(Context.root(), envelope, CREATION_CONTEXT_GETTER);
+        SpanContext spanContext = Span.fromContext(extracted).getSpanContext();
+        if (!spanContext.isValid()) {
+            return null;
+        }
+
+        String traceState = optionalText(envelope, TRACE_STATE);
+        if (traceState == null
+                || traceState.isBlank()
+                || traceState.length() > TraceContextCarrier.MAX_TRACE_STATE_LENGTH
+                || spanContext.getTraceState().isEmpty()) {
+            traceState = null;
+        }
+        return new TraceContextCarrier(traceParent, traceState);
     }
 
     private static JsonNode requiredNode(ObjectNode envelope, String name) {

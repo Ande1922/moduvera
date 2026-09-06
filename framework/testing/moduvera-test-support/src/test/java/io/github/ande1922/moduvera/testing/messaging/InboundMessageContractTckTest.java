@@ -18,6 +18,7 @@ import io.github.ande1922.moduvera.message.MessageKind;
 import io.github.ande1922.moduvera.message.MessageType;
 import io.github.ande1922.moduvera.message.NonRetryableMessageException;
 import io.github.ande1922.moduvera.message.SerializedMessage;
+import io.github.ande1922.moduvera.message.TraceContextCarrier;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -60,7 +61,10 @@ class InboundMessageContractTckTest implements InboundMessageContractTck {
                         CORRELATION_ID,
                         null,
                         INITIATOR,
-                        "contract-tck-partition"),
+                        "contract-tck-partition",
+                        new TraceContextCarrier(
+                                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+                                "vendor=value")),
                 PAYLOAD);
 
         return new InboundMessageContractProbe(

@@ -1,0 +1,19 @@
+{
+  "kind": "async-command",
+  "id": "command-legacy-001",
+  "source": "urn:moduvera:compatibility:producer",
+  "type": "io.github.ande1922.moduvera.compatibility.command.v1",
+  "destination": "compatibility.commands",
+  "time": "2026-09-01T00:00:00Z",
+  "contenttype": "application/json",
+  "tenantid": "tenant-a",
+  "actortype": "SERVICE",
+  "actorsubject": "compatibility-producer",
+  "correlationid": "legacy-correlation-01",
+  "initiatortype": "USER",
+  "initiatorsubject": "alice",
+  "partitionkey": "tenant-a:compatibility-01",
+  "payload": {
+    "value": "legacy-command"
+  }
+}

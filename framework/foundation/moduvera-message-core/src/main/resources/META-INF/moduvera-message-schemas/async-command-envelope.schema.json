@@ -22,6 +22,8 @@
     "actorsubject": { "type": "string", "minLength": 1, "maxLength": 128 },
     "correlationid": { "type": "string", "minLength": 1, "maxLength": 128 },
     "causationid": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "traceparent": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "tracestate": { "type": "string", "minLength": 1, "maxLength": 512 },
     "initiatortype": { "enum": ["USER", "SERVICE", "SYSTEM"] },
     "initiatorsubject": { "type": "string", "minLength": 1, "maxLength": 128 },
     "partitionkey": { "type": "string", "minLength": 1, "maxLength": 256 },

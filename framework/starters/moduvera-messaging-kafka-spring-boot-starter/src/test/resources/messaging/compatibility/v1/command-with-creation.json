@@ -1,0 +1,21 @@
+{
+  "kind": "async-command",
+  "id": "command-creation-001",
+  "source": "urn:moduvera:compatibility:producer",
+  "type": "io.github.ande1922.moduvera.compatibility.command.v1",
+  "destination": "compatibility.commands",
+  "time": "2026-09-01T00:00:00Z",
+  "contenttype": "application/json",
+  "tenantid": "tenant-a",
+  "actortype": "SERVICE",
+  "actorsubject": "compatibility-producer",
+  "correlationid": "legacy-correlation-01",
+  "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+  "tracestate": "vendor=value",
+  "initiatortype": "USER",
+  "initiatorsubject": "alice",
+  "partitionkey": "tenant-a:compatibility-01",
+  "payload": {
+    "value": "creation-command"
+  }
+}

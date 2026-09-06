@@ -1,0 +1,20 @@
+{
+  "specversion": "1.0",
+  "id": "event-legacy-001",
+  "source": "urn:moduvera:compatibility:producer",
+  "type": "io.github.ande1922.moduvera.compatibility.event.v1",
+  "destination": "compatibility.events",
+  "time": "2026-09-01T00:00:00Z",
+  "datacontenttype": "application/json",
+  "dataschema": "urn:moduvera:schema:message:io.github.ande1922.moduvera.compatibility.event.v1",
+  "tenantid": "tenant-a",
+  "actortype": "SERVICE",
+  "actorsubject": "compatibility-producer",
+  "correlationid": "legacy-correlation-01",
+  "initiatortype": "USER",
+  "initiatorsubject": "alice",
+  "partitionkey": "tenant-a:compatibility-01",
+  "data": {
+    "value": "legacy-event"
+  }
+}

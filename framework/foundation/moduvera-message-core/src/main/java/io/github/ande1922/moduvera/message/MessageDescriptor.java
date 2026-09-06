@@ -19,7 +19,8 @@ public record MessageDescriptor(
         String correlationId,
         MessageId causationId,
         Initiator initiator,
-        String partitionKey) {
+        String partitionKey,
+        TraceContextCarrier creationContext) {
 
     public MessageDescriptor {
         Objects.requireNonNull(id, "id");
@@ -41,5 +42,35 @@ public record MessageDescriptor(
             throw new IllegalArgumentException(
                     "message source must be absolute and correlationId/partitionKey bounded");
         }
+    }
+
+    /** Compatibility constructor for messages created before creation trace propagation is enabled. */
+    public MessageDescriptor(
+            MessageId id,
+            MessageKind kind,
+            MessageType type,
+            URI source,
+            Destination destination,
+            Instant time,
+            TenantId tenantId,
+            Actor actor,
+            String correlationId,
+            MessageId causationId,
+            Initiator initiator,
+            String partitionKey) {
+        this(
+                id,
+                kind,
+                type,
+                source,
+                destination,
+                time,
+                tenantId,
+                actor,
+                correlationId,
+                causationId,
+                initiator,
+                partitionKey,
+                null);
     }
 }
