@@ -1,6 +1,7 @@
 package io.github.ande1922.moduvera.logging;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertTimeout;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.LoggingEvent;
@@ -19,6 +20,7 @@ import io.opentelemetry.api.trace.TraceState;
 import io.opentelemetry.context.Context;
 import java.net.http.HttpTimeoutException;
 import java.sql.SQLException;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -373,6 +375,117 @@ class ModuveraEcsStructuredLogFormatterTest {
             }
         }
 
+        assertThat(violations).isEmpty();
+    }
+
+    @Test
+    void retainsOrdinaryNamesContainingSensitiveLetterSequencesAcrossInputs()
+            throws Exception {
+        List<String> violations = new ArrayList<>();
+        for (String ordinaryName :
+                List.of(
+                        "secretary_id",
+                        "tokenizerName",
+                        "bodyguard_id",
+                        "queryable",
+                        "headerless")) {
+            String fluentValue = "fluent-ordinary-" + java.util.UUID.randomUUID();
+            LoggingEvent fluentEvent = event(Level.INFO, "fluent ordinary field", null);
+            fluentEvent.setMDCPropertyMap(Map.of());
+            fluentEvent.setKeyValuePairs(List.of(new KeyValuePair(ordinaryName, fluentValue)));
+            JsonNode fluentJson = JSON.readTree(formatter().format(fluentEvent));
+            if (!fluentValue.equals(fluentJson.path(ordinaryName).stringValue())) {
+                violations.add("fluent:" + ordinaryName);
+            }
+
+            String mdcValue = "mdc-ordinary-" + java.util.UUID.randomUUID();
+            LoggingEvent mdcEvent = event(Level.INFO, "MDC ordinary field", null);
+            mdcEvent.setMDCPropertyMap(Map.of(ordinaryName, mdcValue));
+            JsonNode mdcJson = JSON.readTree(formatter().format(mdcEvent));
+            if (!mdcValue.equals(mdcJson.path(ordinaryName).stringValue())) {
+                violations.add("mdc:" + ordinaryName);
+            }
+
+            String messageValue = "message-ordinary-" + java.util.UUID.randomUUID();
+            LoggingEvent messageEvent = event(
+                    Level.INFO,
+                    "ordinary assignment, " + ordinaryName + "={}",
+                    null,
+                    messageValue);
+            messageEvent.setMDCPropertyMap(Map.of());
+            JsonNode messageJson = JSON.readTree(formatter().format(messageEvent));
+            if (!("ordinary assignment, " + ordinaryName + "=" + messageValue)
+                    .equals(messageJson.path("message").stringValue())) {
+                violations.add("message:" + ordinaryName);
+            }
+        }
+
+        assertThat(violations).isEmpty();
+    }
+
+    @Test
+    void formatsLargeOrdinaryNamesAndAssignmentsWithinCoarseBound()
+            throws Exception {
+        assertTimeout(Duration.ofSeconds(8), () -> {
+            for (int length : List.of(1_000, 5_000, 10_000, 20_000)) {
+                String ordinaryName = "a".repeat(length);
+                String structuredValue = "ordinary-structured-value";
+
+                LoggingEvent fluentEvent = event(Level.INFO, "large fluent field", null);
+                fluentEvent.setMDCPropertyMap(Map.of());
+                fluentEvent.setKeyValuePairs(
+                        List.of(new KeyValuePair(ordinaryName, structuredValue)));
+                JsonNode fluentJson = JSON.readTree(formatter().format(fluentEvent));
+                assertThat(fluentJson.path(ordinaryName).stringValue()).isEqualTo(structuredValue);
+
+                LoggingEvent mdcEvent = event(Level.INFO, "large MDC field", null);
+                mdcEvent.setMDCPropertyMap(Map.of(ordinaryName, structuredValue));
+                JsonNode mdcJson = JSON.readTree(formatter().format(mdcEvent));
+                assertThat(mdcJson.path(ordinaryName).stringValue()).isEqualTo(structuredValue);
+
+                String ordinaryMessage = ordinaryName + "=ordinary-message-value";
+                LoggingEvent messageEvent = event(Level.INFO, ordinaryMessage, null);
+                messageEvent.setMDCPropertyMap(Map.of());
+                JsonNode messageJson = JSON.readTree(formatter().format(messageEvent));
+                assertThat(messageJson.path("message").stringValue())
+                        .isEqualTo(
+                                ordinaryMessage.substring(0, Math.min(ordinaryMessage.length(), 2_048)));
+            }
+        });
+    }
+
+    @Test
+    void redactsEscapedQuotedAndAuthorizationValuesWithoutConsumingSafeAssignments()
+            throws Exception {
+        String quotedSecret = "quoted-sensitive-" + java.util.UUID.randomUUID();
+        String basicSecret = "basic-sensitive-" + java.util.UUID.randomUUID();
+        String bearerSecret = "bearer-sensitive-" + java.util.UUID.randomUUID();
+        String message = "clientSecret=\"prefix\\\"" + quotedSecret
+                + "\", Authorization: Basic " + basicSecret
+                + ", accessToken=Bearer " + bearerSecret
+                + "; order_id=safe-order, session_id=safe-session";
+        LoggingEvent event = event(Level.INFO, message, null);
+        event.setMDCPropertyMap(Map.of());
+
+        String line = formatter().format(event);
+        JsonNode json = JSON.readTree(line);
+
+        List<String> violations = new ArrayList<>();
+        if (line.contains(quotedSecret)) {
+            violations.add("quoted-secret-leaked");
+        }
+        if (line.contains(basicSecret)) {
+            violations.add("basic-secret-leaked");
+        }
+        if (line.contains(bearerSecret)) {
+            violations.add("bearer-secret-leaked");
+        }
+        if (!("clientSecret=[REDACTED], Authorization=[REDACTED], "
+                        + "accessToken=[REDACTED]; order_id=safe-order, "
+                        + "session_id=safe-session")
+                .equals(json.path("message").stringValue())) {
+            violations.add("sanitized-message-mismatch");
+        }
         assertThat(violations).isEmpty();
     }
 

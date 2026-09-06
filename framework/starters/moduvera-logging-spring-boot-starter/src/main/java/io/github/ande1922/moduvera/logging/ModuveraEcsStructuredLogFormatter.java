@@ -38,17 +38,27 @@ public final class ModuveraEcsStructuredLogFormatter
             Pattern.compile("[A-Za-z_][A-Za-z0-9_-]*(?:\\.[A-Za-z_][A-Za-z0-9_-]*)*");
     private static final Pattern ERROR_CODE =
             Pattern.compile("(?:BIZ|DEP|SYS|ENV)_[A-Z0-9]+(?:_[A-Z0-9]+)*");
-    private static final String SENSITIVE_NAME_PART =
-            "(?:x[._-]*)?api[._-]*key|pass[._-]*word|passwd|"
-                    + "secret|credential|authorization|cookie|headers?|body|payload|query|sql|token";
-    private static final Pattern SENSITIVE_NAME = Pattern.compile(
-            "[A-Za-z0-9_.-]*(?:" + SENSITIVE_NAME_PART + ")[A-Za-z0-9_.-]*",
-            Pattern.CASE_INSENSITIVE);
-    private static final Pattern SENSITIVE_ASSIGNMENT = Pattern.compile(
-            "[\"']?(" + SENSITIVE_NAME.pattern() + ")"
-                    + "[\"']?\\s*[:=]\\s*(?:(?:bearer|basic)\\s+[^\\s,;}\\]]+|[\"'][^\"']*[\"']|(?!\\{\\})[^\\s,;}\\]]+)",
-            Pattern.CASE_INSENSITIVE);
     private static final Pattern URL = Pattern.compile("(?i)\\bhttps?://[^\\s,;]+");
+    private static final Set<String> SENSITIVE_NAME_TOKENS = Set.of(
+            "apikey",
+            "password",
+            "passwd",
+            "secret",
+            "credential",
+            "authorization",
+            "cookie",
+            "header",
+            "headers",
+            "body",
+            "payload",
+            "query",
+            "sql",
+            "token");
+    private static final Set<String> CREDENTIAL_QUALIFIERS = Set.of(
+            "access", "refresh", "session", "id", "auth", "bearer", "jwt", "oauth", "client", "x");
+    private static final Set<String> CREDENTIAL_SUFFIXES =
+            Set.of("token", "secret", "credential", "apikey");
+    private static final List<String> AUTHORIZATION_SCHEMES = List.of("basic", "bearer");
     private static final Set<String> RESERVED_ROOTS =
             Set.of("log", "process", "service", "ecs", "message", "tags", "error");
     private static final Set<String> NESTED_ROOTS =
@@ -189,7 +199,70 @@ public final class ModuveraEcsStructuredLogFormatter
         if (SAFE_SIZE_FIELDS.contains(name)) {
             return false;
         }
-        return SENSITIVE_NAME.matcher(name).matches();
+        List<String> parts = nameParts(name);
+        for (int index = 0; index < parts.size(); index++) {
+            String part = parts.get(index);
+            if (SENSITIVE_NAME_TOKENS.contains(part)
+                    || isCompactCredential(part)
+                    || ("api".equals(part)
+                            && index + 1 < parts.size()
+                            && "key".equals(parts.get(index + 1)))
+                    || ("pass".equals(part)
+                            && index + 1 < parts.size()
+                            && "word".equals(parts.get(index + 1)))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static List<String> nameParts(String name) {
+        List<String> parts = new ArrayList<>();
+        int partStart = -1;
+        for (int index = 0; index < name.length(); index++) {
+            char current = name.charAt(index);
+            if (!Character.isLetterOrDigit(current)) {
+                addNamePart(parts, name, partStart, index);
+                partStart = -1;
+                continue;
+            }
+            if (partStart < 0) {
+                partStart = index;
+                continue;
+            }
+            char previous = name.charAt(index - 1);
+            boolean lowerToUpper = Character.isUpperCase(current)
+                    && (Character.isLowerCase(previous) || Character.isDigit(previous));
+            boolean acronymToWord = Character.isUpperCase(current)
+                    && Character.isUpperCase(previous)
+                    && index + 1 < name.length()
+                    && Character.isLowerCase(name.charAt(index + 1));
+            if (lowerToUpper || acronymToWord) {
+                addNamePart(parts, name, partStart, index);
+                partStart = index;
+            }
+        }
+        addNamePart(parts, name, partStart, name.length());
+        return parts;
+    }
+
+    private static void addNamePart(List<String> parts, String name, int start, int end) {
+        if (start >= 0 && start < end) {
+            parts.add(name.substring(start, end).toLowerCase(java.util.Locale.ROOT));
+        }
+    }
+
+    private static boolean isCompactCredential(String part) {
+        for (String qualifier : CREDENTIAL_QUALIFIERS) {
+            if (!part.startsWith(qualifier)) {
+                continue;
+            }
+            String suffix = part.substring(qualifier.length());
+            if (CREDENTIAL_SUFFIXES.contains(suffix)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean isTrustedNamespace(String name) {
@@ -450,12 +523,8 @@ public final class ModuveraEcsStructuredLogFormatter
             return "";
         }
         String singleLine = text.replace('\r', ' ').replace('\n', ' ');
-        Matcher matcher = SENSITIVE_ASSIGNMENT.matcher(singleLine);
-        String safe = matcher.replaceAll(result -> Matcher.quoteReplacement(
-                isSensitiveName(result.group(1))
-                        ? result.group(1) + "=[REDACTED]"
-                        : result.group()));
-        matcher = URL.matcher(safe);
+        String safe = redactSensitiveAssignments(singleLine);
+        Matcher matcher = URL.matcher(safe);
         StringBuilder withoutQueries = new StringBuilder();
         while (matcher.find()) {
             String sanitizedUrl = safeUrl(matcher.group());
@@ -466,6 +535,124 @@ public final class ModuveraEcsStructuredLogFormatter
         matcher.appendTail(withoutQueries);
         safe = withoutQueries.toString();
         return safe.length() <= MAX_TEXT_LENGTH ? safe : safe.substring(0, MAX_TEXT_LENGTH);
+    }
+
+    private static String redactSensitiveAssignments(String text) {
+        StringBuilder result = null;
+        int copyFrom = 0;
+        int index = 0;
+        while (index < text.length()) {
+            int assignmentStart = index;
+            char keyQuote = text.charAt(index);
+            boolean quotedKey = keyQuote == '\'' || keyQuote == '"';
+            int nameStart = quotedKey ? index + 1 : index;
+            if (nameStart >= text.length() || !isAssignmentNameCharacter(text.charAt(nameStart))) {
+                index++;
+                continue;
+            }
+
+            int nameEnd = nameStart;
+            while (nameEnd < text.length()
+                    && isAssignmentNameCharacter(text.charAt(nameEnd))) {
+                nameEnd++;
+            }
+            int afterName = nameEnd;
+            if (quotedKey
+                    && nameEnd < text.length()
+                    && (text.charAt(nameEnd) == '\'' || text.charAt(nameEnd) == '"')) {
+                afterName++;
+            }
+            while (afterName < text.length() && Character.isWhitespace(text.charAt(afterName))) {
+                afterName++;
+            }
+            if (afterName >= text.length()
+                    || (text.charAt(afterName) != ':' && text.charAt(afterName) != '=')) {
+                index = Math.max(nameEnd, index + 1);
+                continue;
+            }
+
+            int valueStart = afterName + 1;
+            while (valueStart < text.length() && Character.isWhitespace(text.charAt(valueStart))) {
+                valueStart++;
+            }
+            if (valueStart >= text.length()
+                    || (text.charAt(valueStart) == '{'
+                            && valueStart + 1 < text.length()
+                            && text.charAt(valueStart + 1) == '}')
+                    || !isSensitiveName(text.substring(nameStart, nameEnd))) {
+                index = Math.max(valueStart, nameEnd);
+                continue;
+            }
+
+            int valueEnd = assignmentValueEnd(text, valueStart);
+            if (result == null) {
+                result = new StringBuilder(text.length());
+            }
+            result.append(text, copyFrom, assignmentStart)
+                    .append(text, nameStart, nameEnd)
+                    .append("=[REDACTED]");
+            copyFrom = valueEnd;
+            index = valueEnd;
+        }
+        if (result == null) {
+            return text;
+        }
+        return result.append(text, copyFrom, text.length()).toString();
+    }
+
+    private static boolean isAssignmentNameCharacter(char value) {
+        return Character.isLetterOrDigit(value) || value == '_' || value == '.' || value == '-';
+    }
+
+    private static int assignmentValueEnd(String text, int valueStart) {
+        char first = text.charAt(valueStart);
+        if (first == '\'' || first == '"') {
+            return quotedValueEnd(text, valueStart, first);
+        }
+        int schemeEnd = authorizationSchemeEnd(text, valueStart);
+        int index = schemeEnd >= 0 ? schemeEnd : valueStart;
+        while (index < text.length() && !isAssignmentValueDelimiter(text.charAt(index))) {
+            index++;
+        }
+        return index;
+    }
+
+    private static int quotedValueEnd(String text, int valueStart, char quote) {
+        int index = valueStart + 1;
+        while (index < text.length()) {
+            char current = text.charAt(index);
+            if (current == '\\' && index + 1 < text.length()) {
+                index += 2;
+            } else if (current == quote) {
+                return index + 1;
+            } else {
+                index++;
+            }
+        }
+        return text.length();
+    }
+
+    private static int authorizationSchemeEnd(String text, int valueStart) {
+        for (String scheme : AUTHORIZATION_SCHEMES) {
+            int end = valueStart + scheme.length();
+            if (end < text.length()
+                    && text.regionMatches(true, valueStart, scheme, 0, scheme.length())
+                    && Character.isWhitespace(text.charAt(end))) {
+                while (end < text.length() && Character.isWhitespace(text.charAt(end))) {
+                    end++;
+                }
+                return end;
+            }
+        }
+        return -1;
+    }
+
+    private static boolean isAssignmentValueDelimiter(char value) {
+        return Character.isWhitespace(value)
+                || value == ','
+                || value == ';'
+                || value == '}'
+                || value == ']';
     }
 
     private static Map<String, Object> mapOf(Object... entries) {
