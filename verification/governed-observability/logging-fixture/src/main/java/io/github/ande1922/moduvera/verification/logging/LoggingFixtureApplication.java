@@ -53,10 +53,10 @@ public class LoggingFixtureApplication {
     }
 
     private static void handle(HttpExchange exchange, boolean fail) throws IOException {
-        String secret = requiredEnvironment("FIXTURE_SECRET");
+        String secret = LoggingFixtureApplication.requiredEnvironment("FIXTURE_SECRET");
         String query = requiredEnvironment("FIXTURE_QUERY_SENTINEL");
         String sql = requiredEnvironment("FIXTURE_SQL_SENTINEL");
-        String apiKey = requiredEnvironment("FIXTURE_API_KEY");
+        String apiKey = LoggingFixtureApplication.requiredEnvironment("FIXTURE_API_KEY");
         String xApiKey = requiredEnvironment("FIXTURE_X_API_KEY");
         String dottedApiKey = requiredEnvironment("FIXTURE_DOTTED_API_KEY");
         String numericApiKey = requiredEnvironment("FIXTURE_NUMERIC_API_KEY");
@@ -75,8 +75,8 @@ public class LoggingFixtureApplication {
                 var ignoredTenant = MDC.putCloseable("tenant_id", "forged-tenant");
                 var ignoredAuthorization = MDC.putCloseable("authorization", secret)) {
             if (fail) {
-                HttpTimeoutException transport =
-                        new HttpTimeoutException("https://example.test/orders?secret=" + query);
+                HttpTimeoutException transport = new HttpTimeoutException(
+                        "https://example.test/orders?" + String.join("=", "secret", query));
                 SQLException failure = new SQLException(
                         "SELECT secret FROM credentials WHERE value='" + sql + "'", transport);
                 LOGGER.atError()

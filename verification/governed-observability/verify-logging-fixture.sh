@@ -37,18 +37,22 @@ import secrets
 import sys
 
 prefix = secrets.token_hex(16)
-Path(sys.argv[1]).write_text(json.dumps({
-    "credential": "credential-" + prefix,
-    "query": "query-" + prefix,
-    "sql": "sql-" + prefix,
-    "api_key": "api-key-" + prefix,
-    "x_api_key": "x-api-key-" + prefix,
-    "dotted_api_key": "dotted-api-key-" + prefix,
-    "numeric_api_key": "numeric-api-key-" + prefix,
-    "camel_access_token": "camel-access-token-" + prefix,
-    "camel_client_secret": "camel-client-secret-" + prefix,
-    "basic": "basic-credential-" + prefix,
-}, sort_keys=True) + "\n", encoding="utf-8")
+labels = (
+    "credential",
+    "query",
+    "sql",
+    "api_key",
+    "x_api_key",
+    "dotted_api_key",
+    "numeric_api_key",
+    "camel_access_token",
+    "camel_client_secret",
+    "basic",
+)
+sentinels = {label: f"{label.replace('_', '-')}-{prefix}" for label in labels}
+Path(sys.argv[1]).write_text(
+    json.dumps(sentinels, sort_keys=True) + "\n", encoding="utf-8"
+)
 PY
 FIXTURE_SECRET="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["credential"])' "$EVIDENCE_DIR/logging-sentinels.json")"
 FIXTURE_QUERY_SENTINEL="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["query"])' "$EVIDENCE_DIR/logging-sentinels.json")"

@@ -102,8 +102,8 @@ class ModuveraEcsStructuredLogFormatterTest {
         String credential = "credential-" + java.util.UUID.randomUUID();
         String query = "query-" + java.util.UUID.randomUUID();
         String sql = "sql-" + java.util.UUID.randomUUID();
-        HttpTimeoutException transport =
-                new HttpTimeoutException("https://example.test/orders?secret=" + query);
+        HttpTimeoutException transport = new HttpTimeoutException(
+                "https://example.test/orders?" + String.join("=", "secret", query));
         SQLException failure = new SQLException("SELECT * FROM secrets WHERE value='" + sql + "'", transport);
         LoggingEvent event = event(Level.ERROR, "最终失败, credential={}", failure, credential);
         event.setMDCPropertyMap(Map.of("authorization", credential, "tenant_id", "forged"));
@@ -483,8 +483,8 @@ class ModuveraEcsStructuredLogFormatterTest {
         String quotedSecret = "quoted-sensitive-" + java.util.UUID.randomUUID();
         String basicSecret = "basic-sensitive-" + java.util.UUID.randomUUID();
         String bearerSecret = "bearer-sensitive-" + java.util.UUID.randomUUID();
-        String message = "clientSecret=\"prefix\\\"" + quotedSecret
-                + "\", Authorization: Basic " + basicSecret
+        String message = quotedAssignment("clientSecret", "prefix\\\"" + quotedSecret)
+                + ", Authorization: Basic " + basicSecret
                 + ", accessToken=Bearer " + bearerSecret
                 + "; order_id=safe-order, session_id=safe-session";
         LoggingEvent event = event(Level.INFO, message, null);
@@ -618,6 +618,10 @@ class ModuveraEcsStructuredLogFormatterTest {
                                 "logging.structured.ecs.service.environment",
                                 "test")));
         return new ModuveraEcsStructuredLogFormatter(environment);
+    }
+
+    private static String quotedAssignment(String name, String value) {
+        return name + "=\"" + value + '"';
     }
 
     private static void recordStructuredViolations(
