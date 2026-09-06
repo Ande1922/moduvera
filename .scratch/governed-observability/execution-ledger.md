@@ -39,3 +39,11 @@ Worker/fixer、Standards/Spec reviewer 请求 `gpt-5.6-sol` / `high` / `fork_tur
 - 两票 metadata 均 resolved，02/14 仍 ready-for-agent 且未实施；父 Spec/finding/Product Surface 状态不变。三处 worktree 保留，未合入 main、未 push/部署或清理。
 - H1 状态记录中的四个外部 Markdown 证据链接已改为字面绝对路径，避免仓库将它们作为 snapshot 内部链接校验；证据文件和历史结论保持。
 - 本次 tracker 普通提交之后固定最终 base/head，执行聚合双轴评审、Normal Gate 与最终镜像/双拓扑 Scenario。最终回执位于外部 `evidence/execution-state.json` 和交付报告；不预填未运行的 PASS，也不在通过后再写提交使其失效。
+
+## Phase 3 — Gate findings corrected by original ticket 01 writer
+
+- 首次 Normal Gate 在聚合 head `a228740865e44cf4692e5f63357d37f366078ce9` 的 sensitive-content 阶段失败，Maven 未运行。原始回执与正式运行证据完整保留，未豁免或削弱 Gate。
+- 原 writer `/root/worker01_agent_runtime` 在原 01 分支/worktree 追加普通提交 `7bec10092a05219c00040a3786e144eb2fcf9ec3`、`237a20180d9b15181e4f48ee9b0b07ed97b97e7e`，修复 fixture credential 输入、继承 export 碰撞、canonical tenant 前置校验和证据留存说明。原 Standards `/root/review01_standards` 与 Spec `/root/review01_spec` 在 B0..`237a20180d9b15181e4f48ee9b0b07ed97b97e7e` 均 clean；记录：`/private/tmp/governed-observability-frontier-20260906/evidence/01/review-gate-fix-final.md`。
+- 后续修复以普通本地 merge `1a3942adeb6403600fdf845c8210c0dc6784519b` 纳入 integration，无冲突；前两阶段的快进记录仍为当时操作，不将本次后续集成称作快进。没有 amend/rebase/cherry-pick。07 原提交不变。
+- 合并后静态契约 13 tests 及 shell 环境回归 PASS、exit 0，回执：`/private/tmp/governed-observability-frontier-20260906/evidence/final/agent-static-after-gate-fix/receipt.json`。Java/runtime 行为未变，完整真实 qualification 仍注明为凭据输入修复前证据；新增输入 seam 有 HTTP wire、缺失/错误 tenant 与子进程隔离证据。
+- 本次 tracker 普通提交后固定新的最终 head；聚合双轴审查、Normal Gate、镜像与双拓扑 Scenario 均须对齐该提交。外部交付报告记最终结果；01/07 保持 resolved，02/14 ready-for-agent 且未启动，父 Spec/finding/Product Surface 状态不变。

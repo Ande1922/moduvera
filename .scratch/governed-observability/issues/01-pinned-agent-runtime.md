@@ -53,9 +53,19 @@ Blocked by: None
 
 ## Answer
 
+### Initial implementation qualification
+
 - Commit: `a0c5ab9e9c286abbed00c4af9894767f98be0ca2`；实际比较点 `cb6602f2eb9cb9ef73c24ee87d1b6a069b083d6b..a0c5ab9e9c286abbed00c4af9894767f98be0ca2`，普通实现及修复提交已快进集成到 `codex/governed-observability-20260906-integration`，无冲突。
 - 验证通过（PASS）：JDK 26 / Boot 4.1.1 全 reactor `clean install`、6 个公共镜像 contract、外置只读 Agent/扩展与 JaCoCo 真实镜像 smoke、真实 HTTP/Kafka/数据库/OTLP 验证。Agent 2.31.1 / API 1.65.0、来源和 SHA-256 已固定于 [agent.lock](../../../verification/governed-observability/agent.lock)。重命名重复 Agent、缺失/错误摘要、校验和有效但 SPI 失败的负例均在业务 main/就绪前被拒绝。
 - 375 次 OTLP 请求、724 个 Span、711508 原始字节中，6 类敏感哨兵零命中；采样订单绑定 11 个核心 Agent Span 与 2 条 Kafka 记录，合法上游 Gateway→Identity 另验证 3 个具体 Span 的数量、owner 与因果。缓存实测 Identity 请求 1→0、Catalog 1→1；未采样有效 Trace 继续传播。
 - OTLP 接收端停机后订单最终 CONFIRMED，并保留该订单的 reserve/result Kafka、两侧 Inbox/Outbox 和库存/订单证据；0.307175 秒仅为创建 HTTP 返回时间，终态在后续观察。限定本次故障运行的一次有效业务结果，保持至少一次传输契约。
 - Standards 和 Spec 均在上述同一 base/head 完成且无剩余 finding：双轴评审记录：`/private/tmp/governed-observability-frontier-20260906/evidence/01/review-final.md`。完整运行见 修复验证报告：`/private/tmp/governed-observability-frontier-20260906/evidence/01/worker-fix-report-round1.md`；最后提交仅补分析器及其回归，最终分析重放：`/private/tmp/governed-observability-frontier-20260906/evidence/01/worker-fix-report-round2.md` exit 0，运行制品和配置未改变。集成后 `verification/governed-observability/tests/test-agent-contract.sh` 再次 PASS（10 tests）。
 - 本票基线能力已交付；本批 01→07 的聚合双轴评审、Normal Gate 与最终适用 Scenario 将在 07 集成后的固定提交完成，不将本票证据冒充批次最终验收。
+
+### Gate follow-up qualification
+
+- 当前票提交：`237a20180d9b15181e4f48ee9b0b07ed97b97e7e`；B0 沿用 `cb6602f2eb9cb9ef73c24ee87d1b6a069b083d6b`。普通后续提交 `7bec10092a05219c00040a3786e144eb2fcf9ec3` 与 `237a20180d9b15181e4f48ee9b0b07ed97b97e7e` 由原 writer 在原 worktree 完成；经两轴 clean 复审后，以本地 merge `1a3942adeb6403600fdf845c8210c0dc6784519b` 纳入专用 integration，无冲突。07 代码与提交未改变。
+- 首次聚合 Normal Gate 在 `a228740865e44cf4692e5f63357d37f366078ce9` 的 sensitive-content 阶段退出 1，Maven 尚未运行；失败回执保留于 `/private/tmp/governed-observability-frontier-20260906/evidence/final/gate-attempt1/normal-gate-receipt.json`。
+- 修复验证输入：运行时生成 Java URL userinfo；登录 credential 显式注入且限定两个 probe 子进程，处理继承 export 属性碰撞；在启动/HTTP 前拒绝非 canonical tenant-a；文档区分 credential 与业务标识留存。没有修改生产认证、seed、业务行为或 Agent 配置。
+- 两轴最终 clean：`/private/tmp/governed-observability-frontier-20260906/evidence/01/review-gate-fix-final.md`。原 writer 的两个报告为同目录 `worker-gate-fix-report.md`、`worker-gate-fix-round2-report.md`；准确 B0..当前票提交的 sensitive check exit 0。受影响 Java 测试/Spotless PASS；集成后静态契约 13 tests 与 shell 环境隔离回归 PASS，回执：`/private/tmp/governed-observability-frontier-20260906/evidence/final/agent-static-after-gate-fix/receipt.json`。
+- 上节真实 runtime qualification 保留为凭据输入修复前的证据；本次只重新验证受影响的 fixture/环境输入边界，未声称新的真实登录运行。此 tracker 提交之后将固定批次最终 head，再做聚合双轴评审、Normal Gate、镜像与双拓扑验收；最终回执外置保存，不预填 PASS。
