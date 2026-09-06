@@ -121,6 +121,8 @@ public final class ModuveraArchitectureRules {
                     "message transport or serialized-envelope types",
                     javaClass -> javaClass.getName()
                                     .equals("io.github.ande1922.moduvera.message.SerializedMessage")
+                            || javaClass.getName()
+                                    .equals("io.github.ande1922.moduvera.message.MessageDescriptor")
                             || residesIn(javaClass, "org.springframework.messaging")
                             || residesIn(javaClass, "org.springframework.cloud.stream")
                             || residesIn(javaClass, "org.apache.kafka")

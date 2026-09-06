@@ -22,6 +22,7 @@ import io.github.ande1922.moduvera.reference.inventory.architecturefixture.Mispl
 import io.github.ande1922.moduvera.reference.inventory.architecturefixture.MisplacedInventoryMessageHandler;
 import io.github.ande1922.moduvera.reference.inventory.adapter.inbound.messaging.architecturefixture.ReliabilityOwningInboundConfiguration;
 import io.github.ande1922.moduvera.reference.inventory.adapter.inbound.http.architecturefixture.InboundDependsOnOutboundViolation;
+import io.github.ande1922.moduvera.reference.inventory.application.architecturefixture.DescriptorLeakingInventoryHandler;
 import io.github.ande1922.moduvera.reference.inventory.application.architecturefixture.RenamedInventoryProcessor;
 import io.github.ande1922.moduvera.reference.inventory.application.architecturefixture.TransactionOwningInventoryHandler;
 import io.github.ande1922.moduvera.reference.inventory.application.architecturefixture.TransportLeakingInventoryHandler;
@@ -151,6 +152,9 @@ class AssemblyArchitectureRulesTest {
         assertViolation(
                 ModuveraArchitectureRules.APPLICATION_MESSAGE_HANDLERS_ARE_PROTOCOL_NEUTRAL,
                 TransportLeakingInventoryHandler.class);
+        assertViolation(
+                ModuveraArchitectureRules.APPLICATION_MESSAGE_HANDLERS_ARE_PROTOCOL_NEUTRAL,
+                DescriptorLeakingInventoryHandler.class);
     }
 
     @Test

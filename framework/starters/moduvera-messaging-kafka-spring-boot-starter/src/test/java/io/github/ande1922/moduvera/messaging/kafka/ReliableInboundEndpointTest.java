@@ -9,6 +9,7 @@ import io.github.ande1922.moduvera.context.ExecutionContext;
 import io.github.ande1922.moduvera.context.ExecutionContextHolder;
 import io.github.ande1922.moduvera.context.Initiator;
 import io.github.ande1922.moduvera.context.TenantId;
+import io.github.ande1922.moduvera.data.TransactionBoundary;
 import io.github.ande1922.moduvera.message.Destination;
 import io.github.ande1922.moduvera.message.InboundMessageContract;
 import io.github.ande1922.moduvera.message.MessageDescriptor;
@@ -17,13 +18,19 @@ import io.github.ande1922.moduvera.message.MessageKind;
 import io.github.ande1922.moduvera.message.MessageType;
 import io.github.ande1922.moduvera.message.NonRetryableMessageException;
 import io.github.ande1922.moduvera.message.SerializedMessage;
+import io.github.ande1922.moduvera.message.handler.ApplicationMessageHandler;
+import io.github.ande1922.moduvera.message.inbox.InboxRepository;
+import io.github.ande1922.moduvera.message.inbox.InboxTemplate;
 import java.net.URI;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
 import org.springframework.messaging.Message;
 
@@ -120,6 +127,46 @@ class ReliableInboundEndpointTest {
         assertThat(retryableAttempts).hasValue(2);
     }
 
+    @Test
+    void preparationFailureOnAMissRunsOutsideTheInboxTransactionAndLeavesNoRecord() {
+        var inboxRepository = new RecordingInboxRepository();
+        var transactions = new RecordingTransactionBoundary();
+        var preparationCalls = new AtomicInteger();
+        var preparationObservedTransaction = new AtomicReference<Boolean>();
+        var businessCalls = new AtomicInteger();
+        var preparationFailure = new IllegalStateException("preparation unavailable");
+        var inbox = new InboxTemplate(
+                "prepared-handler",
+                inboxRepository,
+                transactions,
+                Clock.fixed(Instant.parse("2026-08-30T00:00:00Z"), ZoneOffset.UTC));
+        ApplicationMessageHandler<byte[]> handler = new PreparedApplicationHandler(
+                inbox,
+                payload -> {
+                    preparationCalls.incrementAndGet();
+                    preparationObservedTransaction.set(transactions.active);
+                    throw preparationFailure;
+                },
+                businessCalls::incrementAndGet);
+        var consumer = new ReliableMessageConsumerFactory(mapper)
+                .forContract(contract(), serialized -> handler.handle(
+                        serialized.payload(), serialized.descriptor().id()));
+
+        assertThatThrownBy(() -> consumer.accept(
+                        mapper.toSpringMessage(message("preparation-failure", "notes.events"))))
+                .isInstanceOf(NonRetryableMessageException.class)
+                .hasMessage("message handling exhausted 1 attempts")
+                .satisfies(thrown -> assertThat(thrown.getCause()).isSameAs(preparationFailure));
+
+        assertThat(inboxRepository.prechecks).isOne();
+        assertThat(preparationCalls).hasValue(1);
+        assertThat(preparationObservedTransaction).hasValue(false);
+        assertThat(transactions.calls).isZero();
+        assertThat(inboxRepository.starts).isZero();
+        assertThat(businessCalls).hasValue(0);
+        assertThat(ExecutionContextHolder.current()).isEmpty();
+    }
+
     private static InboundMessageContract contract() {
         return new InboundMessageContract(
                 MessageKind.EVENT,
@@ -145,5 +192,56 @@ class ReliableInboundEndpointTest {
                         new Initiator(ActorType.USER, "alice"),
                         "tenant-a:1"),
                 "{}");
+    }
+
+    private record PreparedApplicationHandler(
+            InboxTemplate inbox, Consumer<byte[]> preparation, Runnable businessWork)
+            implements ApplicationMessageHandler<byte[]> {
+
+        @Override
+        public void handle(byte[] payload, MessageId messageId) {
+            if (inbox.isProcessed(messageId)) {
+                return;
+            }
+            preparation.accept(payload);
+            inbox.handle(messageId, businessWork);
+        }
+    }
+
+    private static final class RecordingInboxRepository implements InboxRepository {
+        private int prechecks;
+        private int starts;
+
+        @Override
+        public boolean isProcessed(TenantId tenantId, String consumerId, MessageId messageId) {
+            prechecks++;
+            return false;
+        }
+
+        @Override
+        public boolean tryStart(
+                TenantId tenantId,
+                String consumerId,
+                MessageId messageId,
+                Instant processedAt) {
+            starts++;
+            return true;
+        }
+    }
+
+    private static final class RecordingTransactionBoundary implements TransactionBoundary {
+        private boolean active;
+        private int calls;
+
+        @Override
+        public <T> T inTransaction(Supplier<T> work) {
+            calls++;
+            active = true;
+            try {
+                return work.get();
+            } finally {
+                active = false;
+            }
+        }
     }
 }
