@@ -31,8 +31,18 @@ Before dispatching review or starting final Scenario verification, run
 `python3 tools/quality/review_preflight.py --base <resolved-base> --head <resolved-head>`.
 Reuse a passing result for the same immutable pair. This read-only preflight
 checks whitespace, changed Markdown links, and Skill structure using the gate's
-existing checks; it does not replace either review axis or the quality gate.
+existing checks and returns resolved refs, diff SHA-256, checkout identity,
+timestamp, and its exit code. It does not replace either review axis or the
+quality gate. Default mode checks the committed range even in a dirty checkout.
 On failure, report the failed check and return to the authorized implementer.
+
+For a ticket review handoff, the worker adds `--repo <worktree>
+--require-current-clean --expected-branch <registered-branch>` and stores stdout
+in the external evidence directory with the command's actual exit code. This
+mode also verifies the current head, clean checkout, and registered branch.
+Run it once per frozen handoff for both reviewers; recheck current state after
+any edit or role handoff rather than treating an old checkout receipt as live.
+Keep receipts outside the worktree so recording one does not dirty its input.
 
 Keep each verification command's exit code with its output. A later successful
 command or truncated output cannot establish that an earlier check passed.

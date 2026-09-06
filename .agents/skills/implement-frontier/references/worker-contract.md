@@ -26,8 +26,11 @@ or contradicts the worktree.
    artifacts, secrets, and unrelated changes.
 7. Create an ordinary ticket commit when authorized. Do not amend or rewrite
    history.
-8. Return the evidence report below and stop. Do not merge, rebase, push,
-   update trackers, remove worktrees, begin another ticket, or create agents.
+8. Return the evidence report below. When the coordinator registers a
+   [ticket review loop](../../../../docs/agents/ticket-review-loop.md), continue
+   eligible repairs with those reviewers until review-complete or escalation.
+   Otherwise stop. Do not merge, rebase, push, update trackers, remove
+   worktrees, begin another ticket, or create agents.
 
 ## Scope invariants
 
@@ -60,3 +63,7 @@ Verification:
 Risks or blockers:
 - <none or concrete item>
 ```
+
+For a registered loop, add the preflight receipt and both original review
+paths to this report. Keep command output and exit codes in their existing
+evidence files; summarize new conclusions rather than copying full logs.

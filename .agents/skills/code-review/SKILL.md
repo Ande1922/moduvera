@@ -5,8 +5,8 @@ description: Review a Moduvera diff from an explicit fixed point on independent 
 
 # Code Review
 
-This stage is read-only. It does not fix findings, run the quality gate, or
-create commits.
+Reviewers inspect source read-only and own their separate review reports.
+They do not fix code, run the quality gate, or create commits.
 
 ## Execution profile
 
@@ -37,12 +37,18 @@ the user's active main-task model and effort.
    If independent contexts are unavailable, stop rather than claim a completed
    dual-axis review.
 5. Present the two reports separately without reranking them into one list.
+   In a registered frontier
+   [ticket review loop](../../../docs/agents/ticket-review-loop.md), deliver each
+   original report to its assigned evidence path and notify the original
+   worker directly. Follow that loop for repair review and escalation;
+   standalone review still stops at the report.
 
 ## Completion
 
 Stop after reporting the fixed base/head, finding counts and worst finding per
 axis, or the exact reason an axis could not run. Accepted findings return to
 the original implementer; any fix creates a new diff that must be reviewed
-before gate evidence is current.
+before gate evidence is current. Each reviewer alone confirms closure of its
+findings and issues its result for the new immutable pair.
 
 Follow the shared [review evidence and authorization rules](../../../docs/agents/delivery-standards.md).

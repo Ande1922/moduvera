@@ -30,9 +30,11 @@ raising a worker's effort.
   source paths, fixed base/head when applicable, and expected evidence. A full
   history fork inherits the parent's settings and cannot implement this mixed
   profile.
-- Keep workers, reviewers, and explorers as leaf agents. The coordinator owns
-  further decomposition and dispatch; it fills evidence gaps and resolves
-  conflicts without repeating a delegated investigation in full.
+- The coordinator creates roles and owns further decomposition. Workers,
+  reviewers, and explorers create no agents. Within a registered
+  [ticket review loop](ticket-review-loop.md), existing peers may continue one
+  another for the same ticket and role; this is not authority to create a
+  coordinator or assign a different task. Escalations return to the coordinator.
 - Reserve the coordinator slot. Run at most three delegated agents at once,
   or fewer when the available capacity is lower. Keep independent reviewer
   contexts even when capacity requires sequential execution.

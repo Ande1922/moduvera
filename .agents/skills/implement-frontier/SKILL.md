@@ -13,15 +13,18 @@ frontier trigger.
 
 ## Roles
 
-- The coordinator owns graph validation, authorization, scheduling, worktree
-  preparation, review aggregation, integration, cross-ticket checks, and the
-  execution ledger. It does not edit ticket code while writers are active.
+- The coordinator owns scope, authorization, dependency decisions, initial
+  role assignment, exceptions, cross-ticket assessment, and final acceptance.
+  Use repository scripts for checkout checks and receipts; run authorized
+  integration and validation from their existing entrypoints. It does not edit
+  ticket code while writers are active.
 - A ticket worker owns exactly one ticket and worktree, creates no agents, and
   returns the evidence required by
   [the worker contract](references/worker-contract.md).
-- Standards and Spec reviewers independently inspect the same committed range
-  read-only. The original worker fixes only coordinator-accepted findings in
-  the same worktree with an ordinary follow-up commit.
+- Standards and Spec reviewers independently inspect the same committed range.
+  The original worker and registered reviewers close eligible repairs through
+  the [ticket review loop](../../../docs/agents/ticket-review-loop.md), keeping
+  their code ownership and independent findings.
 
 Before every agent follow-up, confirm that the target still owns the same
 ticket, role, and worktree.
@@ -52,16 +55,20 @@ trial evidence. Keep the ownership and review boundaries above.
 4. Create isolated writers only after authorization. Read the
    [worker contract](references/worker-contract.md) and give each writer a
    focused brief with repository paths rather than coordinator transcripts.
-5. Require a current commit and exact ticket verification. Run the shared
-   [review preflight](../../../docs/agents/delivery-standards.md#review-and-gate-evidence),
-   then both review axes against the pinned base; aggregate their judgments separately,
-   return accepted findings to the same worker, and rerun affected checks.
+   On the first review-ready result, register the two independent reviewers,
+   their report paths, and the ticket review loop's repair boundary.
+5. Let the registered roles finish the ticket review loop. Receive its
+   review-complete packet or an escalation; do not relay each routine finding
+   or reconstruct receipts already supplied. Resolve escalations and inspect
+   agreed high-risk seams before accepting the ticket for integration.
 6. When integration is authorized, integrate reviewed ticket commits in
    topological order. A conflict stops integration for direction. Run focused
    cross-ticket checks after each wave and the required repository suite after
    the authorized frontier is integrated.
-7. Update tracker records only when that separate capability was granted, then
-   recompute the frontier from repository/tracker state.
+7. Keep one existing execution ledger/state as the result index, linking the
+   original worker, review, and gate records. Update tracker records only when
+   that separate capability was granted, then recompute the frontier from
+   repository/tracker state. Apply final acceptance before reporting delivery.
 
 ## Completion
 

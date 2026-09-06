@@ -57,7 +57,9 @@ For a full feature delivery, proceed in this order:
    required by [delivery standards](delivery-standards.md).
 6. Review the committed or otherwise fixed diff with `code-review`. Return
    accepted findings to the original implementer, then review the resulting
-   fixed comparison range again.
+   fixed comparison range again. In an authorized frontier, use the registered
+   [ticket review loop](ticket-review-loop.md) for routine repairs and escalate
+   its exceptions instead of routing every repair through the coordinator.
 7. With no unresolved accepted finding, run `quality-gate` against that fixed
    base/head. Source changes after the run invalidate it.
 8. Run `final-acceptance`, including applicable Scenario gates for public API,
@@ -83,3 +85,10 @@ Final acceptance requires all of the following:
 Final acceptance reports commit/evidence identifiers and remaining risks. It
 does not commit, update trackers, integrate, push, clean worktrees, publish, or
 deploy unless those operations were explicitly authorized.
+
+The coordinator owns this acceptance decision. Deterministic receipts establish
+comparison and execution facts; reviewers establish independent semantic
+judgments. Use their original reports and criterion-to-evidence mapping, inspect
+identified high-risk seams and cross-ticket effects, and investigate missing or
+contradictory evidence. A ticket review-complete packet is an integration input,
+not final delivery PASS.
