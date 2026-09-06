@@ -1,4 +1,4 @@
-# 首批执行台账
+# 执行台账
 
 ## Authorization
 
@@ -53,3 +53,23 @@ Worker/fixer、Standards/Spec reviewer 请求 `gpt-5.6-sol` / `high` / `fork_tur
 - 聚合 Spec 在 `261c534f57209f5df2b4a1ef8a83c634ff887b00` 发现最早的目录解析子进程发生在 credential capture 之前。原 01 writer 追加普通 `851a390190d7ab80815dce97505dc64633bc6c9b` 与 `eadfb0c6c080ff17ab3fbd312bc7afd9cd752f45`；后者同时关闭真实 `bash verify.sh` 入口的无斜杠分支/PATH shadow 回归。
 - 原票级 Standards/Spec 在 B0..`eadfb0c6c080ff17ab3fbd312bc7afd9cd752f45` 均 CLEAN，记录：`/private/tmp/governed-observability-frontier-20260906/evidence/01/review-gate-fix-round4-final.md`。修复以普通 merge `5792b138b39fdbe8fb879558f2fb5d4000734396` 无冲突集成；集成 shell 环境契约和 13 项静态测试 PASS，回执：`/private/tmp/governed-observability-frontier-20260906/evidence/final/agent-static-after-launcher-fix/receipt.json`。
 - 当前只完成受影响修复和票级审查。此 tracker 提交后固定新的最终 head，聚合审查、Normal Gate、镜像及双拓扑验收仍按相同固定点外置记录；02/14 未启动，三处 worktree 保留，主代码未合入。
+
+## 第二批 — 02 和 14
+
+- 2026-09-06：维护者再次调用项目 implement-frontier 继续实施。当前批次限定已就绪的 02、14；沿用本专题 tracker 更新授权及仓库日常本地 Git 授权，执行独立实现、普通提交、双轴评审、专用分支快进集成与必要验证。完成后停止，不启动后继票；本批未包含主分支合入、push、部署或工作区清理。
+- 实际比较 base：`70e9a2711c56835ea28347fa2683618514b3bd08`，已验证首批验收提交 `8accd6e0b96b9c991f58d88b51ba86dd17a45ac4` 是其祖先。主目录的其他未提交变更保留。
+- Integration：`codex/governed-observability-wave2-20260906-integration`，工作区 `/private/tmp/governed-observability-wave2-20260906/integration`。
+- 02 原 writer：`/root/wave2_worker02_logging`，分支 `codex/governed-observability-wave2-20260906-02`，工作区 `/private/tmp/governed-observability-wave2-20260906/02`，base 同上。请求 Sol/high/fresh，有效设置未暴露，记未验证。
+- 14 只读预检由 `/root/wave2_metrics_preflight` 完成，请求 Terra/medium/fresh，有效设置未验证。已有 Observer/registry 装配可复用，主要补全实际指标证据；14 尚未创建 writer/worktree。
+- 02 先拥有公共日志组件、BOM/reactor 和相关验证资产；14 从其评审通过的集成结果继续。该安排是执行顺序，不增加票据行为依赖。
+- 外部运行结果索引：`/private/tmp/governed-observability-wave2-20260906/evidence/execution-state.json`。原始报告与命令输出按票保存；当前正在实现 02，尚无第二批评审、门禁或最终 PASS。
+- 最终按当前 ADR 0038 运行适用的微服务 Scenario，保留单体编译，单体运行验收在本批范围之外。父 Spec、finding 和 Product Surface 不随认领变更状态。
+
+
+## 第二批阶段 1 — 02 集成，14 接续
+
+- 02 最终代码：`19f8022f3b5efa003bd6f7cade7bd99c09203b45`，base 为本批 `70e9a2711c56835ea28347fa2683618514b3bd08`。原 worker `/root/wave2_worker02_logging` 与同票 Standards `/root/wave2_review02_standards`、Spec `/root/wave2_review02_spec` 完成注册评审闭环，两轴最终均 CLEAN。请求 Sol/high/fresh，有效设置仍未验证。
+- 原始报告、两轮修复与最终验证：`/private/tmp/governed-observability-wave2-20260906/evidence/02/`；最终 worker report 为 `review-round2-worker-repair.md`，两轴为 `review-round2-repair-standards.md` 与 `review-round2-repair-spec.md`。点分/混合 API-key 遗漏有修复前 RED 和修复后 GREEN；原异步 appender 发现经契约核对归为未验证的扩展管线，保留复现和 erratum，不把它描述成已实施能力。
+- `git merge --ff-only -- codex/governed-observability-wave2-20260906-02` 成功，无冲突。原主体上下文实现经过协调者风险核查，最终 SHA 保持一致。集成 BOM consumer/architecture 的 27 模块通过；沙箱端口失败与自动审批重跑的完整日志/退出码均保留。
+- 14 已认领；从本次 tracker 普通提交创建 `codex/governed-observability-wave2-20260906-14`，工作区 `/private/tmp/governed-observability-wave2-20260906/14`。实际 base 与原 writer 在创建成功后填入外部 execution-state，不预填不存在的 SHA。01 与 02 的交付提交必须在其祖先链上。
+- 03、04、05、06、08、09、10、15 只解除阻塞，未开始。当前尚无 14 或本批聚合 Gate/Final Acceptance PASS；完整本批最终证据在最终提交冻结后外置保存。源 main 只同步本专题 tracker，代码未合入、未 push、未清理 worktree，父 Spec/finding/Product Surface 不变。

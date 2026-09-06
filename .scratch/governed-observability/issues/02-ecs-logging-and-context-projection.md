@@ -1,5 +1,5 @@
 Type: issue
-Status: ready-for-agent
+Status: resolved
 Blocked by: 01
 
 # 02 — ECS 输出与可信上下文投影
@@ -22,13 +22,13 @@ Blocked by: 01
 
 ## Acceptance criteria
 
-- [ ] 开发、测试与生产配置使用同一单行 ECS JSON schema；真实输出无重复键，UTC 时间/级别/logger/message/进程/服务/ECS 标识与活规范一致。
-- [ ] 结构化 key-value 和 MDC 的字段名、string/number/integer 类型稳定；未知值省略而非 null、空串、假 0；有效未采样 Trace 仍有真实 trace_id/span_id，启动/库日志可无 Trace。
-- [ ] tenant、Actor、Initiator 只从可信上下文投影；user_id 仅来自当前 USER Actor，认证前无业务上下文时不伪造身份，也不读取权限 baggage 建立身份。
-- [ ] 单条最终 ERROR 的稳定 error.code 与安全 cause 共存、不丢字段；WARN/INFO 不带堆栈。常见 HTTP/数据库异常及嵌套 cause、message、结构化字段中的敏感哨兵不泄漏。
-- [ ] 组合捕获和短作用域安装保持完整 OTel Context 与业务快照；缺失时遮蔽下层残留，正常/嵌套/异常退出恢复进入前业务上下文、OTel Scope 及本层 MDC 键，不调用全局 MDC.clear，不改变上层键。
-- [ ] 普通本地调用与同一执行单元的作用域组合不新建 Span；未知 Trace 不伪造；日志级别关闭时不提前组装昂贵消息，不为日志读取或缓存正文。
-- [ ] 公共组件不引入第二套 logger 门面或 SDK；Kernel 不依赖 OTel/Spring/Logback，不使用某运输的消费者不被迫引入 Servlet、Reactor、Kafka 全套依赖。
+- [x] 开发、测试与生产配置使用同一单行 ECS JSON schema；真实输出无重复键，UTC 时间/级别/logger/message/进程/服务/ECS 标识与活规范一致。
+- [x] 结构化 key-value 和 MDC 的字段名、string/number/integer 类型稳定；未知值省略而非 null、空串、假 0；有效未采样 Trace 仍有真实 trace_id/span_id，启动/库日志可无 Trace。
+- [x] tenant、Actor、Initiator 只从可信上下文投影；user_id 仅来自当前 USER Actor，认证前无业务上下文时不伪造身份，也不读取权限 baggage 建立身份。
+- [x] 单条最终 ERROR 的稳定 error.code 与安全 cause 共存、不丢字段；WARN/INFO 不带堆栈。常见 HTTP/数据库异常及嵌套 cause、message、结构化字段中的敏感哨兵不泄漏。
+- [x] 组合捕获和短作用域安装保持完整 OTel Context 与业务快照；缺失时遮蔽下层残留，正常/嵌套/异常退出恢复进入前业务上下文、OTel Scope 及本层 MDC 键，不调用全局 MDC.clear，不改变上层键。
+- [x] 普通本地调用与同一执行单元的作用域组合不新建 Span；未知 Trace 不伪造；日志级别关闭时不提前组装昂贵消息，不为日志读取或缓存正文。
+- [x] 公共组件不引入第二套 logger 门面或 SDK；Kernel 不依赖 OTel/Spring/Logback，不使用某运输的消费者不被迫引入 Servlet、Reactor、Kafka 全套依赖。
 
 ## Verification
 
@@ -52,3 +52,15 @@ Blocked by: 01
 - 2026-09-06：维护者确认 17 票粒度、依赖关系与落票。当前仅创建实施票；未开始实现、运行功能验证或取得交付通过证据。
 
 - 2026-09-06：前置 01 经独立双轴评审及专用分支集成交付；本票解除阻塞，但不在当前 01→07 执行授权内，未认领或实施。
+
+- 2026-09-06：维护者再次调用 implement-frontier 继续实施，第二批推进 02、14。本票由 `/root/wave2_worker02_logging` 在独立 worktree 认领，实际 base 为 `70e9a2711c56835ea28347fa2683618514b3bd08`；正在实现，尚无评审或交付通过结论。
+
+
+## Answer
+
+- 实际 base：`70e9a2711c56835ea28347fa2683618514b3bd08`；实现 `f5273f632ee012557d96046b0e38df54dbcfc12b`，普通修复 `0a782718441456ef0223115b7acde7d5583355a9`、`19f8022f3b5efa003bd6f7cade7bd99c09203b45`。原 writer、分支与工作区见执行台账。
+- 真实 Boot 4.1.1 原生 ECS 复现 `error.code` 与 cause 冲突后，补最小公共 Logging Starter。保留完整 OTel Context、可信身份及短作用域恢复；无 Kernel OTel、第二 SDK 或 logger 门面。
+- 最终代码在上述 base..`19f8022f3b5efa003bd6f7cade7bd99c09203b45` 经独立 Standards、Spec 双轴审查均 CLEAN，报告位于 `/private/tmp/governed-observability-wave2-20260906/evidence/02/review-round2-repair-standards.md` 和 `review-round2-repair-spec.md`。原隐私遗漏有 RED/GREEN 和两轮修复历史；异步/自定义 appender 不是本票已验证的支持面，当前限定 Boot 同步控制台，不声称已修复或支持异步管线。
+- `./mvnw -Dmaven.repo.local=/private/tmp/governed-observability-frontier-20260906/m2 -pl framework/starters/moduvera-logging-spring-boot-starter -am verify` 通过 Kernel 52 与 Starter 18 tests、Spotless、PMD、JaCoCo；人工 Clean Code 已完成。最终真实 Agent 2.31.1/API 1.65.0 夹具输出 6 条 ECS、1 个 SERVER Span，覆盖 sampled/unsampled/absent，7 组随机敏感哨兵在 stdout/stderr/原始 Span 中均无匹配。
+- 已无冲突快进集成；集成后 `./mvnw -Dmaven.repo.local=/private/tmp/governed-observability-frontier-20260906/m2 -pl framework/testing/moduvera-bom-smoke -am test` 的 27 模块全部通过。首轮因沙箱拒绝本地测试端口绑定而失败，自动审批后原命令重跑通过；两份输出和实际退出码分别保留为 `integration-bom-smoke` 与 `integration-bom-smoke-approved`。
+- 当前证据索引：`/private/tmp/governed-observability-wave2-20260906/evidence/execution-state.json`；逐条准则与命令映射在该票原 worker report 和 `review-round2-worker-repair.md`。本票交付不等于本批最终 PASS；14、最终聚合双轴审查、Normal Gate 与适用 Scenario 仍须继续。本票不扩大后续入口生命周期、异步 appender 或父 Spec 的完成范围。
