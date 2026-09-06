@@ -3,9 +3,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 PROJECT_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
+# shellcheck source=login-fixture-env.sh
+source "$SCRIPT_DIR/login-fixture-env.sh"
 EVIDENCE_DIR="${MODUVERA_OBSERVABILITY_EVIDENCE_DIR:-}"
 MAVEN_REPO="${MODUVERA_OBSERVABILITY_MAVEN_REPO:-}"
 RUN_SLOT="${MODUVERA_OBSERVABILITY_RUN_SLOT:-40}"
+capture_login_fixture_environment
 AGENT="$EVIDENCE_DIR/opentelemetry-javaagent-2.31.1.jar"
 EXTENSION="$PROJECT_ROOT/verification/governed-observability/agent-extension/target/moduvera-governed-otel-agent-extension-0.1.0-SNAPSHOT.jar"
 COMPOSE_FILE="$PROJECT_ROOT/verification/reference-product/compose/docker-compose.yml"
@@ -20,6 +23,7 @@ HARNESS_PID=""
   echo "MODUVERA_OBSERVABILITY_EVIDENCE_DIR and MODUVERA_OBSERVABILITY_MAVEN_REPO are required" >&2
   exit 64
 }
+require_login_fixture_environment
 mkdir -p "$EVIDENCE_DIR" "$MAVEN_REPO"
 
 stop_process() {
@@ -183,7 +187,7 @@ docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE" exec -T postgres \
 grep -Fxq '1' "$EVIDENCE_DIR/identity-service-permission.txt" \
   || { echo "Order service permission seed is unavailable before the cold-cache probe" >&2; exit 1; }
 
-python3 "$SCRIPT_DIR/probe.py" traffic --base "http://127.0.0.1:$GATEWAY_PORT" \
+run_login_probe python3 "$SCRIPT_DIR/probe.py" traffic --base "http://127.0.0.1:$GATEWAY_PORT" \
   --identity-headers "$EVIDENCE_DIR/identity-headers.jsonl" \
   --order-headers "$EVIDENCE_DIR/order-headers.jsonl" \
   --catalog-headers "$EVIDENCE_DIR/catalog-headers.jsonl" \
@@ -208,7 +212,7 @@ kill -TERM "$RECEIVER_PID"
 wait "$RECEIVER_PID"
 RECEIVER_PID=""
 sleep 2
-python3 "$SCRIPT_DIR/probe.py" outage --base "http://127.0.0.1:$GATEWAY_PORT" \
+run_login_probe python3 "$SCRIPT_DIR/probe.py" outage --base "http://127.0.0.1:$GATEWAY_PORT" \
   --output "$EVIDENCE_DIR/outage.json"
 OUTAGE_ORDER_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["orderId"])' "$EVIDENCE_DIR/outage.json")"
 docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE" exec -T postgres \

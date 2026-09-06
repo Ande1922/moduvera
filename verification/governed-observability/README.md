@@ -37,13 +37,33 @@ and a byte-preflight-approved JAR whose SPI registration is deliberately
 broken.
 
 Run the complete qualification with dedicated external evidence and Maven
-cache directories:
+cache directories. Supply the local seeded login fixture through environment
+variables whose values come from the caller's local test credential source:
 
 ```bash
+MODUVERA_OBSERVABILITY_LOGIN_USERNAME="${LOCAL_FIXTURE_USERNAME}" \
+MODUVERA_OBSERVABILITY_LOGIN_CREDENTIAL="${LOCAL_FIXTURE_CREDENTIAL}" \
+MODUVERA_OBSERVABILITY_LOGIN_TENANT="${LOCAL_FIXTURE_TENANT}" \
 MODUVERA_OBSERVABILITY_EVIDENCE_DIR=/private/tmp/moduvera-otel-evidence \
 MODUVERA_OBSERVABILITY_MAVEN_REPO=/private/tmp/moduvera-otel-m2 \
 verification/governed-observability/verify.sh
 ```
+
+All three login variables are required. The tenant must be the current
+canonical `tenant-a` qualification fixture because the analyzer binds Kafka
+and persistence evidence to that tenant. An empty, missing, or noncanonical
+value exits 64 before downloads, builds, or runtime startup. The supplied
+username must identify an enabled `tenant-a` seed member with `catalog:read`,
+`order:create`, and `order:read`; the current reference seed supplies `alice`.
+The Order service also needs its seeded `catalog:read` permission, which the
+scenario checks before the cold-cache probe.
+
+`verify.sh` removes the three caller-facing variables and clears any inherited
+export attribute from its private copies before starting unrelated children.
+It supplies them only to the two `probe.py` login processes. The credential is
+not a command argument, log value, or evidence field. Username and tenant are
+business identifiers and can appear in existing span, Kafka, and persistence
+evidence; this verification does not add a new redaction rule for them.
 
 The scenario downloads the exact release asset, verifies both runtime artifact
 digests, builds and inspects the public images, mounts the Agent and extension
