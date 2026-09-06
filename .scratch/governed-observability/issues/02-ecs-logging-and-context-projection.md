@@ -64,3 +64,10 @@ Blocked by: 01
 - `./mvnw -Dmaven.repo.local=/private/tmp/governed-observability-frontier-20260906/m2 -pl framework/starters/moduvera-logging-spring-boot-starter -am verify` 通过 Kernel 52 与 Starter 18 tests、Spotless、PMD、JaCoCo；人工 Clean Code 已完成。最终真实 Agent 2.31.1/API 1.65.0 夹具输出 6 条 ECS、1 个 SERVER Span，覆盖 sampled/unsampled/absent，7 组随机敏感哨兵在 stdout/stderr/原始 Span 中均无匹配。
 - 已无冲突快进集成；集成后 `./mvnw -Dmaven.repo.local=/private/tmp/governed-observability-frontier-20260906/m2 -pl framework/testing/moduvera-bom-smoke -am test` 的 27 模块全部通过。首轮因沙箱拒绝本地测试端口绑定而失败，自动审批后原命令重跑通过；两份输出和实际退出码分别保留为 `integration-bom-smoke` 与 `integration-bom-smoke-approved`。
 - 当前证据索引：`/private/tmp/governed-observability-wave2-20260906/evidence/execution-state.json`；逐条准则与命令映射在该票原 worker report 和 `review-round2-worker-repair.md`。本票交付不等于本批最终 PASS；14、最终聚合双轴审查、Normal Gate 与适用 Scenario 仍须继续。本票不扩大后续入口生命周期、异步 appender 或父 Spec 的完成范围。
+
+
+- 后续聚合在 `6a3e9f06d9b0c8d0eeede0d0da65b50694305deb` 发现 STDS-W2-001：camel/compact credential 字段可绕过过滤。原 02 writer 在原工作区追加普通修复 `f7926bfd9d738a82c112187118fdfac4a107adae`、`f702bc9d364f855f6f1d7e93562bd9d65ae861fe`、`aacd487c91f347116fa8e8f129a47516e6a90d6c`。修复前 RED 分别保留原八条泄漏、长消息/普通字段回归，以及 API-key/数字后缀别名遗漏；前两版补丁未单独提前集成，失败回执均保留。
+- 最终实现使用单向赋值扫描、分隔符/驼峰/数字词边界，并保留既有 API-key 专用规范化匹配。修复保留普通字段、完整转义引号/Basic/Bearer 值、安全 ID/大小字段，无公共 API、依赖或管线变更。
+- 最终 formatter 13、Kernel 52、Starter 22 tests，Spotless/PMD/JaCoCo、原始探针及当前 extension/fixture package 均通过。实际 Agent 2.31.1/API 1.65.0 回放的十组随机哨兵在 stdout/stderr/原始 Span 中零匹配，含新增 apiKey2；14 的受控 metrics 观察保持 Trace 1、metrics 0、logs 0、500 ms 周期和两秒窗口。
+- 修复证据：`/private/tmp/governed-observability-wave2-20260906/evidence/02/aggregate-repair-round3-worker-report.md`、`aggregate-repair-round3-preflight-current-clean.log/.exit`；原票双轴复审：在 B0..aacd487 上均 CLEAN，原作者分别关闭各自发现，报告为 `aggregate-repair-round3-review-standards.md` 与 `aggregate-repair-round3-review-spec.md`。聚合作者复审、Normal Gate 和最终当前提交的运行回放仍须继续，旧最终证据只属于原提交。
+- 上述最终修复已快进纳入隔离 integration，无冲突；集成后 Logging/Messaging Starter 的 `-am test` 通过，回执为 `/private/tmp/governed-observability-wave2-20260906/evidence/integration-repair-cross-check.out/.exit`。

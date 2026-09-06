@@ -84,3 +84,15 @@ Worker/fixer、Standards/Spec reviewer 请求 `gpt-5.6-sol` / `high` / `fork_tur
 - 本批比较 base 仍为 `70e9a2711c56835ea28347fa2683618514b3bd08`。本次 tracker 普通提交后冻结最终 head；重新运行完整范围的独立 Standards/Spec、Normal Gate 和适用 Scenario，结果外置在同一 `evidence/execution-state.json` 及最终交付报告，避免通过后再写源码/文档使证据失效。
 - 适用性判断将在最终比较点确认：当前改动未触及既有生产 App API/消息路由/迁移/镜像/拓扑装配；聚焦真实 App IT 和日志/Agent 验证资产承接运行证据，完整 reactor Gate 保留。ADR 0038 下单体运行在本批范围外，编译和共享架构检查保留；不把旧拓扑资格重标为本批 PASS。
 - 当前仅 01、02、07、14 resolved；下一 ready 前沿为 03、04、05、06、08、09、10、15，未开始。11、12、13、16、17 仍受未完成前置阻塞。父 Spec、finding、Product Surface 和相邻 tracker 不变。
+
+
+## 第二批阶段 3 — 聚合隐私发现修复后冻结最终比较点
+
+- 初始聚合比较 B0 `70e9a2711c56835ea28347fa2683618514b3bd08`..`6a3e9f06d9b0c8d0eeede0d0da65b50694305deb` 中，Spec CLEAN，Standards 发现 P1 STDS-W2-001：camel/compact credential 字段绕过最终过滤。原 02 writer 在原工作区执行修复，原 14 工作区保持冻结。
+- 普通修复提交 `f7926bfd9d738a82c112187118fdfac4a107adae` 后，原票 Standards 检出长消息性能和普通字段误过滤；普通修复 `f702bc9d364f855f6f1d7e93562bd9d65ae861fe` 关闭这两项，但双轴发现 API-key 和数字后缀别名保护退化。两次均收齐原双轴报告后由协调者接受并给出窄修复决策；这两版补丁未提前集成。修复前 RED 和失败报告完整保留，没有豁免或覆盖失败结果。
+- 最终普通修复 `aacd487c91f347116fa8e8f129a47516e6a90d6c` 保留单向赋值扫描，恢复 API-key 专用规范化保护并补齐数字词边界。原 `/root/wave2_review02_standards` 与 `/root/wave2_review02_spec` 在 B0..aacd487 均 CLEAN，分别关闭 STDS-AGR02-003 和 SPEC-AGR02-R2-001；先前性能/普通字段发现保持关闭。新实测 18 个敏感与 10 个普通变体均符合预期。
+- 当前完整票级报告位于 `/private/tmp/governed-observability-wave2-20260906/evidence/02/aggregate-repair-round3-worker-report.md`、`aggregate-repair-round3-review-standards.md`、`aggregate-repair-round3-review-spec.md`。真实干净工作区预检 `aggregate-repair-round3-preflight-current-clean.log/.exit` PASS，B0..aacd487 指纹为 `d08d27f76125659a8ceae8c8bea279364dbb7bfb3c3c94d3364c655e7ab0ccfa`。此前 round2 普通 committed-range 预检仍保留，错误说明已纠正并补过 current-clean 回执。
+- Kernel 52、Logging Starter 22 tests 与 Spotless/PMD/JaCoCo、原始泄漏探针、当前 extension/fixture package 均通过。当前真实 Agent 2.31.1/API 1.65.0 输出 6 条 ECS、1 个 SERVER Span，10 个随机敏感哨兵在 stdout/stderr/原始 OTLP 中零匹配。14 的 metrics=none 观察保留 500 ms 周期、两秒窗口和 Trace 1/metrics 0/logs 0；没有变更生产 App 装配或 metrics 实现。
+- `git merge --ff-only -- codex/governed-observability-wave2-20260906-02` 从 6a3e9f0 无冲突快进至 aacd487；集成后的 Logging/Messaging Starter `-am test` 通过，回执为 `/private/tmp/governed-observability-wave2-20260906/evidence/integration-repair-cross-check.out/.exit`。
+- 本次 tracker 普通提交后冻结新的最终 head，沿用同一 integration 工作区和原两位聚合作者重新评审完整 B0..head。STDS-W2-001 的正式关闭由原聚合 Standards 作者负责；之后才运行 Normal Gate、最终当前产物的 Agent 夹具和最终验收，结果外置在同批 evidence 中。6a3e9f0 上旧运行结果只属于旧提交，不能替代新最终结果。
+- 当前仍仅 01、02、07、14 resolved，后继 ready 前沿没有认领或实施。父 Spec、finding、Product Surface、主分支代码和其他未提交工作保持原范围；未合入 main、未 push、未部署、未清理 worktree。日志同步 Boot 控制台的资格边界及 ADR 0038 单体运行非本批范围均不变。
