@@ -8,8 +8,10 @@ import io.github.ande1922.moduvera.message.inbox.InboxOutcome;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
+import java.util.concurrent.locks.LockSupport;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiFunction;
+import java.util.function.BooleanSupplier;
 
 final class InboxDatabaseConcurrency {
 
@@ -52,7 +54,8 @@ final class InboxDatabaseConcurrency {
             Operations operations,
             String messageId,
             boolean rollBackFirst,
-            BiFunction<MessageId, String, Runnable> atomicWork)
+            BiFunction<MessageId, String, Runnable> atomicWork,
+            BooleanSupplier databaseContentionObserved)
             throws Exception {
         var id = new MessageId(messageId);
         CountDownLatch bothPrechecksPassed = new CountDownLatch(2);
@@ -87,6 +90,7 @@ final class InboxDatabaseConcurrency {
                 await(bothPrechecksPassed);
                 await(firstBusinessStarted);
                 await(secondAttemptingHandle);
+                awaitDatabaseContention(databaseContentionObserved);
             } finally {
                 finishFirst.countDown();
             }
@@ -112,6 +116,20 @@ final class InboxDatabaseConcurrency {
             Thread.currentThread().interrupt();
             throw new IllegalStateException(interrupted);
         }
+    }
+
+    private static void awaitDatabaseContention(BooleanSupplier contentionObserved) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (System.nanoTime() < deadline) {
+            if (contentionObserved.getAsBoolean()) {
+                return;
+            }
+            if (Thread.currentThread().isInterrupted()) {
+                throw new IllegalStateException("interrupted while observing database contention");
+            }
+            LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(10));
+        }
+        throw new IllegalStateException("timed out observing the competing Inbox insert wait");
     }
 
     interface Operations {

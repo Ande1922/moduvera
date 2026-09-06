@@ -55,6 +55,7 @@ class JdbcMessagingMySqlIT {
             new MySQLContainer(System.getProperty("mysql.test.image", "mysql:8.4.11"));
 
     private JdbcTemplate jdbc;
+    private JdbcTemplate databaseObserver;
     private JdbcOutboxStore outbox;
     private JdbcOutboxStore secondOutbox;
     private JdbcDurablePublication publication;
@@ -66,6 +67,8 @@ class JdbcMessagingMySqlIT {
     void setUp() {
         DataSource dataSource = new DriverManagerDataSource(
                 MYSQL.getJdbcUrl(), MYSQL.getUsername(), MYSQL.getPassword());
+        databaseObserver = new JdbcTemplate(new DriverManagerDataSource(
+                MYSQL.getJdbcUrl(), "root", MYSQL.getPassword()));
         new DatabaseMigrator(dataSource)
                 .migrate(new MigrationPlan(
                         new DatabaseComponent("messaging"),
@@ -383,8 +386,27 @@ class JdbcMessagingMySqlIT {
         var id = new MessageId(messageId);
         var template = inboxTemplate("inventory");
         InboxDatabaseConcurrency.assertPrecheckRace(
-                inboxOperations(template), messageId, rollBackFirst, this::atomicInboxWork);
+                inboxOperations(template),
+                messageId,
+                rollBackFirst,
+                this::atomicInboxWork,
+                this::inboxInsertIsWaiting);
         assertAtomicInboxState(id, messageId + "-event", 1);
+    }
+
+    private boolean inboxInsertIsWaiting() {
+        return databaseObserver.queryForObject(
+                        """
+                        SELECT COUNT(*)
+                          FROM performance_schema.data_lock_waits waits
+                          JOIN performance_schema.data_locks requested
+                            ON requested.ENGINE = waits.ENGINE
+                           AND requested.ENGINE_LOCK_ID = waits.REQUESTING_ENGINE_LOCK_ID
+                         WHERE requested.OBJECT_SCHEMA = DATABASE()
+                           AND requested.OBJECT_NAME = 'moduvera_message_inbox'
+                        """,
+                        Integer.class)
+                > 0;
     }
 
     private static boolean isProcessed(

@@ -760,8 +760,26 @@ class JdbcMessagingStoreIT {
         var id = new MessageId(messageId);
         var template = inboxTemplate("inventory");
         InboxDatabaseConcurrency.assertPrecheckRace(
-                inboxOperations(template), messageId, rollBackFirst, this::atomicInboxWork);
+                inboxOperations(template),
+                messageId,
+                rollBackFirst,
+                this::atomicInboxWork,
+                this::inboxInsertIsWaiting);
         assertAtomicInboxState(id, messageId + "-event", 1);
+    }
+
+    private boolean inboxInsertIsWaiting() {
+        return jdbc.queryForObject(
+                        """
+                        SELECT COUNT(*)
+                          FROM pg_stat_activity
+                         WHERE pid <> pg_backend_pid()
+                           AND datname = current_database()
+                           AND wait_event_type = 'Lock'
+                           AND query LIKE '%INSERT%moduvera_message_inbox%'
+                        """,
+                        Integer.class)
+                > 0;
     }
 
     private InboxTemplate inboxTemplate(String consumerId) {
