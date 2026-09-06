@@ -21,6 +21,7 @@
     <module>framework/starters/moduvera-data-mybatis-plus-spring-boot-starter</module>
     <module>framework/starters/moduvera-database-migration-spring-boot-starter</module>
     <module>framework/starters/moduvera-messaging-kafka-spring-boot-starter</module>
+    <module>framework/starters/moduvera-logging-spring-boot-starter</module>
     <module>framework/starters/moduvera-scheduler-spring-boot-starter</module>
     <module>framework/testing/moduvera-test-support</module>
     <module>framework/testing/moduvera-bom-smoke</module>
@@ -47,6 +48,7 @@
     <module>verification/moduvera-spring-task-context-consumer</module>
     <module>verification/moduvera-spring-ai-context-consumer</module>
     <module>verification/governed-observability/agent-extension</module>
+    <module>verification/governed-observability/logging-fixture</module>
   </modules>
 
   <properties>
