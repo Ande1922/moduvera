@@ -106,3 +106,5 @@ AI 08/09 不以 07 为阻塞项：原生 Reactor 库依赖不等于依赖本项�
 - 2026-09-06 implementation: ticket 09 integrated at `c3ac8c7a2444f51d75c8f9add995e810e3921b9e`, both review axes clean; verification PASS. Current open frontier: 05. Claims: none. See [ticket evidence](issues/09-ai-tool-loop-context.md#answer). Historical publication states above remain the original snapshot.
 
 - 2026-09-06 implementation: ticket 05 integrated at `1893acfe2aec90cc833285e68a559318f2e2045a`, both review axes clean; verification PASS. Current open frontier: 11. Claims: 11. See [ticket evidence](issues/05-spring-task-executor-propagation.md#answer). Historical publication states above remain the original snapshot.
+
+- 2026-09-06 implementation: ticket11 integrated at `297432f9f749c09b8d0cbc1dbd7bf3cf8fe14a5e` with clean two-axis review,237 common-baseline tests and both topology qualifications. All11 implementation deliveries are present. Tracker11 remains claimed to preserve independent parent lifecycle; final whole-feature fixed-point stages remain pending. See [ticket11](issues/11-composition-and-consumer-qualification.md#answer).

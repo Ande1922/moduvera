@@ -6,7 +6,7 @@ Code base: ce1636f82f9652b2b14dd9e146e62c748fbf3233. Integration branch: codex/e
 
 ## Current frontier
 
-11; claimed now: 11.
+Implementation frontier: none. All11 tickets are implemented and integrated with clean independent ticket reviews and ticket qualification evidence. Tracker11 remains claimed for the independent parent lifecycle. Current delivery stage: full integration fixed-point review, Normal gate and final-head Scenario; no final PASS is claimed yet.
 
 ## Evidence rules
 
@@ -70,3 +70,7 @@ Base `f3ef17e028802d4072e943c167f9abea0aca5b3a`; worker head `c8f9669f230b0b4463
 ## Ticket 05 integrated
 
 Base `e76da5ab2629196e267c24b88f47e4605661ad95`; worker head `42ac607ee40d56a6aeb164771fa0b4328feb3931`; integrated `1893acfe2aec90cc833285e68a559318f2e2045a`. Branch `codex/execution-context-20260905-05`, worktree `/private/tmp/execution-context-frontier-20260905/05`. Standards and Spec clean at the same fixed range. Verification PASS: Worker scoped verify passed62tests Kernel52/adapter4/consumer6 with real selectedTaskExecutor and Async proxies, full identity/absence/restoration/native lifecycle. Resolved Spring7.0.9/Boot4.1.1/Java26 without Reactor or AI or ticket04 dependency. Integrated all context consumers plus real Notes2IT verify passed in30.744s; log evidence/05/integrated-all-context-consumers-verify.log. All10 files and allocated ADR section match reviewed worker head. Evidence is under `evidence/05/`. Remaining frontier: 11.
+
+## Ticket 11 integrated
+
+Base `04c66e84e4b05814e462ba4999759b571109e9cf`; worker head `e055adb0148d8be69b42e2874a38641efa512e04`; integrated `297432f9f749c09b8d0cbc1dbd7bf3cf8fe14a5e`; full tree `3eafab29e06b9f901c07070bace13f2b1d86f538` equals the actual consumer/Scenario-tested tree. Worktree `/private/tmp/execution-context-frontier-20260905/11`, branch `codex/execution-context-20260905-11`. Standards and Spec clean. Verification PASS:237 common-baseline tests, real four-family dependency/artifact evidence, and both public topologies with Kafka recovery. [Qualification evidence](evidence/11/qualification-scenario.md). Tracker remains claimed solely for the independently controlled parent lifecycle; no code frontier remains. Final whole-range review/gate/Scenario remain separate.
