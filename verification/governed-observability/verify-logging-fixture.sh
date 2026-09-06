@@ -73,11 +73,20 @@ done
 OTLP_PORT="$(<"$EVIDENCE_DIR/logging-otlp.port")"
 REFERENCE_JAVA_TOOL_OPTIONS=""
 REFERENCE_OTLP_TRACES_ENDPOINT="http://127.0.0.1:$OTLP_PORT/v1/traces"
+METRICS_ENDPOINT="http://127.0.0.1:$OTLP_PORT/v1/metrics"
+METRIC_EXPORT_INTERVAL_MILLIS=500
+METRIC_OBSERVATION_SECONDS=2
 governed_agent_preflight "$AGENT" "$EXTENSION"
-OPTIONS="$(governed_agent_java_options logging-fixture "$AGENT" "$EXTENSION")"
+OPTIONS="$(governed_agent_java_options logging-fixture "$AGENT" "$EXTENSION") \
+ -Dotel.exporter.otlp.metrics.protocol=http/protobuf \
+ -Dotel.exporter.otlp.metrics.endpoint=$METRICS_ENDPOINT \
+ -Dotel.metric.export.interval=$METRIC_EXPORT_INTERVAL_MILLIS"
 [[ " $OPTIONS " == *" -Dotel.traces.exporter=otlp "* \
   && " $OPTIONS " == *" -Dotel.logs.exporter=none "* \
-  && " $OPTIONS " == *" -Dotel.metrics.exporter=none "* ]] \
+  && " $OPTIONS " == *" -Dotel.metrics.exporter=none "* \
+  && " $OPTIONS " == *" -Dotel.exporter.otlp.metrics.protocol=http/protobuf "* \
+  && " $OPTIONS " == *" -Dotel.exporter.otlp.metrics.endpoint=$METRICS_ENDPOINT "* \
+  && " $OPTIONS " == *" -Dotel.metric.export.interval=$METRIC_EXPORT_INTERVAL_MILLIS "* ]] \
   || { echo "logging fixture Agent exporter policy is incomplete" >&2; exit 1; }
 
 FIXTURE_PORT_FILE="$EVIDENCE_DIR/logging-fixture.port" \
@@ -120,24 +129,34 @@ until python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["spans"] 
   sleep 0.1
 done
 
-sleep 2
+sleep "$METRIC_OBSERVATION_SECONDS"
 python3 - "$EVIDENCE_DIR/logging-receiver-status.json" \
-  "$EVIDENCE_DIR/metrics-export-observation.json" <<'PY'
+  "$EVIDENCE_DIR/metrics-export-observation.json" \
+  "$METRICS_ENDPOINT" \
+  "$METRIC_EXPORT_INTERVAL_MILLIS" \
+  "$METRIC_OBSERVATION_SECONDS" <<'PY'
 import json
 from pathlib import Path
 import sys
 
 status = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+metrics_endpoint = sys.argv[3]
+metric_export_interval_millis = int(sys.argv[4])
+metric_observation_seconds = int(sys.argv[5])
 signals = status["postRequestsBySignal"]
 assert status["spans"] >= 1, status
 assert signals["traces"] >= 1, signals
 assert signals["metrics"] == 0, signals
 assert signals["logs"] == 0, signals
+assert metric_observation_seconds * 1000 > metric_export_interval_millis * 2
 receipt = {
     "effectiveExporters": {"logs": "none", "metrics": "none", "traces": "otlp"},
+    "metricExportIntervalMillis": metric_export_interval_millis,
+    "metricObservationSeconds": metric_observation_seconds,
+    "metricsEndpoint": metrics_endpoint,
+    "metricsProtocol": "http/protobuf",
     "positiveTraceObserved": True,
     "postRequestsBySignal": signals,
-    "postTraceObservationSeconds": 2,
 }
 Path(sys.argv[2]).write_text(json.dumps(receipt, sort_keys=True) + "\n", encoding="utf-8")
 PY
