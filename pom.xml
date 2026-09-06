@@ -46,6 +46,7 @@
     <module>verification/moduvera-reactor-context-consumer</module>
     <module>verification/moduvera-spring-task-context-consumer</module>
     <module>verification/moduvera-spring-ai-context-consumer</module>
+    <module>verification/governed-observability/agent-extension</module>
   </modules>
 
   <properties>

@@ -35,6 +35,9 @@ Set `MODUVERA_IMAGE_SKIP_PACKAGE=1` only when the executable JARs are already
 current, or `MODUVERA_IMAGE_SKIP_SMOKE=1` for the build-and-inspect portion.
 `JAVA_TOOL_OPTIONS` and all Spring configuration remain runtime inputs; the
 Dockerfile does not prescribe a server or debug port.
+The image inspection also proves that the public image contains no
+OpenTelemetry Java Agent or governed Agent extension. Governed verification
+supplies both artifacts as read-only runtime mounts.
 
 This is a reusable construction and verification baseline, not a production
 deployment template. It does not define production secrets, topology,

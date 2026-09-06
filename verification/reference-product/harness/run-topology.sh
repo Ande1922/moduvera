@@ -17,6 +17,7 @@ reference_configure_port_plan "$TOPOLOGY"
 source "$CONFIG_FILE"
 
 REFERENCE_PRODUCT_DIR="$PROJECT_ROOT/verification/reference-product"
+GOVERNED_OBSERVABILITY_DIR="$PROJECT_ROOT/verification/governed-observability"
 COMPOSE_DIR="$REFERENCE_PRODUCT_DIR/compose"
 ACCEPTANCE_DIR="$PROJECT_ROOT/verification/acceptance"
 COMPOSE_FILE="$COMPOSE_DIR/docker-compose.yml"
@@ -29,6 +30,15 @@ APP_STOP_TIMEOUT_SECONDS="${REFERENCE_APP_STOP_TIMEOUT_SECONDS:-5}"
 DIAGNOSTICS_TIMEOUT_SECONDS="${REFERENCE_DIAGNOSTICS_TIMEOUT_SECONDS:-5}"
 COMPOSE_DOWN_TIMEOUT_SECONDS="${REFERENCE_COMPOSE_DOWN_TIMEOUT_SECONDS:-10}"
 REFERENCE_JAVA_TOOL_OPTIONS="${REFERENCE_JAVA_TOOL_OPTIONS:--Xms64m -Xmx256m}"
+REFERENCE_GOVERNED_OBSERVABILITY="${REFERENCE_GOVERNED_OBSERVABILITY:-0}"
+if [[ "$REFERENCE_GOVERNED_OBSERVABILITY" != "0" && "$REFERENCE_GOVERNED_OBSERVABILITY" != "1" ]]; then
+  echo "Invalid REFERENCE_GOVERNED_OBSERVABILITY '$REFERENCE_GOVERNED_OBSERVABILITY'; expected 0 or 1" >&2
+  exit 64
+fi
+if [[ "$REFERENCE_GOVERNED_OBSERVABILITY" == "1" ]]; then
+  # shellcheck source=../../governed-observability/agent-runtime.sh
+  source "$GOVERNED_OBSERVABILITY_DIR/agent-runtime.sh"
+fi
 for timeout_specification in \
   "REFERENCE_APP_STOP_TIMEOUT_SECONDS=$APP_STOP_TIMEOUT_SECONDS" \
   "REFERENCE_DIAGNOSTICS_TIMEOUT_SECONDS=$DIAGNOSTICS_TIMEOUT_SECONDS" \
@@ -142,6 +152,10 @@ trap 'exit 143' TERM
 start_app() {
   local app="$1" jar="$2" java_tool_options="$REFERENCE_JAVA_TOOL_OPTIONS" debug_port
   shift 2
+  if [[ "$REFERENCE_GOVERNED_OBSERVABILITY" == "1" ]]; then
+    java_tool_options="$java_tool_options $(governed_agent_java_options \
+      "$app" "${REFERENCE_OTEL_JAVAAGENT:-}" "${REFERENCE_OTEL_AGENT_EXTENSION:-}")"
+  fi
   if [[ "$REFERENCE_DEBUG" == "1" ]]; then
     debug_port="$(reference_debug_port "$app")"
     java_tool_options="$java_tool_options -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=127.0.0.1:$debug_port"
@@ -254,6 +268,9 @@ reference_write_port_manifest "$TOPOLOGY" "$PORT_MANIFEST"
 reference_acquire_run_locks
 reference_preflight_ports "$HARNESS_DIR"
 echo "Reference port preflight: PASS"
+if [[ "$REFERENCE_GOVERNED_OBSERVABILITY" == "1" ]]; then
+  governed_agent_preflight "${REFERENCE_OTEL_JAVAAGENT:-}" "${REFERENCE_OTEL_AGENT_EXTENSION:-}"
+fi
 if [[ "${REFERENCE_PREFLIGHT_ONLY:-0}" == "1" ]]; then
   FAILED=0
   exit 0
@@ -273,8 +290,10 @@ start_identity
 start_business_apps
 
 start_app gateway apps/gateway-app/target/gateway-app-0.1.0-SNAPSHOT.jar \
-  "GATEWAY_PORT=$GATEWAY_PORT" "IDENTITY_BASE_URL=http://localhost:$IDENTITY_PORT" \
-  "ORDER_BASE_URL=$ORDER_TARGET_BASE_URL" "ORDER_TARGET_PRESERVES_PREFIX=$ORDER_TARGET_PRESERVES_PREFIX" \
+  "GATEWAY_PORT=$GATEWAY_PORT" \
+  "IDENTITY_BASE_URL=${REFERENCE_GATEWAY_IDENTITY_BASE_URL:-http://localhost:$IDENTITY_PORT}" \
+  "ORDER_BASE_URL=${REFERENCE_GATEWAY_ORDER_BASE_URL:-$ORDER_TARGET_BASE_URL}" \
+  "ORDER_TARGET_PRESERVES_PREFIX=$ORDER_TARGET_PRESERVES_PREFIX" \
   GATEWAY_SERVICE_ID=gateway GATEWAY_SERVICE_SECRET=gateway-secret
 wait_http gateway "http://localhost:$GATEWAY_PORT/actuator/health"
 

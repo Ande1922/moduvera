@@ -1,0 +1,191 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+PROJECT_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)"
+EVIDENCE_DIR="${MODUVERA_OBSERVABILITY_EVIDENCE_DIR:-}"
+MAVEN_REPO="${MODUVERA_OBSERVABILITY_MAVEN_REPO:-}"
+RUN_SLOT="${MODUVERA_OBSERVABILITY_RUN_SLOT:-40}"
+AGENT="$EVIDENCE_DIR/opentelemetry-javaagent-2.31.1.jar"
+EXTENSION="$PROJECT_ROOT/verification/governed-observability/agent-extension/target/moduvera-governed-otel-agent-extension-0.1.0-SNAPSHOT.jar"
+COMPOSE_FILE="$PROJECT_ROOT/verification/reference-product/compose/docker-compose.yml"
+COMPOSE_PROJECT=""
+RECEIVER_PID=""
+IDENTITY_PROXY_PID=""
+ORDER_PROXY_PID=""
+HARNESS_PID=""
+
+[[ -n "$EVIDENCE_DIR" && -n "$MAVEN_REPO" ]] || {
+  echo "MODUVERA_OBSERVABILITY_EVIDENCE_DIR and MODUVERA_OBSERVABILITY_MAVEN_REPO are required" >&2
+  exit 64
+}
+mkdir -p "$EVIDENCE_DIR" "$MAVEN_REPO"
+
+stop_process() {
+  local pid="$1"
+  if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+    kill -TERM "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+  fi
+}
+
+cleanup() {
+  local primary_status=$?
+  trap - EXIT INT TERM
+  set +e
+  stop_process "$HARNESS_PID"
+  stop_process "$ORDER_PROXY_PID"
+  stop_process "$IDENTITY_PROXY_PID"
+  stop_process "$RECEIVER_PID"
+  if [[ -z "$COMPOSE_PROJECT" && -s "$EVIDENCE_DIR/reference-manifest.json" ]]; then
+    COMPOSE_PROJECT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["resources"]["composeProject"])' \
+      "$EVIDENCE_DIR/reference-manifest.json" 2>/dev/null || true)"
+  fi
+  if [[ -n "$COMPOSE_PROJECT" ]]; then
+    docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE" down \
+      --timeout 10 -v --remove-orphans >/dev/null 2>&1 || true
+  fi
+  exit "$primary_status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+"$SCRIPT_DIR/tests/test-agent-contract.sh"
+"$SCRIPT_DIR/fetch-agent.sh" "$AGENT"
+
+if [[ "${MODUVERA_OBSERVABILITY_SKIP_BUILD:-0}" != "1" ]]; then
+  "$PROJECT_ROOT/mvnw" -Dmaven.repo.local="$MAVEN_REPO" -q clean install
+fi
+
+[[ -f "$EXTENSION" ]] || {
+  echo "Governed Agent extension is unavailable after the build: $EXTENSION" >&2
+  exit 1
+}
+"$SCRIPT_DIR/tests/test-governed-preflight.sh" "$AGENT" "$EXTENSION"
+
+JACOCO_AGENT="$(find "$MAVEN_REPO/org/jacoco/org.jacoco.agent/0.8.15" \
+  -type f -name 'org.jacoco.agent-0.8.15-runtime.jar' -print -quit 2>/dev/null || true)"
+[[ -f "$JACOCO_AGENT" ]] || { echo "JaCoCo 0.8.15 runtime Agent is unavailable after the build" >&2; exit 1; }
+
+if [[ "${MODUVERA_OBSERVABILITY_SKIP_IMAGE:-0}" != "1" ]]; then
+  "$PROJECT_ROOT/verification/application-image/build-images.sh"
+  python3 "$PROJECT_ROOT/verification/application-image/inspect_images.py"
+fi
+
+python3 -c 'import json,secrets,sys; labels=("header","query","sql","payload","credential"); json.dump({label:"moduvera-"+label+"-"+secrets.token_hex(16) for label in labels},open(sys.argv[1],"w"),sort_keys=True)' \
+  "$EVIDENCE_DIR/sentinels.json"
+chmod 0600 "$EVIDENCE_DIR/sentinels.json"
+
+rm -f "$EVIDENCE_DIR/otlp.port" \
+  "$EVIDENCE_DIR/identity-proxy.port" "$EVIDENCE_DIR/order-proxy.port"
+python3 "$SCRIPT_DIR/otlp_receiver.py" --host 0.0.0.0 --port 0 \
+  --port-file "$EVIDENCE_DIR/otlp.port" --output "$EVIDENCE_DIR/spans.jsonl" \
+  --status "$EVIDENCE_DIR/receiver-status.json" --sentinels "$EVIDENCE_DIR/sentinels.json" \
+  >"$EVIDENCE_DIR/receiver.log" 2>&1 &
+RECEIVER_PID=$!
+deadline=$((SECONDS + 15))
+until [[ -s "$EVIDENCE_DIR/otlp.port" ]]; do
+  kill -0 "$RECEIVER_PID" 2>/dev/null || { echo "OTLP receiver stopped during startup" >&2; exit 1; }
+  (( SECONDS < deadline )) || { echo "OTLP receiver did not publish its port" >&2; exit 1; }
+  sleep 0.1
+done
+OTLP_PORT="$(<"$EVIDENCE_DIR/otlp.port")"
+
+if [[ "${MODUVERA_OBSERVABILITY_SKIP_IMAGE:-0}" != "1" ]]; then
+  REFERENCE_OTLP_TRACES_ENDPOINT="http://host.docker.internal:$OTLP_PORT/v1/traces" \
+    MODUVERA_OTEL_JAVAAGENT="$AGENT" MODUVERA_OTEL_AGENT_EXTENSION="$EXTENSION" \
+    MODUVERA_JACOCO_AGENT="$JACOCO_AGENT" \
+    MODUVERA_OBSERVABILITY_EVIDENCE_DIR="$EVIDENCE_DIR" \
+    "$SCRIPT_DIR/verify-image-agent.sh" | tee "$EVIDENCE_DIR/image-agent.out"
+fi
+
+POSTGRES_PORT=$((55432 + RUN_SLOT * 100))
+KAFKA_PORT=$((59092 + RUN_SLOT * 100))
+GATEWAY_PORT=$((58080 + RUN_SLOT * 100))
+IDENTITY_PORT=$((58081 + RUN_SLOT * 100))
+ORDER_PORT=$((58083 + RUN_SLOT * 100))
+
+python3 "$SCRIPT_DIR/header_proxy.py" --name gateway-identity \
+  --target "http://127.0.0.1:$IDENTITY_PORT" \
+  --port-file "$EVIDENCE_DIR/identity-proxy.port" \
+  --output "$EVIDENCE_DIR/identity-headers.jsonl" \
+  >"$EVIDENCE_DIR/identity-proxy.log" 2>&1 &
+IDENTITY_PROXY_PID=$!
+python3 "$SCRIPT_DIR/header_proxy.py" --name gateway-order \
+  --target "http://127.0.0.1:$ORDER_PORT" \
+  --port-file "$EVIDENCE_DIR/order-proxy.port" \
+  --output "$EVIDENCE_DIR/order-headers.jsonl" \
+  >"$EVIDENCE_DIR/order-proxy.log" 2>&1 &
+ORDER_PROXY_PID=$!
+deadline=$((SECONDS + 15))
+until [[ -s "$EVIDENCE_DIR/identity-proxy.port" && -s "$EVIDENCE_DIR/order-proxy.port" ]]; do
+  kill -0 "$IDENTITY_PROXY_PID" 2>/dev/null || { echo "Identity header proxy stopped during startup" >&2; exit 1; }
+  kill -0 "$ORDER_PROXY_PID" 2>/dev/null || { echo "Order header proxy stopped during startup" >&2; exit 1; }
+  (( SECONDS < deadline )) || { echo "Header proxies did not publish their ports" >&2; exit 1; }
+  sleep 0.1
+done
+IDENTITY_PROXY_PORT="$(<"$EVIDENCE_DIR/identity-proxy.port")"
+ORDER_PROXY_PORT="$(<"$EVIDENCE_DIR/order-proxy.port")"
+
+RUN_SLOT="$RUN_SLOT" REFERENCE_SKIP_BUILD=1 REFERENCE_KEEP_RUNNING=1 \
+  REFERENCE_GOVERNED_OBSERVABILITY=1 REFERENCE_OTEL_JAVAAGENT="$AGENT" \
+  REFERENCE_OTEL_AGENT_EXTENSION="$EXTENSION" \
+  REFERENCE_OTLP_TRACES_ENDPOINT="http://127.0.0.1:$OTLP_PORT/v1/traces" \
+  REFERENCE_GATEWAY_IDENTITY_BASE_URL="http://127.0.0.1:$IDENTITY_PROXY_PORT" \
+  REFERENCE_GATEWAY_ORDER_BASE_URL="http://127.0.0.1:$ORDER_PROXY_PORT" \
+  REFERENCE_PORT_MANIFEST="$EVIDENCE_DIR/reference-manifest.json" \
+  "$PROJECT_ROOT/verification/reference-product/harness/verify.sh" microservices \
+  >"$EVIDENCE_DIR/reference-harness.log" 2>&1 &
+HARNESS_PID=$!
+deadline=$((SECONDS + 600))
+until grep -Fq 'Reference product remains available' "$EVIDENCE_DIR/reference-harness.log" 2>/dev/null; do
+  if ! kill -0 "$HARNESS_PID" 2>/dev/null; then
+    wait "$HARNESS_PID" || true
+    tail -n 200 "$EVIDENCE_DIR/reference-harness.log" >&2
+    echo "Governed reference harness stopped before the live probe" >&2
+    exit 1
+  fi
+  (( SECONDS < deadline )) || { tail -n 200 "$EVIDENCE_DIR/reference-harness.log" >&2; exit 1; }
+  sleep 1
+done
+
+python3 "$SCRIPT_DIR/probe.py" traffic --base "http://127.0.0.1:$GATEWAY_PORT" \
+  --identity-headers "$EVIDENCE_DIR/identity-headers.jsonl" \
+  --order-headers "$EVIDENCE_DIR/order-headers.jsonl" \
+  --sentinels "$EVIDENCE_DIR/sentinels.json" --output "$EVIDENCE_DIR/traffic.json"
+sleep 3
+
+COMPOSE_PROJECT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["resources"]["composeProject"])' "$EVIDENCE_DIR/reference-manifest.json")"
+RESERVE_TOPIC="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["resources"]["topics"]["inventoryReserve"])' "$EVIDENCE_DIR/reference-manifest.json")"
+RESULT_TOPIC="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["resources"]["topics"]["inventoryResult"])' "$EVIDENCE_DIR/reference-manifest.json")"
+: > "$EVIDENCE_DIR/kafka-headers.txt"
+for topic in "$RESERVE_TOPIC" "$RESULT_TOPIC"; do
+  docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE" exec -T kafka \
+    kafka-console-consumer --bootstrap-server localhost:29092 --topic "$topic" \
+    --from-beginning --timeout-ms 3000 --property print.headers=true \
+    --property print.key=true --property print.value=false \
+    >> "$EVIDENCE_DIR/kafka-headers.txt" 2>> "$EVIDENCE_DIR/kafka-headers.err" || true
+done
+
+kill -TERM "$RECEIVER_PID"
+wait "$RECEIVER_PID"
+RECEIVER_PID=""
+sleep 2
+python3 "$SCRIPT_DIR/probe.py" outage --base "http://127.0.0.1:$GATEWAY_PORT" \
+  --output "$EVIDENCE_DIR/outage.json"
+OUTAGE_ORDER_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["orderId"])' "$EVIDENCE_DIR/outage.json")"
+docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE" exec -T postgres \
+  psql -At -U postgres -d orders -c \
+  "SELECT (SELECT count(*) FROM order_header WHERE order_id = $OUTAGE_ORDER_ID) || '|' || (SELECT status FROM moduvera_message_outbox WHERE message_id = 'reserve-order-$OUTAGE_ORDER_ID') || '|' || (SELECT attempt_count FROM moduvera_message_outbox WHERE message_id = 'reserve-order-$OUTAGE_ORDER_ID');" \
+  > "$EVIDENCE_DIR/outage-database.txt"
+
+python3 "$SCRIPT_DIR/probe.py" analyze \
+  --receiver-status "$EVIDENCE_DIR/receiver-status.json" --spans "$EVIDENCE_DIR/spans.jsonl" \
+  --traffic "$EVIDENCE_DIR/traffic.json" --outage "$EVIDENCE_DIR/outage.json" \
+  --kafka-headers "$EVIDENCE_DIR/kafka-headers.txt" \
+  --database "$EVIDENCE_DIR/outage-database.txt" --output "$EVIDENCE_DIR/qualification.json"
+
+stop_process "$HARNESS_PID"
+HARNESS_PID=""
+echo "Governed OpenTelemetry Agent verification: PASS"

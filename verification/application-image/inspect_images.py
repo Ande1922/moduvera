@@ -100,6 +100,9 @@ def main() -> None:
                 \( -name '*.java' -o -name '*.kt' -o -name '*Test.class' \
                    -o -name '*IT.class' -o -name 'settings.xml' \) \
                 -print -quit)"
+            test -z "$(find /opt/moduvera -type f \
+                \( -name 'opentelemetry-javaagent*.jar' -o -name '*governed*extension*.jar' \) \
+                -print -quit)"
             test -z "$(find /opt/moduvera -type d \
                 \( -name src -o -name .git -o -name .m2 -o -name test-classes \) \
                 -print -quit)"

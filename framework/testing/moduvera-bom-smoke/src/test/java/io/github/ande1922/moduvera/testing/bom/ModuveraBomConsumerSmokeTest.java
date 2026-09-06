@@ -13,6 +13,7 @@ import io.github.ande1922.moduvera.lock.local.LocalLockProvider;
 import io.github.ande1922.moduvera.message.MessageType;
 import io.github.ande1922.moduvera.migration.autoconfigure.ModuveraDatabaseMigrationMode;
 import io.github.ande1922.moduvera.scheduler.JobDefinition;
+import io.opentelemetry.api.trace.propagation.W3CTraceContextPropagator;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -61,6 +62,7 @@ class ModuveraBomConsumerSmokeTest {
         assertThat(frozenCapabilityTypes).doesNotContainNull();
         assertThat(identifiers.nextId()).isEqualTo(42L);
         assertThat(ModuveraDatabaseMigrationMode.DISABLED.name()).isEqualTo("DISABLED");
+        assertThat(W3CTraceContextPropagator.getInstance().fields()).containsExactly("traceparent", "tracestate");
     }
 
     @Test
