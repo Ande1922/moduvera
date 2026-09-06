@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import importlib.util
+from http.client import HTTPConnection
 import json
 from pathlib import Path
 import tempfile
+import threading
 import unittest
 
 
@@ -89,6 +91,35 @@ class OtlpReceiverTest(unittest.TestCase):
             self.assertEqual(["credential"], status["sensitiveMatches"])
             self.assertEqual("<redacted:credential>", span["attributes"]["url.path"])
             self.assertNotIn(sentinel, (root / "spans.jsonl").read_text())
+
+    def test_counts_only_canonical_signal_categories_for_rejected_posts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = OTLP.ReceiverState(root / "spans.jsonl", root / "status.json", {"x": "y"})
+            server = OTLP.ThreadingHTTPServer(("127.0.0.1", 0), OTLP.handler_type(state))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                connection = HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+                for target in ("/v1/metrics?credential=secret", "/v1/logs", "/unknown/raw-target"):
+                    connection.request("POST", target, body=b"payload")
+                    response = connection.getresponse()
+                    self.assertEqual(404, response.status)
+                    response.read()
+                connection.close()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+            status_text = (root / "status.json").read_text()
+            status = json.loads(status_text)
+            self.assertEqual(
+                {"logs": 1, "metrics": 1, "other": 1, "traces": 0},
+                status["postRequestsBySignal"],
+            )
+            self.assertNotIn("credential", status_text)
+            self.assertNotIn("raw-target", status_text)
 
 
 if __name__ == "__main__":

@@ -75,6 +75,10 @@ REFERENCE_JAVA_TOOL_OPTIONS=""
 REFERENCE_OTLP_TRACES_ENDPOINT="http://127.0.0.1:$OTLP_PORT/v1/traces"
 governed_agent_preflight "$AGENT" "$EXTENSION"
 OPTIONS="$(governed_agent_java_options logging-fixture "$AGENT" "$EXTENSION")"
+[[ " $OPTIONS " == *" -Dotel.traces.exporter=otlp "* \
+  && " $OPTIONS " == *" -Dotel.logs.exporter=none "* \
+  && " $OPTIONS " == *" -Dotel.metrics.exporter=none "* ]] \
+  || { echo "logging fixture Agent exporter policy is incomplete" >&2; exit 1; }
 
 FIXTURE_PORT_FILE="$EVIDENCE_DIR/logging-fixture.port" \
 FIXTURE_SECRET="$FIXTURE_SECRET" \
@@ -115,6 +119,29 @@ until python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["spans"] 
   (( SECONDS < deadline )) || { echo "logging fixture span was not exported" >&2; exit 1; }
   sleep 0.1
 done
+
+sleep 2
+python3 - "$EVIDENCE_DIR/logging-receiver-status.json" \
+  "$EVIDENCE_DIR/metrics-export-observation.json" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+status = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+signals = status["postRequestsBySignal"]
+assert status["spans"] >= 1, status
+assert signals["traces"] >= 1, signals
+assert signals["metrics"] == 0, signals
+assert signals["logs"] == 0, signals
+receipt = {
+    "effectiveExporters": {"logs": "none", "metrics": "none", "traces": "otlp"},
+    "positiveTraceObserved": True,
+    "postRequestsBySignal": signals,
+    "postTraceObservationSeconds": 2,
+}
+Path(sys.argv[2]).write_text(json.dumps(receipt, sort_keys=True) + "\n", encoding="utf-8")
+PY
+echo "Governed Agent metrics export observation: PASS"
 
 python3 "$SCRIPT_DIR/analyze_logging_fixture.py" \
   --stdout "$EVIDENCE_DIR/logging-fixture.stdout.jsonl" \

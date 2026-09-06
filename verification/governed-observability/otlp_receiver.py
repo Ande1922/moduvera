@@ -14,6 +14,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Iterator
+from urllib.parse import urlsplit
 
 
 KIND_NAMES = {
@@ -23,6 +24,12 @@ KIND_NAMES = {
     3: "CLIENT",
     4: "PRODUCER",
     5: "CONSUMER",
+}
+
+SIGNAL_PATHS = {
+    "/v1/traces": "traces",
+    "/v1/metrics": "metrics",
+    "/v1/logs": "logs",
 }
 
 
@@ -218,6 +225,7 @@ class ReceiverState:
         self.sentinels = sentinels
         self.lock = threading.Lock()
         self.requests = 0
+        self.post_requests_by_signal = {signal: 0 for signal in (*SIGNAL_PATHS.values(), "other")}
         self.payload_bytes = 0
         self.spans = 0
         self.content_types: set[str] = set()
@@ -226,6 +234,12 @@ class ReceiverState:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text("", encoding="utf-8")
         self.write_status()
+
+    def observe_post(self, target: str) -> None:
+        signal_name = SIGNAL_PATHS.get(urlsplit(target).path, "other")
+        with self.lock:
+            self.post_requests_by_signal[signal_name] += 1
+            self.write_status()
 
     def sanitize(self, value: Any) -> Any:
         if isinstance(value, str):
@@ -262,6 +276,7 @@ class ReceiverState:
     def write_status(self) -> None:
         value = {
             "requests": self.requests,
+            "postRequestsBySignal": dict(sorted(self.post_requests_by_signal.items())),
             "payloadBytesScanned": self.payload_bytes,
             "spans": self.spans,
             "contentTypes": sorted(self.content_types),
@@ -290,6 +305,7 @@ def handler_type(state: ReceiverState):
             self.wfile.write(body)
 
         def do_POST(self) -> None:
+            state.observe_post(self.path)
             if self.path != "/v1/traces":
                 self.send_error(404)
                 return
