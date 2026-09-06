@@ -47,3 +47,9 @@ Worker/fixer、Standards/Spec reviewer 请求 `gpt-5.6-sol` / `high` / `fork_tur
 - 后续修复以普通本地 merge `1a3942adeb6403600fdf845c8210c0dc6784519b` 纳入 integration，无冲突；前两阶段的快进记录仍为当时操作，不将本次后续集成称作快进。没有 amend/rebase/cherry-pick。07 原提交不变。
 - 合并后静态契约 13 tests 及 shell 环境回归 PASS、exit 0，回执：`/private/tmp/governed-observability-frontier-20260906/evidence/final/agent-static-after-gate-fix/receipt.json`。Java/runtime 行为未变，完整真实 qualification 仍注明为凭据输入修复前证据；新增输入 seam 有 HTTP wire、缺失/错误 tenant 与子进程隔离证据。
 - 本次 tracker 普通提交后固定新的最终 head；聚合双轴审查、Normal Gate、镜像与双拓扑 Scenario 均须对齐该提交。外部交付报告记最终结果；01/07 保持 resolved，02/14 ready-for-agent 且未启动，父 Spec/finding/Product Surface 状态不变。
+
+## Phase 4 — Launcher entry boundary closed
+
+- 聚合 Spec 在 `261c534f57209f5df2b4a1ef8a83c634ff887b00` 发现最早的目录解析子进程发生在 credential capture 之前。原 01 writer 追加普通 `851a390190d7ab80815dce97505dc64633bc6c9b` 与 `eadfb0c6c080ff17ab3fbd312bc7afd9cd752f45`；后者同时关闭真实 `bash verify.sh` 入口的无斜杠分支/PATH shadow 回归。
+- 原票级 Standards/Spec 在 B0..`eadfb0c6c080ff17ab3fbd312bc7afd9cd752f45` 均 CLEAN，记录：`/private/tmp/governed-observability-frontier-20260906/evidence/01/review-gate-fix-round4-final.md`。修复以普通 merge `5792b138b39fdbe8fb879558f2fb5d4000734396` 无冲突集成；集成 shell 环境契约和 13 项静态测试 PASS，回执：`/private/tmp/governed-observability-frontier-20260906/evidence/final/agent-static-after-launcher-fix/receipt.json`。
+- 当前只完成受影响修复和票级审查。此 tracker 提交后固定新的最终 head，聚合审查、Normal Gate、镜像及双拓扑验收仍按相同固定点外置记录；02/14 未启动，三处 worktree 保留，主代码未合入。

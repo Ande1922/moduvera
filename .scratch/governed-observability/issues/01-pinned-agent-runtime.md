@@ -64,8 +64,14 @@ Blocked by: None
 
 ### Gate follow-up qualification
 
-- 当前票提交：`237a20180d9b15181e4f48ee9b0b07ed97b97e7e`；B0 沿用 `cb6602f2eb9cb9ef73c24ee87d1b6a069b083d6b`。普通后续提交 `7bec10092a05219c00040a3786e144eb2fcf9ec3` 与 `237a20180d9b15181e4f48ee9b0b07ed97b97e7e` 由原 writer 在原 worktree 完成；经两轴 clean 复审后，以本地 merge `1a3942adeb6403600fdf845c8210c0dc6784519b` 纳入专用 integration，无冲突。07 代码与提交未改变。
+- 该轮票提交：`237a20180d9b15181e4f48ee9b0b07ed97b97e7e`；B0 沿用 `cb6602f2eb9cb9ef73c24ee87d1b6a069b083d6b`。普通后续提交 `7bec10092a05219c00040a3786e144eb2fcf9ec3` 与 `237a20180d9b15181e4f48ee9b0b07ed97b97e7e` 由原 writer 在原 worktree 完成；经两轴 clean 复审后，以本地 merge `1a3942adeb6403600fdf845c8210c0dc6784519b` 纳入专用 integration，无冲突。07 代码与提交未改变。
 - 首次聚合 Normal Gate 在 `a228740865e44cf4692e5f63357d37f366078ce9` 的 sensitive-content 阶段退出 1，Maven 尚未运行；失败回执保留于 `/private/tmp/governed-observability-frontier-20260906/evidence/final/gate-attempt1/normal-gate-receipt.json`。
 - 修复验证输入：运行时生成 Java URL userinfo；登录 credential 显式注入且限定两个 probe 子进程，处理继承 export 属性碰撞；在启动/HTTP 前拒绝非 canonical tenant-a；文档区分 credential 与业务标识留存。没有修改生产认证、seed、业务行为或 Agent 配置。
 - 两轴最终 clean：`/private/tmp/governed-observability-frontier-20260906/evidence/01/review-gate-fix-final.md`。原 writer 的两个报告为同目录 `worker-gate-fix-report.md`、`worker-gate-fix-round2-report.md`；准确 B0..当前票提交的 sensitive check exit 0。受影响 Java 测试/Spotless PASS；集成后静态契约 13 tests 与 shell 环境隔离回归 PASS，回执：`/private/tmp/governed-observability-frontier-20260906/evidence/final/agent-static-after-gate-fix/receipt.json`。
 - 上节真实 runtime qualification 保留为凭据输入修复前的证据；本次只重新验证受影响的 fixture/环境输入边界，未声称新的真实登录运行。此 tracker 提交之后将固定批次最终 head，再做聚合双轴评审、Normal Gate、镜像与双拓扑验收；最终回执外置保存，不预填 PASS。
+
+### Launcher entry correction
+
+- 当前票提交：`eadfb0c6c080ff17ab3fbd312bc7afd9cd752f45`，base 仍为 B0；原 writer 后续普通提交 `851a390190d7ab80815dce97505dc64633bc6c9b`、`eadfb0c6c080ff17ab3fbd312bc7afd9cd752f45` 处理聚合审查发现的启动顺序问题及其无斜杠路径回归。纯 Bash 定位相邻 helper 并清除登录环境后才启动目录解析子进程；真实 PATH 调用与 cwd 内 `bash verify.sh` 均覆盖，PATH 同名 helper 不会被加载。
+- 原 Standards/Spec 在 B0..当前票提交均 CLEAN：`/private/tmp/governed-observability-frontier-20260906/evidence/01/review-gate-fix-round4-final.md`。真实入口回归 RED→GREEN 及具体边界见同目录 `worker-gate-fix-round3-report.md`、`worker-gate-fix-round4-report.md`；第 4 轮明确纠正第 3 轮对无斜杠分支覆盖的错误说明。
+- 本地普通 merge `5792b138b39fdbe8fb879558f2fb5d4000734396` 无冲突；集成后 shell 环境回归与 13 项静态测试 PASS，exit 0，回执：`/private/tmp/governed-observability-frontier-20260906/evidence/final/agent-static-after-launcher-fix/receipt.json`。07 与业务/Agent 运行实现均未变化，之前完整 qualification 的时间边界保持。批次最终审查/Gate/Scenario 仍由此 tracker 提交后的固定 head 外部回执给出。
