@@ -73,3 +73,14 @@ Worker/fixer、Standards/Spec reviewer 请求 `gpt-5.6-sol` / `high` / `fork_tur
 - `git merge --ff-only -- codex/governed-observability-wave2-20260906-02` 成功，无冲突。原主体上下文实现经过协调者风险核查，最终 SHA 保持一致。集成 BOM consumer/architecture 的 27 模块通过；沙箱端口失败与自动审批重跑的完整日志/退出码均保留。
 - 14 已认领；从本次 tracker 普通提交创建 `codex/governed-observability-wave2-20260906-14`，工作区 `/private/tmp/governed-observability-wave2-20260906/14`。实际 base 与原 writer 在创建成功后填入外部 execution-state，不预填不存在的 SHA。01 与 02 的交付提交必须在其祖先链上。
 - 03、04、05、06、08、09、10、15 只解除阻塞，未开始。当前尚无 14 或本批聚合 Gate/Final Acceptance PASS；完整本批最终证据在最终提交冻结后外置保存。源 main 只同步本专题 tracker，代码未合入、未 push、未清理 worktree，父 Spec/finding/Product Surface 不变。
+
+
+## 第二批阶段 2 — 14 集成，冻结本批交付输入
+
+- 14 实际 base：`6f79a547dbf0c664b79a6c56ab280144e8d281d3`，原 writer `/root/wave2_worker14_metrics`，已核对 01/02 交付在祖先链。普通实现 `4737c9fbb0bcce1d0ec797329083008f5ca95ddd` 与验证修复 `a9f2b4a28c394987218117c520310f8433c8a9de` 保留原所有权。
+- 三个 Java 测试和三处验证资产补全九项 meter 的库级契约、真实 Order App/PostgreSQL/Kafka 状态转换与 Agent metrics=none 的受控运行证据；已有生产装配未变。初次两轴报告同一 metrics 观察端点/周期缺口，修复将 metrics 路由到当前接收端、固定 500 ms 周期并观察两秒；精确启动参数与回执一致。
+- 原 Standards `/root/wave2_review14_standards` 与 Spec `/root/wave2_review14_spec` 对实际 base..`a9f2b4a28c394987218117c520310f8433c8a9de` 均 CLEAN，作者关闭各自发现。完整原始证据在 `/private/tmp/governed-observability-wave2-20260906/evidence/14/`；当前报告 `worker-review-repair-round1.md`、`review-round2-standards.md`、`review-round2-spec.md`，实际干净预检 `28-review-repair-preflight.out/.exit`。请求 Sol/high/fresh，有效设置未验证。
+- `git merge --ff-only -- codex/governed-observability-wave2-20260906-14` 无冲突成功；集成后 logging 与 messaging starter 的 `-am test` 通过，原始命令/退出码在 `integration-cross-ticket-test.out/.exit`。02 与 14 的工作区、分支均保留；源 main 在并行其他工作中有独立提交推进，本批不重定基线、不合入 main、不 push 或清理。
+- 本批比较 base 仍为 `70e9a2711c56835ea28347fa2683618514b3bd08`。本次 tracker 普通提交后冻结最终 head；重新运行完整范围的独立 Standards/Spec、Normal Gate 和适用 Scenario，结果外置在同一 `evidence/execution-state.json` 及最终交付报告，避免通过后再写源码/文档使证据失效。
+- 适用性判断将在最终比较点确认：当前改动未触及既有生产 App API/消息路由/迁移/镜像/拓扑装配；聚焦真实 App IT 和日志/Agent 验证资产承接运行证据，完整 reactor Gate 保留。ADR 0038 下单体运行在本批范围外，编译和共享架构检查保留；不把旧拓扑资格重标为本批 PASS。
+- 当前仅 01、02、07、14 resolved；下一 ready 前沿为 03、04、05、06、08、09、10、15，未开始。11、12、13、16、17 仍受未完成前置阻塞。父 Spec、finding、Product Surface 和相邻 tracker 不变。
