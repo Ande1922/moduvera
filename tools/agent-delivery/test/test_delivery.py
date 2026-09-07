@@ -138,6 +138,7 @@ class DeliveryForwardTest(unittest.TestCase):
     def test_forward_route_selects_one_implementation_path(self) -> None:
         routes = parse_routes(REPO / "docs/agents/delivery-workflow.md")
         self.assertEqual(EXPECTED_ROUTES, routes)
+        self.assertEqual("implement", routes["bounded-spec"])
         self.assertEqual("implement", routes["one-ticket"])
         self.assertEqual("implement-frontier", routes["ticket-dag"])
         self.assertNotEqual(routes["one-ticket"], routes["ticket-dag"])
@@ -174,6 +175,25 @@ class DeliveryForwardTest(unittest.TestCase):
         self.assertIn("Route by task shape", skill_text)
         for shape_key in EXPECTED_ROUTES:
             self.assertNotIn(f"`{shape_key}`", skill_text)
+
+    def test_direct_spec_routes_without_a_ticket_or_frontier(self) -> None:
+        route = implementation_route(ImplementationShape(
+            ticket_count=0,
+            later_independent_reviews=True,
+        ))
+        self.assertEqual(
+            ImplementationRoute("implement", "implementation-evidence"), route
+        )
+
+    def test_direct_spec_rejects_ticket_coordination_and_invalid_counts(self) -> None:
+        for shape in (
+            ImplementationShape(ticket_count=0, dependency_edges=1),
+            ImplementationShape(ticket_count=0, isolated_writers=True),
+            ImplementationShape(ticket_count=-1),
+            ImplementationShape(ticket_count=0, dependency_edges=-1),
+        ):
+            with self.subTest(shape=shape), self.assertRaises(ValueError):
+                implementation_route(shape)
 
     def test_business_service_forward_plan_traces_complete_vertical_slices(self) -> None:
         contract = load_business_service_contract(

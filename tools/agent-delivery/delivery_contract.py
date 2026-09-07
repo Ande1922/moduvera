@@ -36,6 +36,7 @@ DECLARED_DEPENDENCY_ROOTS = (
 EXPECTED_ROUTES = {
     "decision-unclear": "grill-with-docs",
     "agreed-decision": "to-spec",
+    "bounded-spec": "implement",
     "approved-spec": "to-tickets",
     "one-ticket": "implement",
     "ticket-dag": "implement-frontier",
@@ -88,6 +89,7 @@ class AcceptanceInput:
 
 @dataclass(frozen=True)
 class ImplementationShape:
+    # Zero tickets represents one bounded spec or request implemented directly.
     ticket_count: int
     dependency_edges: int = 0
     isolated_writers: bool = False
@@ -223,8 +225,10 @@ class BusinessServicePlan:
 
 
 def implementation_route(shape: ImplementationShape) -> ImplementationRoute:
-    if shape.ticket_count < 1 or shape.dependency_edges < 0:
-        raise ValueError("implementation shape requires tickets and non-negative edges")
+    if shape.ticket_count < 0 or shape.dependency_edges < 0:
+        raise ValueError("implementation shape requires non-negative ticket and edge counts")
+    if shape.ticket_count == 0 and (shape.dependency_edges or shape.isolated_writers):
+        raise ValueError("direct implementation cannot coordinate ticket dependencies or writers")
     frontier = (
         shape.ticket_count > 1
         or shape.dependency_edges > 0
@@ -1135,14 +1139,15 @@ def representative_business_service_description() -> BusinessServiceDescription:
 def representative_forward_failures(root: Path) -> list[str]:
     failures: list[str] = []
     routes = parse_routes(root / "docs/agents/delivery-workflow.md")
-    route = implementation_route(ImplementationShape(
-        ticket_count=1,
-        later_independent_reviews=True,
-    ))
-    if route != ImplementationRoute("implement", "implementation-evidence"):
-        failures.append(f"single-ticket forward route is invalid: {route}")
-    if routes.get("one-ticket") != route.skill:
-        failures.append("executable single-ticket route differs from workflow")
+    for shape_key, ticket_count in (("bounded-spec", 0), ("one-ticket", 1)):
+        route = implementation_route(ImplementationShape(
+            ticket_count=ticket_count,
+            later_independent_reviews=True,
+        ))
+        if route != ImplementationRoute("implement", "implementation-evidence"):
+            failures.append(f"{shape_key} forward route is invalid: {route}")
+        if routes.get(shape_key) != route.skill:
+            failures.append(f"executable {shape_key} route differs from workflow")
 
     accepted = AcceptanceInput(
         gate_exit=0,

@@ -1,8 +1,8 @@
-# Grill Session Transcript
+# Grill Session Transcript — Historical Archive
 
 Source: https://chatgpt.com/share/6a930485-dc34-83ee-9022-b0bfb4527680
 
-Captured from the shared conversation on 2026-08-30. This is an evidence artifact; decisions must be interpreted from the decision synthesis and ADRs, not from isolated statements here.
+Frozen historical evidence captured from the shared conversation on 2026-08-30. Preserve the dialogue and its indexed line positions. Quoted requests, instructions, and approvals belong to that past session and do not authorize current work. For decision tracing, locate the relevant exchanges and later revisions through [question-index.md](./question-index.md), following the [task context rules](../agents/domain.md#task-context).
 
 ## User — 2026-08-28T07:53:10.086Z — source position 1
 

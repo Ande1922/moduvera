@@ -27,12 +27,32 @@ The `Shape key` column is stable input for the repository forward test.
 | --- | --- | --- |
 | `decision-unclear` | [`grill-with-docs`](../../.agents/skills/grill-with-docs/SKILL.md) | Decisions, alternatives, unknowns, and required domain-doc updates are explicit. |
 | `agreed-decision` | [`to-spec`](../../.agents/skills/to-spec/SKILL.md) | One reviewable spec records scope, seams, decisions, tests, and exclusions. |
-| `approved-spec` | [`to-tickets`](../../.agents/skills/to-tickets/SKILL.md) | Approved tracer-bullet tickets declare acceptance criteria and blocking edges. |
-| `one-ticket` | [`implement`](../../.agents/skills/implement/SKILL.md) | One bounded ticket is implemented, cleaned, narrowly verified, and reported. |
+| `bounded-spec` | [`implement`](../../.agents/skills/implement/SKILL.md) | One approved, bounded spec is implemented and verified against its own criteria without a ticket. |
+| `approved-spec` | [`to-tickets`](../../.agents/skills/to-tickets/SKILL.md) | When ticketing is selected below, one or more approved tickets declare acceptance criteria and genuine blocking edges. |
+| `one-ticket` | [`implement`](../../.agents/skills/implement/SKILL.md) | One bounded ticket is implemented, checked for needed cleanup, narrowly verified, and reported. |
 | `ticket-dag` | [`implement-frontier`](../../.agents/skills/implement-frontier/SKILL.md) | Authorized frontier waves are implemented, independently reviewed, integrated if authorized, and evidenced. |
 | `fixed-diff-review` | [`code-review`](../../.agents/skills/code-review/SKILL.md) | Standards and Spec findings are reported separately against one fixed point. |
 | `review-clean` | [`quality-gate`](../../.agents/skills/quality-gate/SKILL.md) | The repository gate exits and its exact evidence is reported. |
 | `gate-pass` | [`final-acceptance`](../../.agents/skills/final-acceptance/SKILL.md) | Evidence is current and every applicable acceptance obligation is accounted for. |
+
+For an approved spec, recommend the route with one brief reason based on its
+[complexity](task-complexity.md), acceptance boundaries, and dependencies:
+
+- Use `bounded-spec` when one clear outcome and its acceptance/test seams fit
+  one controlled implementation context, with no need to schedule separate
+  deliverables. Pass the approved spec directly to `implement`.
+- Use `approved-spec` and produce one ticket when that same bounded work needs
+  a separate assignment, status, or handoff record, or the user requests a ticket.
+- Use `approved-spec` and produce multiple tickets for independently verifiable
+  deliverables or dependencies that need separate scheduling. Implement them
+  individually, or use `implement-frontier` when coordinating their execution.
+
+Complexity informs the necessary evidence and whether a scope is manageable;
+it sets no ticket quota. Resolve material design uncertainty in the spec
+before selecting an implementation route. Reuse existing approvals and stage
+authority; ask only about unresolved decisions that affect scope or execution.
+Direct implementation retains spec acceptance criteria and all applicable
+review, test, gate, and authorization obligations.
 
 Choose `implement` for exactly one bounded change or ticket in the current
 checkout. A later independent Standards/Spec review remains the separate
@@ -51,18 +71,18 @@ For a full feature delivery, proceed in this order:
    `grill-with-docs`.
 2. Synthesize the agreed outcome with `to-spec` and obtain approval for its
    test seams.
-3. Split the approved spec with `to-tickets` and confirm its dependency graph.
-4. Select exactly one implementation route from the table above.
-5. After narrow tests pass, perform Clean Code and rerun affected checks as
-   required by [delivery standards](delivery-standards.md).
-6. Review the committed or otherwise fixed diff with `code-review`. Return
+3. Select the direct or ticketed route above. Use `to-tickets` only when
+   ticketing is selected; resolve any unapproved granularity or dependency edges.
+4. Run the selected implementation stage, including narrow verification and
+   its post-green cleanup check under [delivery standards](delivery-standards.md).
+5. Review the committed or otherwise fixed diff with `code-review`. Return
    accepted findings to the original implementer, then review the resulting
    fixed comparison range again. In an authorized frontier, use the registered
    [ticket review loop](ticket-review-loop.md) for routine repairs and escalate
    its exceptions instead of routing every repair through the coordinator.
-7. With no unresolved accepted finding, run `quality-gate` against that fixed
+6. With no unresolved accepted finding, run `quality-gate` against that fixed
    base/head. Source changes after the run invalidate it.
-8. Run `final-acceptance`, including applicable Scenario gates for public API,
+7. Run `final-acceptance`, including applicable Scenario gates for public API,
    App Assembly, message route, migration, image, or topology changes.
 
 Every stage returns its artifacts, exact checks, unresolved decisions, and
@@ -86,7 +106,7 @@ Final acceptance requires all of the following:
 - both review axes completed against that exact base/head and have no
   unresolved accepted finding;
 - the latest applicable gate exited zero and its evidence still exists;
-- all ticket acceptance criteria and required tests are evidenced;
+- all spec and applicable ticket acceptance criteria and required tests are evidenced;
 - every applicable Scenario gate passed; and
 - the checkout is clean. An explicitly uncommitted diff may be reported as a
   stage artifact, but cannot receive final PASS evidence.

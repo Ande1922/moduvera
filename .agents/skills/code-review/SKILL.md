@@ -24,8 +24,9 @@ the user's active main-task model and effort.
    [review preflight](../../../docs/agents/delivery-standards.md#review-and-gate-evidence)
    before dispatching either axis.
 2. Resolve the originating ticket/spec from the user, commit references, or
-   `.scratch/`. Read it in full. Read `AGENTS.md`, applicable ADRs, and other
-   standards sources.
+   `.scratch/`. Use its complete current content and the
+   [task context rules](../../../docs/agents/domain.md#task-context) for the
+   governing standards sources.
 3. Run two independent review contexts against the same immutable range:
    - **Standards:** repository rules, architecture, correctness/security risks,
      test quality, and relevant design smells. Repository rules override

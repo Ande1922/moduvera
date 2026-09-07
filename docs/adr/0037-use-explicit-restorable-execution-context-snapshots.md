@@ -47,9 +47,9 @@ correlation, and absence. Installing a trusted context does not authorize its
 scope.
 
 Ordinary tenant persistence and tenant-only direct HTTP clients require a
-Tenant scope before issuing SQL or a remote request. PostgreSQL and MySQL
-runtime Adapter tests prove Platform and absence reject reads and writes
-without persisting the rejected change, while normal tenant isolation remains.
+Tenant scope before issuing SQL or a remote request. Platform and absence
+reject reads and writes without persisting the rejected change, while normal
+tenant isolation remains.
 Job execution retains its caller-supplied context independently of lock scope:
 a GLOBAL lock is global competition only, and a TENANT lock still requires a
 Tenant execution.
@@ -62,24 +62,18 @@ Runnable/Callable wrappers remain callable and tenant-strict. Their method
 descriptors preserve ordinary precompiled tenant callers, but record-component
 reflection, record-pattern source, generated `toString` and serializers that
 derive shape from record components now observe `scope`. The type does not
-implement Java serialization, is not a network DTO, and repository consumers
-do not serialize or reflectively destructure it; message wire contracts remain
-separate and tenant-only.
+implement Java serialization and is not a network DTO; message wire contracts
+remain separate and tenant-only.
 
-Scenario-specific contracts and implementation evidence are recorded in the
-owned sections below. A planned section is an approved design boundary, not
-runtime support evidence. This ADR does not claim transparent propagation,
-zero allocation, or transaction or connection propagation.
+The sections below define scenario-specific contracts. A planned design
+boundary is not runtime support evidence. This ADR does not claim transparent
+propagation, zero allocation, or transaction or connection propagation.
 
-Evidence: Kernel tests for the three states, strict tenant reads, full-value
-restoration, null rejection, unique binding order, cross-thread and out-of-order
-failure atomicity, exception transparency, legacy calls, and post-parent-lifetime
-Snapshot execution; production Adapter tests against PostgreSQL and MySQL;
-focused tenant-only HTTP and Job/Lock tests; and an independent Maven consumer.
+Read the [historical qualification record](../../.scratch/execution-context-propagation/evidence/adr-0037-qualification.md)
+only when tracing recorded tests, versions, or consumer qualification; the
+decisions and limits needed for changes are contained in this ADR.
 
-## Request-bound callbacks — ticket 03
-
-Status: verified for the Kernel callback binding surface and independent consumer usage.
+## Request-bound callbacks
 
 `ExecutionContextSnapshot` constructs seven immutable named binding types for `Runnable`,
 `Callable`, `Supplier`, `Function`, `Consumer`, `BiFunction` and `BiConsumer`. Each binding
@@ -101,16 +95,7 @@ call; asynchronous work represented by the returned stage needs propagation at i
 boundary. A long-lived listener therefore stays unbound and creates a binding from each
 trusted event's context instead of retaining the listener-registration identity.
 
-Evidence: Kernel tests exercise all seven public JDK shapes, original outcomes, present and
-absent restoration, completed/externally completed/async CompletableFuture callbacks,
-parent-Scope exit, retries, same-tenant distinct identities and the `thenCompose` boundary.
-The independent `simple-notes-demo` consumer compiles and runs per-request function binding
-through an SDK-shaped callback registration/later-trigger driver, plus a separate
-per-trusted-event long-lived listener example, using only the public Kernel API.
-
-## JDK executors — ticket 04
-
-Status: verified for explicitly decorated JDK Executor and ExecutorService instances.
+## JDK executors
 
 `ContextExecutors` creates reusable decorators without capturing their construction thread.
 Every direct `execute`, `submit`, `invokeAll` or `invokeAny` task captures the submitting
@@ -127,18 +112,7 @@ interrupted task keeps its snapshot until its delegate actually exits. An alread
 may be submitted through the decorator safely; its inner fixed snapshot wins for the callback
 call, with ordinary nested restoration and no reflective task unwrapping.
 
-Evidence: Kernel tests compare original and decorated real JDK executors for values, failures,
-Future cancellation, rejection, bulk calls, timeout and lifecycle behavior. They also exercise a
-reused single platform worker with distinct tenants, same-tenant distinct identity, Platform and
-absence; a virtual-thread-per-task executor; inline and CallerRuns execution; cancellation before
-start and during delayed interruption; delegate-owned queued Future tasks; explicit Bound
-nesting; and restoration after actual exit. The independent `simple-notes-demo` consumer shows
-that executor submission capture covers the submitted task, while a Future callback still needs
-its own registration-time binding.
-
-## Spring task executors — ticket 05
-
-Status: verified for explicitly configured Spring TaskExecutor instances and Async proxy routes.
+## Spring task executors
 
 `ExecutionContextTaskDecorator` is a reusable, identity-free Spring `TaskDecorator`. Spring
 invokes it for each actual task submission, where it uses `captureAllowingAbsent()` and a named
@@ -158,19 +132,7 @@ thread's Scope: a running task keeps its snapshot until its delegate exits. Spri
 an internal Future task, so failures from `submit` and Future-returning `@Async` methods are
 observed through the returned Future rather than assumed visible from `Runnable.run`.
 
-Evidence: Spring Framework 7.0.9 under Spring Boot 4.1.1 and Java 26; focused adapter tests; and
-an independent BOM-managed Spring consumer with a real ApplicationContext, single-worker
-`ThreadPoolTaskExecutor` reuse, selected and unselected executors, and an actual `@Async` proxy.
-The evidence covers Tenant, Platform, absence, same-tenant distinct full identities, a worker's
-pre-existing identity, delayed execution after parent-Scope exit, inline and CallerRuns behavior,
-values, Future failures, rejection, cancellation before start and during execution, timed Future
-observation, actual-exit cleanup and ApplicationContext-owned shutdown. Dependency closure
-contains Spring Core/Context and the Kernel without Reactor or Spring AI. Usage and limits are
-documented in the adapter README.
-
-## HTTP execution boundaries — ticket 06
-
-Status: implemented and verified.
+## HTTP execution boundaries
 
 Each Servlet App explicitly supplies an `ExecutionContextHandlerSelection` for
 its managed Controller types or packages and may name excluded non-business
@@ -188,6 +150,9 @@ the Controller. Tenant handlers retain SERVICE target-header requirements and
 asserted/requested tenant conflict rejection. Platform handlers ignore a
 client `Tenant-Id` for scope selection.
 
+One generated correlation is shared across the Controller, security Problem
+and selected redispatches.
+
 One Scope belongs to one actual dispatch thread. Synchronous completion and
 error unwinding close it in `afterCompletion`; an asynchronous handoff closes
 it in `afterConcurrentHandlingStarted`; an ASYNC redispatch opens a new Scope
@@ -195,19 +160,10 @@ after resolving its handler. Error handlers receive a context only if the App
 selects them. The first phase does not transparently propagate context into an
 MVC `Callable`, `DeferredResult` producer or arbitrary asynchronous callback.
 
-Evidence: focused resolver/interceptor tests; embedded Tomcat with RSA-signed
-JWTs, virtual request threads, real Security and MVC chains, method/class/default
-selection, 401/403 Problem responses, side-effect guards, excluded handlers,
-same-tenant distinct identities and REQUEST/ASYNC/ERROR cleanup; Catalog App
-consumer IT with full virtual-thread identity and same-thread cleanup; one
-generated correlation across Controller, security Problem and selected
-redispatches; and the applicable reference-product HTTP scenarios. Usage and
-the supported lifecycle are documented in
+For HTTP integration setup and lifecycle examples, see
 [`HTTP-EXECUTION-BOUNDARIES.md`](../implementation/HTTP-EXECUTION-BOUNDARIES.md).
 
-## Reactor context templates — ticket 07
-
-Status: verified for the optional Reactor adapter and independent Reactor-only consumer.
+## Reactor context templates
 
 The optional `moduvera-reactor-context` Adapter keeps Reactor types out of the
 Kernel. `withContext` writes a trusted value and `propagate` strictly captures
@@ -231,16 +187,7 @@ requests, including same-tenant requests with different identity or
 correlation. Reactor cache/share data semantics require their own tenant
 isolation proof.
 
-Evidence: Reactor Core 3.8.7 with Java 26; real scheduler tests for delayed
-subscription after the parent Scope exits, foreign worker restoration,
-concurrent Tenant/Platform/same-Tenant identities, explicit absence, wrong
-types, exception, retry, and cancellation during a still-running synchronous
-mapper; and an independent BOM-managed Reactor-only consumer. Dependency
-closure verifies Kernel has no Reactor and the consumer has no Spring AI.
-
-## AI request and streaming response context — ticket 08
-
-Status: implemented.
+## AI request and streaming response context
 
 The optional `moduvera-spring-ai-context` Adapter captures one trusted context
 per request. A request-scoped Advisor validates the fully assembled Advisor
@@ -257,15 +204,7 @@ Scope only for the synchronous response function, and restores the prior Holder
 after success or failure. Response consumers must retain ChatClientResponse;
 content strings do not carry its native context.
 
-Evidence: Spring AI 2.0.1 with Spring Boot 4.1.1 and Java 26; Adapter unit tests;
-and an independent consumer using a delayed, thread-shifting real
-`ChatClient.stream().chatClientResponse()` subscription with concurrent Tenant,
-same-Tenant/different-identity, and Platform requests. Tool callback wrapping
-and multi-round tool-loop evidence remain owned by ticket 09.
-
-## AI tool loop context — ticket 09
-
-Status: implemented.
+## AI tool loop context
 
 `SpringAiExecutionContexts.toolCallback(...)` is a stateless wrapper. Every
 invocation reads the reserved `ExecutionContext` from that call's native
@@ -277,30 +216,12 @@ metadata, input, result, and exception contract. The wrapper captures no
 request snapshot, so it can be shared when the delegate itself is safe to
 share.
 
-Evidence: a real streaming ChatClient and ToolCallingAdvisor loop driven by a
-test-source scripted model performs two tool rounds before the final response.
-The same wrapper isolates four requests covering
-same-Tenant/different-identity, a different Tenant, and Platform. A bounded
-first-round barrier holds every actual delegate until all four have entered,
-so overlap is observed rather than inferred from scheduler timing. The loop
-crosses model, bounded-elastic tool, and response-worker threads; the final
-ChatClientResponse is consumed through the ticket 08 response mapper.
-Missing/wrong native contexts stop before the delegate and a delegate failure
-remains the same exception. A test-only outer callback records the Holder
-immediately before and after the production wrapper on the same actual tool
-thread, proving exact restoration after normal return and failure without
-resampling a shared scheduler.
-
 Custom Advisor code that creates internal asynchronous callbacks must still
 propagate context explicitly at those callback boundaries. Opening a Scope
 around `return nextStream(...)` covers only synchronous Publisher assembly and
 cannot cover the stream's later signals.
 
-## Tenant-only message compatibility — ticket 10
-
-Status: verified for tenant-only envelope compatibility, reference-consumer contract handling,
-context restoration, and runtime Adapter delivery. Broker producer authentication and
-destination ACL enforcement remain deployment prerequisites outside this ticket's evidence.
+## Tenant-only message compatibility
 
 Outbound business-message adapters require a concrete Tenant before constructing or
 appending an envelope. Platform and missing context therefore cannot create a tenantless
@@ -314,39 +235,20 @@ with the consumer's local Actor and permissions. This source and contract matchi
 producer authentication. Trust in the envelope depends on deployment-level authenticated
 producers and destination ACLs; wire permissions remain untrusted. The per-message scope
 restores the listener thread's exact prior identity after success, retry, duplicate or rejection.
-Both reference consumers run the shared inbound contract TCK.
 
-Evidence: message mapper and shared TCK tests preserve required tenant and identity fields,
-provider identities and the no-wire-permissions contract; focused consumer and outbound tests
-cover tenant construction and prior-worker restoration; PostgreSQL Outbox relay tests publish a
-persisted message after the request Scope closes; and the inventory application test uses real
-Kafka plus a same-partition consumer-progress barrier before asserting rejected-message side
-effects. Those plaintext Testcontainers scenarios do not verify broker authentication or ACL
-configuration. See [the tenant-only message context guide](../implementation/TENANT-ONLY-MESSAGE-CONTEXT.md).
+For message integration setup, see
+[the tenant-only message context guide](../implementation/TENANT-ONLY-MESSAGE-CONTEXT.md).
 
-## Composition and consumer qualification — ticket 11
+## Composition and support boundaries
 
-Status: verified for the bounded public consumers and combinations described below.
+The Kernel artifact remains JDK-only. Spring task consumers do not acquire
+Reactor or Spring AI, and Reactor consumers do not acquire Spring AI. Consumers
+that use none of these optional adapters acquire none of their frameworks.
 
-The independent Notes consumer composes an explicitly installed trusted caller context with a
-directly submitted propagating JDK task and a real PostgreSQL-backed Application Service read.
-A second composition captures a request-owned Function when it is registered, completes its
-Future later on an external SDK-shaped worker, and performs the same business read inside the
-bound callback. The compositions cover distinct tenants, two complete identities in one tenant,
-Platform and absence where tenant data must fail closed, and exact restoration of a foreign
-Platform worker after each actual success or failure exit. Row, Outbox and receipt counts remain
-unchanged by the read and rejected branches. This is an explicit trusted-Holder consumer seam;
-it does not claim an unimplemented HTTP-to-async chain. Servlet entry behavior and negative
-write/message side effects retain their separate runtime evidence.
-
-The Reactor-only consumer uses the native subscription Context and a real scheduler without an
-AI dependency. The AI consumer provides the combined request, two-round ToolCallingAdvisor loop,
-tool callback and final streaming-response path already described above; its test-source scripted
-model makes no external provider claim. The Spring task consumer uses a real ApplicationContext,
-selected TaskExecutor and Async proxies. Resolved closures bind the qualification to Java 26,
-Spring Boot 4.1.1, Spring Framework 7.0.9, Reactor Core 3.8.7 and Spring AI 2.0.1. The Kernel
-artifact remains JDK-only; Spring task and Reactor consumers do not acquire Spring AI, and
-consumers that use none of these optional adapters acquire none of their frameworks.
+An explicit trusted-Holder consumer seam does not establish an HTTP-to-async
+chain. Servlet entry behavior and negative write/message side effects retain
+their separate runtime evidence. Qualification with a test-source scripted AI
+model makes no external provider claim.
 
 The supported adoption and lifecycle boundary is recorded in
 [`EXECUTION-CONTEXT-PROPAGATION.md`](../implementation/EXECUTION-CONTEXT-PROPAGATION.md). Support

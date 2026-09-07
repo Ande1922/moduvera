@@ -14,8 +14,9 @@ routing and authorization.
 
 ## Process
 
-1. Read `AGENTS.md`, `CONTEXT.md`, the request or tracker artifact, and the
-   recipe. Complete a shape card conforming to the recipe's authoritative
+1. Read the request or tracker artifact and the recipe using the
+   [task context rules](../../../docs/agents/domain.md#task-context).
+   Complete a shape card conforming to the recipe's authoritative
    Shape Contract for every consumer/use-case promise, durable-state need,
    App, and acceptance owner.
    This step is complete when its validation conditions pass and material

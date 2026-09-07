@@ -6,24 +6,29 @@ copying the rules.
 
 ## Test obligation and implementation order
 
-Every behavior change needs risk-proportionate evidence before Clean Code and
-formal review. Reuse the highest existing observable seam; do not add a public
-seam solely to make a test convenient.
+Keep code clear, simple, and explicit about responsibilities throughout
+implementation. Every behavior change needs risk-proportionate evidence before
+post-green cleanup and formal review. Reuse the highest existing observable
+seam; do not add a public seam solely to make a test convenient.
 
 - For an actual bug, first add a regression that fails for the reported
   behavior.
 - For complex Domain rules, state transitions, idempotency, authorization, or
   Tenant isolation, test-first development is recommended.
 - Other work may add tests before or after implementation, but the affected
-  narrow tests must pass before Clean Code begins.
+  narrow tests must pass before post-green cleanup begins.
 - Load the project `tdd` Skill only when the user explicitly invokes it or a
   nearer repository instruction requires TDD. Ordinary implementation still
   carries the test obligation without imposing TDD sequencing.
 
-After narrow checks are green, perform one Clean Code pass over the ticket
-diff: simplify names and control flow, remove duplication and speculative
-abstraction, preserve behavior, then rerun every affected narrow check. The
-reviewed diff is the post-cleanup diff.
+After narrow checks are green, briefly inspect the change diff for worthwhile
+Clean Code improvements to names, control flow, responsibilities, duplication,
+or speculative abstraction. Make only justified changes within the approved
+scope, preserve behavior, and rerun every affected narrow check after edits.
+If no improvement is justified, the check is complete without further edits;
+reuse passing results while their verification inputs remain unchanged, and
+still run required validation. The implementation stage owns this check once
+before formal review, which uses the resulting diff.
 
 ## Review and gate evidence
 

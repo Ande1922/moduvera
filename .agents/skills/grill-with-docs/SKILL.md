@@ -6,8 +6,8 @@ description: Stress-test an unclear Moduvera requirement or design through focus
 # Grill with Docs
 
 Use this stage when product intent, architecture, vocabulary, alternatives, or
-test seams are still materially uncertain. Read `AGENTS.md`, `CONTEXT.md`, and
-every applicable ADR before questioning.
+test seams are still materially uncertain. Use the
+[task context rules](../../../docs/agents/domain.md#task-context) before questioning.
 
 ## Process
 

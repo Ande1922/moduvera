@@ -15,13 +15,16 @@ or contradicts the worktree.
 
 1. Confirm worktree, branch, clean start, and exact base.
 2. Restate the single-ticket outcome, scope, exclusions, and public seams.
+   Confirm or assign [task complexity](../../../../docs/agents/task-complexity.md)
+   in the report using this ticket's own scope and required verification.
 3. Inspect only the relevant implementation and prior art.
 4. Follow [repository delivery standards](../../../../docs/agents/delivery-standards.md):
    add risk-proportionate tests, use regression-first for actual bugs, and load
    the project [`tdd`](../../tdd/SKILL.md) Skill only when explicitly invoked
    or a nearer repository rule requires it.
-5. Run narrow checks throughout. After they pass, perform Clean Code and rerun
-   affected checks, then run ticket/package validation.
+5. Run narrow checks throughout. After they pass, apply the post-green cleanup
+   check from delivery standards and rerun checks affected by any cleanup,
+   then complete ticket/package validation.
 6. Review the diff for acceptance, standards, scope expansion, generated
    artifacts, secrets, and unrelated changes.
 7. Create an ordinary ticket commit when authorized. Do not amend or rewrite
@@ -50,6 +53,8 @@ Worktree: <absolute path>
 Branch: <branch>
 Base: <sha>
 Result: <commit sha | blocked>
+Complexity: <low | medium | high>
+Complexity basis: <scope, decisions, verification ratings and concrete reasons>
 
 Acceptance evidence:
 - <criterion>: <observable evidence>

@@ -144,6 +144,29 @@ def has_affirmative_verification(answer: str) -> bool:
     )
 
 
+def validate_resolution(record: Record, errors: list[str]) -> None:
+    label = f"resolved {record.kind}"
+    answer = ANSWER.search(record.text)
+    if answer is None:
+        errors.append(f"{record.relative}: {label} is missing Answer")
+    else:
+        answer_text = record.text[answer.end() :]
+        if not COMMIT_EVIDENCE.search(answer_text):
+            errors.append(
+                f"{record.relative}: {label} Answer is missing a concrete commit"
+            )
+        if not has_affirmative_verification(answer_text):
+            errors.append(
+                f"{record.relative}: {label} Answer is missing affirmative verification evidence"
+            )
+    unchecked = UNCHECKED.search(record.text)
+    if unchecked is not None:
+        line = record.text.count("\n", 0, unchecked.start()) + 1
+        errors.append(
+            f"{record.relative}:{line}: {label} has an unhandled acceptance item"
+        )
+
+
 def load_records(root: Path) -> tuple[list[Record], list[str]]:
     tracker_root = root / ".scratch"
     errors: list[str] = []
@@ -243,25 +266,7 @@ def validate(root: Path) -> tuple[list[Record], list[str]]:
                     errors.append(f"{record.relative}: status blocked has no unresolved blocker")
 
             if record.status == "resolved":
-                answer = ANSWER.search(record.text)
-                if answer is None:
-                    errors.append(f"{record.relative}: resolved issue is missing Answer")
-                else:
-                    answer_text = record.text[answer.end() :]
-                    if not COMMIT_EVIDENCE.search(answer_text):
-                        errors.append(
-                            f"{record.relative}: resolved issue Answer is missing a concrete commit"
-                        )
-                    if not has_affirmative_verification(answer_text):
-                        errors.append(
-                            f"{record.relative}: resolved issue Answer is missing affirmative verification evidence"
-                        )
-                unchecked = UNCHECKED.search(record.text)
-                if unchecked is not None:
-                    line = record.text.count("\n", 0, unchecked.start()) + 1
-                    errors.append(
-                        f"{record.relative}:{line}: resolved issue has an unhandled acceptance item"
-                    )
+                validate_resolution(record, errors)
 
     visiting: set[Path] = set()
     visited: set[Path] = set()
@@ -290,10 +295,11 @@ def validate(root: Path) -> tuple[list[Record], list[str]]:
         all_terminal = all(
             child.status in TERMINAL_ISSUE_STATUSES for child in children
         )
-        if record.status == "resolved" and (not children or not all_terminal):
-            errors.append(
-                f"{record.relative}: resolved spec has non-terminal or missing child issues"
-            )
+        if record.status == "resolved":
+            if children and not all_terminal:
+                errors.append(f"{record.relative}: resolved spec has non-terminal child issues")
+            elif not children:
+                validate_resolution(record, errors)
         elif record.status == "wontfix" and children and not all_terminal:
             errors.append(f"{record.relative}: wontfix spec has non-terminal child issues")
         elif children and all_terminal and record.status not in TERMINAL_ISSUE_STATUSES:

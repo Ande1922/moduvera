@@ -1,5 +1,11 @@
 # Java Microservice Scaffold Decision Ledger
 
+Use this ledger as a decision index with historical provenance. Governing ADRs
+and their superseding decisions define current architecture scope; current
+capability and qualification evidence belong in the
+[Product Surface](../implementation/SCAFFOLD-PRODUCT-SURFACE.md). Q references
+identify the original discussion, not current execution authority.
+
 ## Status model
 
 - **Accepted** — directly confirmed by the user or unambiguously confirmed by a later answer.
@@ -16,11 +22,11 @@
 | Area | Status | Decision boundary | Evidence |
 |---|---|---|---|
 | Product | Accepted | Opinionated internal-first scaffold; reusable versioned components plus runnable reference application | Q1-Q6 |
-| Build-time application topology | Accepted, verify | Multi-process microservices remain the Golden Path; a modular monolith is a second supported topology with focused acceptance rather than a duplicated infrastructure matrix; build-time composition stays explicit and runtime topology switching is forbidden | Q4, Q29, Q191; ADR 0022 supersedes ADR 0015 |
-| Exact App Assembly modules | Accepted, verify | Separate Catalog, Order and Inventory Apps compose the microservice path; one modular-monolith App Assembly must compose the same business flow behind a single executable entry point | Q329-Q330; refined by ADR 0022 |
-| First modular-monolith scope | Accepted, verify | `app-monolith` first composes Catalog, Order and Inventory; Gateway and Identity remain separate trust-boundary Apps for the focused topology, while a future full-backend composition remains possible | 2026-08-31 App Assembly review; ADR 0027 |
+| Build-time application topology | Accepted, verify | Multi-process microservices are the only default delivery and acceptance topology; retain the modular monolith as an on-demand assembly with basic compilation and shared architecture checks; runtime qualification is opt-in, build-time composition stays explicit, and runtime topology switching remains forbidden | Q4, Q29, Q191; [ADR 0038](../adr/0038-retain-monolith-as-on-demand-assembly.md) supersedes ADR 0022's continuous second-topology obligation |
+| Exact App Assembly modules | Accepted, verify | Separate Catalog, Order and Inventory Apps compose the microservice path; retain `app-monolith` without requiring new services or features to join it unless explicitly in scope | Q329-Q330; [ADR 0038](../adr/0038-retain-monolith-as-on-demand-assembly.md) |
+| Retained modular-monolith scope | Accepted, verify | `app-monolith` retains the Catalog, Order and Inventory business-core shape, with Gateway and Identity as separate trust-boundary Apps; future composition changes and runtime qualification require an explicitly scoped use case | 2026-08-31 App Assembly review; ADR 0027 and [ADR 0038](../adr/0038-retain-monolith-as-on-demand-assembly.md) |
 | Gateway role | Accepted, verify | Gateway contains routes and filters only; Business Service Interfaces layers uniquely own HTTP Controllers, the existing handwritten `GatewayController` must be removed, and service-name prefixes are handled only by route/assembly configuration | 2026-08-31 App Assembly review; ADR 0028 and ADR 0029 |
-| Service API | Accepted, verify | Protocol-neutral `*-api`; remote HTTP clients implement cross-App calls in the microservice path and Application Services implement Local calls in the modular-monolith path without multiplying the full infrastructure matrix | Q24, Q27-Q29, Q40-Q43; refined by ADR 0022 |
+| Service API | Accepted, verify | Protocol-neutral `*-api`; remote HTTP clients implement cross-App calls in the microservice path and Application Services retain Local collaboration for the monolith; its runtime qualification is opt-in | Q24, Q27-Q29, Q40-Q43; [ADR 0038](../adr/0038-retain-monolith-as-on-demand-assembly.md) retains the Service API boundary |
 | Authentication | Accepted | The scaffold owns trusted authentication mapping and context-establishment seams; consumers own user directories, credential lifecycle and concrete identity-provider integration, while `identity-app` remains reference evidence | 2026-09-01 IAM boundary review; ADR 0035 supersedes ADR 0002 |
 | Token model | Superseded | Opaque browser sessions and gateway exchange to internal JWT remain the reference-product flow, not a required scaffold-wide token architecture | Q34-Q39 superseded by the 2026-09-01 IAM boundary review and ADR 0035 |
 | Tenant boundary | Accepted | HTTP/message/job boundaries establish a trusted Tenant Context; infrastructure capabilities consume it and fail closed, while routine Application/Domain/Repository interfaces remain tenant-transparent unless tenant identity has business meaning | Q18, Q21-Q23, Q73, Q103-Q104; ADR 0003 refined by the 2026-08-30 review |
@@ -37,9 +43,9 @@
 | API version and route-prefix ownership | Accepted, verify | Business Service Controllers own major-version and missing-version behavior and declare service-local paths; `/api/{service}` is an assembly-owned external route prefix. Gateway strips it for standalone service targets, while a multi-service App prefixes the matching public Controllers and receives the unstripped path; exactly one transformation is active | Q331-Q341; refined by ADR 0028 and ADR 0029 |
 | Configuration and secrets | Accepted, verify | Typed configuration; dynamic-refresh allowlist; Nacos encrypted settings with bootstrap secrets externalized | Q49, Q55-Q56 |
 | Telemetry | Accepted, verify | OTel Agent for automatic telemetry and Micrometer for application metrics; avoid duplicate bridges | Q50, Q59 |
-| Messaging reliability | Accepted, verify | Both supported topologies use the same Kafka-backed at-least-once path with transactional Outbox/Inbox, retry classification, DLQ and bounded ordering; no Local Transport is added | Q61-Q107; refined by ADR 0024 |
+| Messaging reliability | Accepted, verify | The microservice Golden Path and retained monolith share Kafka-backed at-least-once semantics with transactional Outbox/Inbox, retry classification, DLQ and bounded ordering; no Local Transport is added and monolith runtime qualification is opt-in | Q61-Q107; ADR 0024 and [ADR 0038](../adr/0038-retain-monolith-as-on-demand-assembly.md) |
 | Message contract | Accepted | Structured CloudEvents for events; separate Asynchronous Command envelope; Schema artifacts published with APIs | Q69-Q78, Q100-Q101 |
-| Broker and programming model | Accepted, verify | Spring Cloud Stream imperative handlers with the Kafka Binder are used in both supported topologies; a future middleware implementation must remain behind the messaging boundary and pass the same semantic contracts | Q81-Q102; ADR 0017 refined by ADR 0024 |
+| Broker and programming model | Accepted, verify | Spring Cloud Stream imperative handlers with the Kafka Binder serve the microservice Golden Path and retained monolith, whose runtime qualification is opt-in; a future middleware implementation stays behind the messaging boundary and must pass the same semantic contracts | Q81-Q102; ADR 0017, ADR 0024 and [ADR 0038](../adr/0038-retain-monolith-as-on-demand-assembly.md) |
 | HTTP Client governance | Accepted | Boot Client Groups, Apache HC5, caller-owned timeout/concurrency/retry/circuit policy, one retry layer | Q307-Q328 |
 | Cross-service deadline | Deferred | No remaining-budget propagation in first version | Q317 |
 | Generic request idempotency | Deferred | Business idempotency first; no generic annotation/template until a dedicated design round | Q117, Q121 |
@@ -63,7 +69,7 @@
 | Container packaging | Deferred | Historical Q406-Q415 recommendations are outside the current non-deployment delivery boundary; revisit with deployment design | Q406-Q415, overridden for current scope by the user's 2026-08-30 clarification |
 | Image signing | Deferred | Do not preconfigure Cosign or signature verification until a project has a deployment-side verification requirement | Q416 |
 | Deployment baseline | Open | Production/single-host Compose, Kubernetes, Helm, middleware ownership, migration orchestration, and rolling-release behavior remain unconfirmed; a disposable local Compose dependency harness is accepted only as reference-product test tooling | Q417-Q424, excluding withdrawn Q423; reopened and later narrowed by direct instructions on 2026-08-30 |
-| Supported Local assembly | Accepted, verify | Local invocation is required by the modular-monolith topology, which must pass focused end-to-end acceptance without becoming a second full infrastructure matrix | Q421; ADR 0022 supersedes ADR 0015 |
+| On-demand Local assembly | Accepted, verify | Retain Local invocation and the existing monolith assembly; requalify its target version when runtime support is explicitly requested, since historical results do not establish current support | Q421; [ADR 0038](../adr/0038-retain-monolith-as-on-demand-assembly.md) |
 
 ## Superseded decisions that must not leak into implementation
 
@@ -71,7 +77,7 @@
 - PostgreSQL-only/RLS-first tenancy is still superseded by portable tenant semantics; PostgreSQL being primary does not make RLS the portable tenant contract.
 - Explicit `TenantId` parameters on ordinary business Repository methods are superseded by ADR 0003's refinement: trusted context is explicit at entry/infrastructure seams and transparent to routine business callers.
 - Equal Kafka/RocketMQ support is superseded by ADR 0017; Kafka is the current Binder target and other brokers are deferred.
-- Modular-monolith-first delivery remains superseded: ADR 0022 keeps multi-process microservices as the Golden Path while replacing optional Local composition with a required, focused second topology.
+- Modular-monolith-first delivery and ADR 0022's continuous second-topology obligation are superseded by [ADR 0038](../adr/0038-retain-monolith-as-on-demand-assembly.md): microservices are the only default, while the retained monolith's runtime qualification is opt-in.
 - The scaffold-owned internal identity, tenant RBAC, resource graph and License model are superseded by ADR 0035; only the trusted authentication/authorization seams remain a product commitment.
 - Browser JWT-with-all-permissions remains rejected, but opaque browser sessions and internal JWT exchange are now reference-product choices rather than scaffold-wide requirements.
 - The explanatory custom `MessageEnvelope` was explicitly rejected before CloudEvents was designed.

@@ -26,6 +26,15 @@ class TrackerCheckerTest(unittest.TestCase):
             check=False,
         )
 
+    def resolved_direct_spec(self) -> Path:
+        root = self.fixture("wontfix-no-children")
+        (root / ".scratch/example/spec.md").write_text(
+            "# Direct implementation\n\nType: spec\nStatus: resolved\n\n"
+            "## Acceptance criteria\n- [x] The requested behavior is verified.\n\n"
+            "## Answer\nDelivered commit `1234567`; verification tests passed.\n"
+        )
+        return root
+
     def test_legal_tracker_passes(self) -> None:
         result = self.run_checker(self.fixture("legal"))
         self.assertEqual(0, result.returncode, result.stderr)
@@ -63,10 +72,39 @@ class TrackerCheckerTest(unittest.TestCase):
         spec = root / ".scratch/example/spec.md"
         spec.write_text(
             spec.read_text().replace("Status: ready-for-agent", "Status: resolved")
+            + "\n## Answer\nDelivered commit `1234567`; verification tests passed.\n"
         )
         result = self.run_checker(root)
         self.assertNotEqual(0, result.returncode)
         self.assertIn("resolved spec has non-terminal", result.stderr)
+
+    def test_resolved_spec_without_tickets_passes_with_completion_evidence(self) -> None:
+        result = self.run_checker(self.resolved_direct_spec())
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("spec=1, issue=0", result.stdout)
+
+    def test_resolved_spec_without_tickets_requires_completion_evidence(self) -> None:
+        for original, replacement, error in (
+            (
+                "## Answer\nDelivered commit `1234567`; verification tests passed.\n",
+                "",
+                "resolved spec is missing Answer",
+            ),
+            ("commit `1234567`; ", "", "Answer is missing a concrete commit"),
+            (
+                "verification tests passed.",
+                "Verification failed.",
+                "Answer is missing affirmative verification evidence",
+            ),
+            ("- [x]", "- [ ]", "resolved spec has an unhandled acceptance item"),
+        ):
+            with self.subTest(error=error):
+                root = self.resolved_direct_spec()
+                spec = root / ".scratch/example/spec.md"
+                spec.write_text(spec.read_text().replace(original, replacement))
+                result = self.run_checker(root)
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(error, result.stderr)
 
     def test_resolved_issue_requires_concrete_commit(self) -> None:
         root = self.fixture("legal")

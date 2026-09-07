@@ -6,7 +6,7 @@
 
 助手给出的推荐不等于决策。本次复盘分别标记用户明确确认、仅继续推进、需要实证、明确延期以及被后续结论覆盖的内容。
 
-This file is a historical recap of the original Q1-Q424 Grill and intentionally preserves what that session concluded at the time. Current implementation must follow [DECISION-LEDGER.md](./DECISION-LEDGER.md) and the ADRs: ADR 0022 keeps multi-process microservices as the Golden Path while requiring focused modular-monolith topology support, MyBatis-Plus is selected with PostgreSQL primary and MySQL compatibility, Spring Cloud Stream with Kafka replaces equal multi-broker support, and lightweight contracts target one package-separated `platform-kernel` artifact.
+历史阅读说明（2026-09-07）：下文保留原会话与早期复盘当时的结论，不作为当前实施指令。决策出处可从 [DECISION-LEDGER.md](./DECISION-LEDGER.md) 定位，当前架构边界以适用 ADR 及其后续替代决策为准。[ADR 0038](../adr/0038-retain-monolith-as-on-demand-assembly.md) 已撤销持续支持第二套单体拓扑的义务：微服务是唯一默认交付与验收拓扑，单体保留基础编译和共享架构检查，运行时验收按需启用。当前能力与验证状态见 [Product Surface](../implementation/SCAFFOLD-PRODUCT-SURFACE.md)。
 
 ## 设计树如何展开
 
@@ -76,6 +76,6 @@ This file is a historical recap of the original Q1-Q424 Grill and intentionally 
 - [grill-session-transcript.md](./grill-session-transcript.md)：完整本地证据。
 - [question-index.md](./question-index.md)：Q1-Q424 的审计索引。
 
-## 当前阶段
+## 当时的阶段
 
-架构 Grill 已按用户要求结束。后续架构简化评审已经通过 ADR 0015-0018 收敛主路径；尚未被强确认的技术细节由真实业务切片和 TCK 产生证据后更新。部署单独保持 Open，不在实现过程中被默认补齐。执行边界见 [OPEN-QUESTIONS.md](./OPEN-QUESTIONS.md)。
+在这次复盘时，架构 Grill 已按用户要求结束，后续架构简化评审已通过 ADR 0015-0018 收敛主路径；尚未被强确认的技术细节计划由真实业务切片和 TCK 产生证据后更新。部署单独保持 Open，不在实现过程中被默认补齐。当时的收口与待验证项见 [OPEN-QUESTIONS.md](./OPEN-QUESTIONS.md)。

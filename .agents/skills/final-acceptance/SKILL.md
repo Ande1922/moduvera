@@ -1,6 +1,6 @@
 ---
 name: final-acceptance
-description: Audit current review, gate, ticket, and applicable Scenario evidence and issue a truthful final delivery result without inferring release authority.
+description: Audit current review, gate, spec or ticket, and applicable Scenario evidence and issue a truthful final delivery result without inferring release authority.
 ---
 
 # Final Acceptance
@@ -12,9 +12,9 @@ and the evidence invariants in
 
 Resolve the delivered base/head, require both review axes to be completed
 against that exact comparison, verify the recorded gate evidence belongs to
-the same base/head and still exists, account for every ticket criterion and
-required check, determine applicable Scenario gates from the changed
-contracts, and confirm the checkout is clean.
+the same base/head and still exists, account for every spec and applicable
+ticket criterion and required check, determine applicable Scenario gates from
+the changed contracts, and confirm the checkout is clean.
 
 Start from the existing result index and original receipts/review reports.
 Use deterministic checks for comparison and execution facts, then judge whether

@@ -2,6 +2,17 @@ Status: ready-for-agent
 
 # 完成多租户订单履约黄金路径
 
+## 阅读说明 — 2026-09-06
+
+本文件保留原始立项背景和批准范围。下文 Problem Statement 与 Further Notes 中的
+“当前”“尚缺”描述立项时的差距；当前能力以
+[Product Surface](../../docs/implementation/SCAFFOLD-PRODUCT-SURFACE.md) 为准。
+
+本次状态核对：01–15 号 issue 已 resolved，剩余工作是
+[16 — Outbox 性能基线](issues/16-baseline-outbox-performance.md)。黄金路径已交付不代表
+性能基线已完成，因此父规格继续保持 ready-for-agent。继续工作时从该剩余票开始，
+需要追溯既有契约或验收时再读取已完成票据。
+
 ## Problem Statement
 
 当前脚手架已经形成了一组明确的架构决策，也已有 BOM、`platform-kernel`、Web、OAuth2 Resource Server、MyBatis-Plus Data Starter、数据库迁移组件、消息可靠性契约以及 Catalog、Order、Inventory 的领域骨架。但是，现有可运行证据主要仍是简单 Notes Demo、内存适配器和模块级测试，无法回答使用者最关心的问题：这套脚手架能否承载一个真实的微服务业务闭环，是否真的好用，以及已经决定的租户、安全、远程调用、事务、消息、持久化和故障恢复能力能否协同工作。

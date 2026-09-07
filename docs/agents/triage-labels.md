@@ -18,7 +18,9 @@ When an engineering skill names a canonical intake role, use only this table.
 
 ## Issue execution
 
-Use these states only for issues. A spec may use `resolved` as its terminal state after every child issue is `resolved` or `wontfix`.
+Use these execution states for issues. A spec may use `resolved` after every
+child issue is `resolved` or `wontfix`, or after direct implementation without
+children satisfies the [tracker closure evidence](issue-tracker.md#wayfinding).
 
 | Tracker status | Meaning |
 | --- | --- |

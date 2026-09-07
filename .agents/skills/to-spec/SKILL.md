@@ -11,22 +11,27 @@ question to [`grill-with-docs`](../grill-with-docs/SKILL.md).
 
 ## Process
 
-1. Read `AGENTS.md`, `CONTEXT.md`, applicable ADRs, and the local
+1. Use the [task context rules](../../../docs/agents/domain.md#task-context) and local
    [tracker conventions](../../../docs/agents/issue-tracker.md).
 2. Inspect enough current code and tests to identify the highest stable
    observable test seams. Confirm any new public seam with the user.
-3. Write one spec under `.scratch/<feature-slug>/spec.md` with `Type: spec` and
-   an allowed status. Include Problem Statement, Solution, extensive numbered
-   User Stories, Implementation Decisions, Testing Decisions, Out of Scope,
-   and Further Notes. Record contracts rather than volatile code snippets or
-   file-by-file implementation instructions.
-4. Check terminology, ADR compatibility, scope, and local links.
+3. Classify the scope using [task complexity](../../../docs/agents/task-complexity.md).
+   Write one spec under `.scratch/<feature-slug>/spec.md` with `Type: spec`, an
+   allowed status, `Complexity:`, and `Complexity basis:`. Record the problem,
+   outcome, decisions, numbered acceptance criteria and test seams, and
+   exclusions, adding the detail required by its level. User Stories are
+   optional when roles and goals add distinct information; they have no quota.
+   Record contracts rather than volatile code snippets or file-by-file instructions.
+4. Check the complexity rating against its cited scope and verification needs,
+   then check terminology, ADR compatibility, coverage, and local links.
 
 ## Completion
 
-Stop after returning the spec path, chosen test seams, unresolved decisions,
-and validation performed. Publishing or editing requires repository-write
-authority. Do not split tickets until the user approves the spec and requests
-that stage.
+Stop after returning the spec path, complexity and basis, chosen test seams, unresolved decisions,
+validation performed, and a recommended implementation route with one brief
+reason under [route by task shape](../../../docs/agents/delivery-workflow.md#route-by-task-shape).
+Publishing or editing requires repository-write authority. Ticketing or
+implementation requires spec approval and authority for that stage; reuse
+approvals already granted for the current delivery.
 
 Follow the shared [test and authorization standards](../../../docs/agents/delivery-standards.md).

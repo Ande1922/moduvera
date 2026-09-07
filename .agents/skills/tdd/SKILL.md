@@ -5,8 +5,9 @@ description: Run a repository-scoped red-green loop at agreed observable seams w
 
 # Test-Driven Development
 
-This supporting Skill is explicit or repository-required only. Read
-`CONTEXT.md`, applicable ADRs, and the testing rules in `AGENTS.md`.
+This supporting Skill is explicit or repository-required only. Use the
+[task context rules](../../../docs/agents/domain.md#task-context) to resolve
+the applicable vocabulary, ADRs, and repository testing rules.
 
 Before writing a test, name the observable seam and confirm any new public seam
 with the user. Prefer integration-style behavior through a real public
@@ -24,10 +25,10 @@ For each vertical slice:
 
 ## Completion
 
-Stop when the agreed behavior is green. The post-green Clean Code pass belongs
-to the enclosing [`implement`](../implement/SKILL.md) workflow, followed by
-affected test reruns. Report any test that could not be made meaningfully red;
-do not count a tautological or implementation-coupled test as evidence.
+Stop when the agreed behavior is green. The post-green cleanup check belongs
+to the enclosing [`implement`](../implement/SKILL.md) workflow, with affected
+test reruns after any cleanup edits. Report any test that could not be made
+meaningfully red; do not count a tautological or implementation-coupled test as evidence.
 
 The enclosing workflow retains the shared
 [authorization boundary](../../../docs/agents/delivery-standards.md#authorization-boundary).
