@@ -99,6 +99,10 @@ final class TaskFixture {
                 Future<String> absentResult = pool.submit(() -> inWorker("queued-absent", absent));
                 Future<?> cancelled = pool.submit(LoggingTasks.bindRunnable("never-started", () -> { throw new AssertionError("cancelled task ran"); }));
                 check(cancelled.cancel(false), "queued cancellation accepted");
+                LOGGER.atInfo().addKeyValue("task_name", "never-started")
+                        .addKeyValue("fixture_phase", "owner-disposition")
+                        .addKeyValue("task_disposition", "cancelled_before_start")
+                        .log("取消方已取消尚未开始的任务");
                 check(started.get() == 0, "no task body before queue release");
                 LOGGER.atInfo().addKeyValue("fixture_phase", "queue-release").log("解除任务排队等待");
                 release.countDown();
@@ -261,6 +265,10 @@ final class TaskFixture {
             pool.submit(LoggingTasks.bindRunnable("rejected", () -> { throw new AssertionError("rejected task ran"); }));
             throw new AssertionError("submission not rejected");
         } catch (RejectedExecutionException expected) {
+            LOGGER.atInfo().addKeyValue("task_name", "rejected")
+                    .addKeyValue("fixture_phase", "owner-disposition")
+                    .addKeyValue("task_disposition", "rejected_after_shutdown")
+                    .log("提交方确认执行器关闭后拒绝任务，未重新提交");
             clean("rejection-after");
         }
         AssertionError finalFailure = new AssertionError("fixture controlled terminal failure");

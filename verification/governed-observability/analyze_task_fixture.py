@@ -76,6 +76,18 @@ def validate(directory: Path) -> dict:
     assert {log["fixture_phase"] for log in observed if log["fixture_case"] == "callback"} >= {"inline", "external"}
     release = next(i for i, log in enumerate(logs) if log.get("fixture_phase") == "queue-release")
     assert not any(log.get("log.logger") == "task.execute" for log in logs[:release])
+    for name, disposition in (("never-started", "cancelled_before_start"), ("rejected", "rejected_after_shutdown")):
+        owner_records = [log for log in logs if log.get("task_name") == name]
+        assert len(owner_records) == 1, (name, owner_records)
+        owner = owner_records[0]
+        assert owner["log.logger"] == "io.github.ande1922.moduvera.verification.logging.TaskFixture", owner
+        assert owner["log.level"] == "INFO" and owner["fixture_phase"] == "owner-disposition", owner
+        assert owner["task_disposition"] == disposition, owner
+        assert not {"event.action", "duration_ms", "error.stack_trace"} & owner.keys(), owner
+        assert not any(span["name"] == name for span in spans)
+        assert not any(log.get("task_name") == name for log in canonical)
+    cancelled_at = next(i for i, log in enumerate(logs) if log.get("task_name") == "never-started")
+    assert cancelled_at < release
     notified = next(i for i, log in enumerate(logs) if log.get("fixture_phase") == "cancellation-notified")
     finished = next(i for i, log in enumerate(logs) if log.get("task_name") == "running-cancel")
     before_exit = next(i for i, log in enumerate(logs) if log.get("fixture_phase") == "before-exit")
@@ -87,7 +99,7 @@ def validate(directory: Path) -> dict:
     assert any(log.get("fixture_phase") == "complete" for log in logs)
     assert status["postRequestsBySignal"]["logs"] == 0
     assert status["postRequestsBySignal"]["metrics"] == 0
-    return {"result": "PASS", "task_spans": len(tasks), "canonical_info": len(canonical), "all_spans": len(spans), "worker_restorations": 6, "unsampled_task_logs": 1, "callback_spans": 0, "never_started_spans": 0}
+    return {"result": "PASS", "task_spans": len(tasks), "canonical_info": len(canonical), "all_spans": len(spans), "worker_restorations": 6, "unsampled_task_logs": 1, "callback_spans": 0, "never_started_spans": 0, "owner_dispositions": 2}
 
 
 if __name__ == "__main__":
