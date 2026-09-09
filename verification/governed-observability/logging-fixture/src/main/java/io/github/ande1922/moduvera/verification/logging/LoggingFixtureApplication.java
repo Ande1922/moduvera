@@ -35,6 +35,12 @@ public class LoggingFixtureApplication {
     public static void main(String[] arguments) throws Exception {
         SpringApplication application = new SpringApplication(LoggingFixtureApplication.class);
         application.setWebApplicationType(WebApplicationType.NONE);
+        if ("tasks".equals(System.getProperty("moduvera.fixture"))) {
+            try (ConfigurableApplicationContext context = application.run(arguments)) {
+                TaskFixture.run();
+            }
+            return;
+        }
         runUntilReleased(
                 application,
                 arguments,

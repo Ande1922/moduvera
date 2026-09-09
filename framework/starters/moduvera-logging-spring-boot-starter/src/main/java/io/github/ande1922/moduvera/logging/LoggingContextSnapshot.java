@@ -6,6 +6,12 @@ import io.opentelemetry.context.Context;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.Callable;
+import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
+import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.function.Supplier;
 import org.slf4j.MDC;
 
 /**
@@ -41,6 +47,97 @@ public final class LoggingContextSnapshot {
     /** Creates a snapshot that masks both business and telemetry state while installed. */
     public static LoggingContextSnapshot absent() {
         return new LoggingContextSnapshot(ExecutionContextSnapshot.absent(), Context.root());
+    }
+
+    /**
+     * Binds a Runnable at callback registration, without creating a task Span.
+     * The result belongs to this captured logical execution; never cache it across requests.
+     */
+    public Runnable bindRunnable(Runnable callback) {
+        Objects.requireNonNull(callback, "callback");
+        return () -> {
+            try (Scope ignored = openScope()) {
+                callback.run();
+            }
+        };
+    }
+
+    /**
+     * Binds a Callable at callback registration, without creating a task Span.
+     * The result belongs to this captured logical execution; never cache it across requests.
+     */
+    public <T> Callable<T> bindCallable(Callable<T> callback) {
+        Objects.requireNonNull(callback, "callback");
+        return () -> {
+            try (Scope ignored = openScope()) {
+                return callback.call();
+            }
+        };
+    }
+
+    /**
+     * Binds a Supplier at callback registration, without creating a task Span.
+     * The result belongs to this captured logical execution; never cache it across requests.
+     */
+    public <T> Supplier<T> bindSupplier(Supplier<T> callback) {
+        Objects.requireNonNull(callback, "callback");
+        return () -> {
+            try (Scope ignored = openScope()) {
+                return callback.get();
+            }
+        };
+    }
+
+    /**
+     * Binds a Function at callback registration, without creating a task Span.
+     * The result belongs to this captured logical execution; never cache it across requests.
+     */
+    public <T, R> Function<T, R> bindFunction(Function<T, R> callback) {
+        Objects.requireNonNull(callback, "callback");
+        return (value) -> {
+            try (Scope ignored = openScope()) {
+                return callback.apply(value);
+            }
+        };
+    }
+
+    /**
+     * Binds a Consumer at callback registration, without creating a task Span.
+     * The result belongs to this captured logical execution; never cache it across requests.
+     */
+    public <T> Consumer<T> bindConsumer(Consumer<T> callback) {
+        Objects.requireNonNull(callback, "callback");
+        return (value) -> {
+            try (Scope ignored = openScope()) {
+                callback.accept(value);
+            }
+        };
+    }
+
+    /**
+     * Binds a BiFunction at callback registration, without creating a task Span.
+     * The result belongs to this captured logical execution; never cache it across requests.
+     */
+    public <T, U, R> BiFunction<T, U, R> bindBiFunction(BiFunction<T, U, R> callback) {
+        Objects.requireNonNull(callback, "callback");
+        return (first, second) -> {
+            try (Scope ignored = openScope()) {
+                return callback.apply(first, second);
+            }
+        };
+    }
+
+    /**
+     * Binds a BiConsumer at callback registration, without creating a task Span.
+     * The result belongs to this captured logical execution; never cache it across requests.
+     */
+    public <T, U> BiConsumer<T, U> bindBiConsumer(BiConsumer<T, U> callback) {
+        Objects.requireNonNull(callback, "callback");
+        return (first, second) -> {
+            try (Scope ignored = openScope()) {
+                callback.accept(first, second);
+            }
+        };
     }
 
     /** Installs the captured state until the returned thread-owned scope closes. */
