@@ -67,6 +67,10 @@ public final class ServletRequestDiagnostics {
         return state instanceof ServletRequestDiagnostics diagnostics ? diagnostics : null;
     }
 
+    DiagnosticLogSnapshot snapshot() {
+        return snapshot;
+    }
+
     public String correlationId() {
         return correlationId;
     }

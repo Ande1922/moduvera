@@ -28,12 +28,22 @@ owned by the existing container error handler; the listener does not duplicate
 its final ERROR. The Servlet API cannot prove that a peer received bytes when no
 transport failure was observed.
 
-One residual gap remains: Tomcat's own ERROR for exceptions escaping the filter
-chain runs outside the diagnostic scope and therefore lacks `correlation_id`.
-Its stable error code and sanitized cause remain available, and the separate
-canonical carries the request correlation. Fixing that final-handler projection
-requires a container-boundary decision; the current implementation does not
-claim full ticket acceptance.
+Embedded Tomcat receives an optional Engine Valve that keeps a projection-only
+scope for each synchronous pipeline invocation. It reads the latest immutable
+request snapshot, including identity learned after authentication. An active
+Span and ExecutionContext take precedence over fallback fields; canonical's
+explicit captured snapshot retains precedence over both. The Valve does not
+install authorization or OTel state, emit errors, or change responses. Its scope
+ends on pipeline return, including while an asynchronous request is waiting.
+This projection supports the shipped synchronous Boot ConsoleAppender; deferred
+or arbitrary asynchronous appenders are outside this support boundary.
+
+An async dispatch failure still produces both Tomcat's intermediate
+ApplicationDispatcher ERROR and its final StandardWrapperValve ERROR. Both now
+carry request correlation and trusted identity, with captured server Trace as
+fallback when no active Span exists. Tests identify the same request and original
+Throwable object; no error is suppressed. This duplicate ownership gap still
+prevents full ticket acceptance.
 
 `ServletRequestDiagnosticsIT` runs the real embedded container. The additional
 Agent run sets `moduvera.test.agent=true` and uses the repository's locked Agent

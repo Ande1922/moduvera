@@ -41,6 +41,8 @@ class ServletRequestDiagnosticsIT {
     private static final HttpClient HTTP = HttpClient.newHttpClient();
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final List<String> OUTPUT = new CopyOnWriteArrayList<>();
+    private static final List<String> ERROR_ORIGINS = new CopyOnWriteArrayList<>();
+    private static final List<Throwable> ERROR_CAUSES = new CopyOnWriteArrayList<>();
     private static volatile CountDownLatch started;
     private static volatile CountDownLatch release;
     private static volatile String cancelledCorrelation;
@@ -49,11 +51,25 @@ class ServletRequestDiagnosticsIT {
         private final ModuveraEcsStructuredLogFormatter formatter = new ModuveraEcsStructuredLogFormatter(new MockEnvironment());
         @Override protected void append(ILoggingEvent event) {
             OUTPUT.add(formatter.format(event));
+            if (event.getLevel() == ch.qos.logback.classic.Level.ERROR
+                    && event.getThrowableProxy() instanceof ch.qos.logback.classic.spi.ThrowableProxy proxy) {
+                Throwable root = proxy.getThrowable();
+                while (root.getCause() != null) {
+                    root = root.getCause();
+                }
+                ERROR_CAUSES.add(root);
+                ERROR_ORIGINS.add(java.util.Arrays.stream(event.getCallerData())
+                        .map(StackTraceElement::getClassName)
+                        .filter(name -> name.startsWith("org.apache.catalina.core."))
+                        .findFirst().orElse("unknown"));
+            }
         }
     };
 
     @BeforeEach void attachOutput() {
         OUTPUT.clear();
+        ERROR_CAUSES.clear();
+        ERROR_ORIGINS.clear();
         appender.start();
         ((Logger) LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME)).addAppender(appender);
     }
@@ -102,6 +118,7 @@ class ServletRequestDiagnosticsIT {
             assertThat(event.path("log").path("level").asString()).isEqualTo("INFO");
         }
         assertThat(canonical()).hasSize(3);
+        assertContainerErrorProjection(1);
     }
 
     @Test void observesClientResetWithoutClaimingResponseStatusDelivered() throws Exception {
@@ -132,6 +149,13 @@ class ServletRequestDiagnosticsIT {
         assertThat(event.path("event").path("outcome").asString()).isEqualTo("success");
         assertThat(event.path("http").path("response").path("status_code").asInt()).isEqualTo(204);
         assertThat(canonical()).hasSize(2);
+        assertContainerErrorProjection(2);
+        // The intermediate dispatch log and final wrapper log refer to the identical failed request
+        // and the identical original Throwable, not merely equal exception text.
+        assertThat(ERROR_CAUSES).hasSize(2);
+        assertThat(ERROR_CAUSES.get(0)).isSameAs(ERROR_CAUSES.get(1));
+        assertThat(ERROR_ORIGINS).containsExactly("org.apache.catalina.core.ApplicationDispatcher",
+                "org.apache.catalina.core.StandardWrapperValve");
     }
 
     @Test void usesAgentServerContextForValidInvalidAndUnsampledParents() throws Exception {
@@ -152,6 +176,21 @@ class ServletRequestDiagnosticsIT {
             var event = awaitEvent(response.headers().firstValue("X-Correlation-Id").orElseThrow());
             assertThat(event.path("trace_id").asString()).isEqualTo(responseTrace);
             assertThat(event.path("span_id").asString()).hasSize(16).isNotEqualTo("1234567890123456");
+        }
+    }
+
+    private static void assertContainerErrorProjection(int expected) {
+        var errors = OUTPUT.stream().map(JSON::readTree)
+                .filter(event -> "ERROR".equals(event.path("log").path("level").asString())).toList();
+        assertThat(errors).hasSize(expected);
+        for (var error : errors) {
+            assertThat(error.has("correlation_id")).isTrue();
+            var completion = canonical().stream()
+                    .filter(event -> event.path("correlation_id").equals(error.path("correlation_id")))
+                    .findFirst().orElseThrow();
+            for (String field : List.of("correlation_id", "actor_id", "tenant_id", "trace_id", "span_id")) {
+                assertThat(error.path(field)).as(field).isEqualTo(completion.path(field));
+            }
         }
     }
 

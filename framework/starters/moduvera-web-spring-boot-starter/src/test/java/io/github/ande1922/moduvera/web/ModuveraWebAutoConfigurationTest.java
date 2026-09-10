@@ -31,6 +31,21 @@ class ModuveraWebAutoConfigurationTest {
             .withPropertyValues("moduvera.web.internal-ingress=true");
 
     @Test
+    void tomcatProjectionIsConditionalOnTheOptionalContainer() {
+        new org.springframework.boot.test.context.runner.WebApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(
+                        io.github.ande1922.moduvera.web.autoconfigure.ModuveraTomcatDiagnosticsAutoConfiguration.class))
+                .run(context -> assertThat(context).hasBean("moduveraTomcatDiagnostics"));
+        for (String absent : java.util.List.of("org.apache.catalina", "org.springframework.boot.tomcat")) {
+            new org.springframework.boot.test.context.runner.WebApplicationContextRunner()
+                    .withClassLoader(new org.springframework.boot.test.context.FilteredClassLoader(absent))
+                    .withConfiguration(AutoConfigurations.of(
+                            io.github.ande1922.moduvera.web.autoconfigure.ModuveraTomcatDiagnosticsAutoConfiguration.class))
+                    .run(context -> assertThat(context).hasNotFailed().doesNotHaveBean("moduveraTomcatDiagnostics"));
+        }
+    }
+
+    @Test
     void suppliesTheOpinionatedWebBoundaryBeans() {
         runner.run(context -> assertThat(context)
                 .hasSingleBean(CorrelationIdFilter.class)

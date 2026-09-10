@@ -32,13 +32,17 @@ final class TrustedLogContext {
         if (diagnostic != null) {
             return diagnostic;
         }
-        Map<String, String> fields = new LinkedHashMap<>();
+        Map<String, String> fields = new LinkedHashMap<>(DiagnosticLogProjection.currentFields());
         SpanContext spanContext = Span.current().getSpanContext();
         if (spanContext.isValid()) {
             fields.put("trace_id", spanContext.getTraceId());
             fields.put("span_id", spanContext.getSpanId());
         }
-        ExecutionContextHolder.current().ifPresent(context -> addExecutionContext(fields, context));
+        ExecutionContextHolder.current().ifPresent(context -> {
+            // An active execution replaces the fallback identity, including explicitly absent fields.
+            fields.keySet().removeIf(key -> !key.equals("trace_id") && !key.equals("span_id"));
+            addExecutionContext(fields, context);
+        });
         return fields;
     }
 
