@@ -187,15 +187,13 @@ public final class LoggingContextSnapshot {
             if (Thread.currentThread() != owner) {
                 throw new IllegalStateException("logging context scope must close on its owning thread");
             }
+            // Validate nesting before changing the other layers or making close irreversible.
+            executionScope.close();
             closed = true;
             try {
                 mdcProjection.close();
             } finally {
-                try {
-                    telemetryScope.close();
-                } finally {
-                    executionScope.close();
-                }
+                telemetryScope.close();
             }
         }
     }

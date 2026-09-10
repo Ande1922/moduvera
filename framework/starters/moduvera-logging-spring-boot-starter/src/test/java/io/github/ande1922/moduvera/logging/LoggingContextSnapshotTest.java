@@ -227,6 +227,35 @@ class LoggingContextSnapshotTest {
         }
     }
 
+    @Test
+    void outOfOrderClosePreservesAllLayersAndCanBeRetried() throws Exception {
+        try (var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+            executor.submit(() -> {
+                ExecutionContext request = tenantUser("tenant-request", "user-request", "corr-request");
+                try (var ignoredExecution = ExecutionContextHolder.open(request);
+                        var ignoredTelemetry = Context.root().with(Span.wrap(SAMPLED)).makeCurrent()) {
+                    MDC.put("tenant_id", "prior-mdc");
+                    var outer = LoggingContextSnapshot.capture().openScope();
+                    var inner = LoggingContextSnapshot.absent().openScope();
+                    Observation before = observe();
+                    var mdcBefore = MDC.getCopyOfContextMap();
+                    assertThatThrownBy(outer::close).isInstanceOf(IllegalStateException.class);
+                    assertThat(observe()).isEqualTo(before);
+                    assertThat(MDC.getCopyOfContextMap()).isEqualTo(mdcBefore);
+                    inner.close();
+                    assertThat(ExecutionContextHolder.require()).isEqualTo(request);
+                    assertThat(Span.current().getSpanContext()).isEqualTo(SAMPLED);
+                    outer.close();
+                    outer.close();
+                    assertThat(ExecutionContextHolder.require()).isEqualTo(request);
+                    assertThat(Span.current().getSpanContext()).isEqualTo(SAMPLED);
+                    assertThat(MDC.get("tenant_id")).isEqualTo("prior-mdc");
+                }
+                assertThat(ExecutionContextHolder.current()).isEmpty();
+            }).get();
+        }
+    }
+
     private static Observation observe() {
         return new Observation(
                 ExecutionContextHolder.current().map(ExecutionContext::correlationId).orElse(null),
