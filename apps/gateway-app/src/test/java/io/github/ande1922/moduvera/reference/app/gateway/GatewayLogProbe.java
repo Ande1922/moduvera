@@ -18,14 +18,12 @@ final class GatewayLogProbe extends AppenderBase<ILoggingEvent> implements AutoC
     private final List<JsonNode> events = new CopyOnWriteArrayList<>();
     private final ModuveraEcsStructuredLogFormatter formatter =
             new ModuveraEcsStructuredLogFormatter(new MockEnvironment());
-    private final Logger canonical = (Logger) LoggerFactory.getLogger("http.request");
-    private final Logger diagnostic = (Logger) LoggerFactory.getLogger(GatewayRequestDiagnostics.class);
+    private final Logger root = (Logger) LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME);
 
     GatewayLogProbe() {
-        setContext(canonical.getLoggerContext());
+        setContext(root.getLoggerContext());
         start();
-        canonical.addAppender(this);
-        diagnostic.addAppender(this);
+        root.addAppender(this);
     }
 
     @Override
@@ -47,8 +45,7 @@ final class GatewayLogProbe extends AppenderBase<ILoggingEvent> implements AutoC
 
     @Override
     public void close() {
-        canonical.detachAppender(this);
-        diagnostic.detachAppender(this);
+        root.detachAppender(this);
         stop();
     }
 }

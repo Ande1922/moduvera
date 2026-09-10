@@ -78,9 +78,90 @@ class GatewayLifecycleIT {
             assertThat(result.path("http").path("response").path("status_code").asInt()).isEqualTo(200);
             body.tryEmitEmpty();
             assertThat(logs.canonical()).hasSize(1);
+            assertThat(logs.errors()).isEmpty();
         } finally {
             PENDING.remove(path);
             body.tryEmitEmpty();
+        }
+    }
+
+    @Test
+    void unexpectedFailureAfterFlushedBodyAbortsSafelyWithOneFinalError() throws Exception {
+        String path = "/lifecycle/pending/" + UUID.randomUUID();
+        String payload = "postcommit-payload-" + UUID.randomUUID();
+        String query = "postcommit-query-" + UUID.randomUUID();
+        Sinks.Empty<Void> body = Sinks.empty();
+        PENDING.put(path, body);
+        try (GatewayLogProbe logs = new GatewayLogProbe();
+                Socket socket = new Socket("localhost", port);
+                BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8))) {
+            socket.setSoTimeout(5000);
+            socket.getOutputStream().write(("GET " + path + "?search=" + query + " HTTP/1.1\r\nHost: localhost\r\n\r\n")
+                    .getBytes(StandardCharsets.US_ASCII));
+            socket.getOutputStream().flush();
+            assertThat(reader.readLine()).contains("200");
+            String line;
+            String correlation = null;
+            String trace = null;
+            while ((line = reader.readLine()) != null && !line.equals("prefix")) {
+                if (line.toLowerCase(java.util.Locale.ROOT).startsWith("x-correlation-id:")) {
+                    correlation = line.substring(line.indexOf(':') + 1).trim();
+                }
+                if (line.toLowerCase(java.util.Locale.ROOT).startsWith("x-trace-id:")) {
+                    trace = line.substring(line.indexOf(':') + 1).trim();
+                }
+            }
+            assertThat(line).isEqualTo("prefix");
+            assertThat(logs.canonical()).isEmpty();
+            body.tryEmitError(new IllegalStateException("publisher failed " + payload));
+            StringBuilder remaining = new StringBuilder();
+            while ((line = reader.readLine()) != null) {
+                remaining.append(line);
+            }
+            // No terminating chunk or replacement Problem: the partial response is aborted.
+            assertThat(remaining).isEmpty();
+            await().atMost(TIMEOUT).untilAsserted(() -> assertThat(logs.canonical()).hasSize(1));
+            var completion = logs.canonical().getFirst();
+            assertThat(completion.path("correlation_id").asString()).isEqualTo(correlation);
+            assertThat(completion.path("event").path("outcome").asString()).isEqualTo("failure");
+            assertThat(completion.path("http").path("response").path("status_code").asInt()).isEqualTo(200);
+            assertThat(completion.path("client").path("ip").asString()).isIn("127.0.0.1", "0:0:0:0:0:0:0:1");
+            assertThat(completion.has("user_agent")).isFalse();
+            assertThat(logs.errors()).hasSize(1);
+            var error = logs.errors().getFirst();
+            assertThat(error.path("error").path("code").asString()).isEqualTo("SYS_UNEXPECTED");
+            assertThat(error.path("correlation_id").asString()).isEqualTo(correlation);
+            assertThat(error.toString()).doesNotContain(payload, query);
+            assertThat(completion.toString()).doesNotContain(payload, query);
+            if (Boolean.getBoolean("moduvera.test.agent")) {
+                assertThat(error.path("trace_id").asString()).isEqualTo(trace);
+                assertThat(error.path("span_id").asString()).isEqualTo(completion.path("span_id").asString());
+            }
+        } finally {
+            PENDING.remove(path);
+            body.tryEmitEmpty();
+        }
+    }
+
+    @Test
+    void actualClientMetadataUsesPeerAddressAndSafelyFormatsUserAgent() throws Exception {
+        try (GatewayLogProbe logs = new GatewayLogProbe()) {
+            for (String userAgent : List.of("gateway-fixture/1.0", "gateway-fixture credential=useragent-sensitive-value")) {
+                var response = HTTP.send(HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/lifecycle/scheduled/metadata"))
+                        .header("User-Agent", userAgent).header("X-Forwarded-For", "203.0.113.77")
+                        .GET().build(), HttpResponse.BodyHandlers.ofString());
+                String correlation = response.headers().firstValue(GatewayRequestDiagnostics.HEADER).orElseThrow();
+                await().atMost(TIMEOUT).untilAsserted(() -> assertThat(logs.canonical())
+                        .anySatisfy(event -> assertThat(event.path("correlation_id").asString()).isEqualTo(correlation)));
+                var completion = logs.canonical().stream()
+                        .filter(event -> event.path("correlation_id").asString().equals(correlation)).findFirst().orElseThrow();
+                assertThat(completion.path("client").path("ip").asString()).isIn("127.0.0.1", "0:0:0:0:0:0:0:1");
+                assertThat(completion.path("user_agent").path("original").asString()).startsWith("gateway-fixture");
+                assertThat(completion.toString()).doesNotContain("useragent-sensitive-value", "203.0.113.77");
+                if (!userAgent.contains("credential")) {
+                    assertThat(completion.path("user_agent").path("original").asString()).isEqualTo(userAgent);
+                }
+            }
         }
     }
 

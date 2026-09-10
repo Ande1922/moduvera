@@ -18,16 +18,22 @@ the enclosing handler normally. It forwards buffers without copying, caching,
 reading, or rewriting body contents.
 
 One INFO `http.request` event records the observed outcome, status when
-committed, monotonic duration, and available content lengths. A committed 200
+committed, monotonic duration, available content lengths, transport peer IP,
+and a safely formatted User-Agent when present. Forwarding headers do not
+select the peer IP. A committed 200
 does not imply success after a failed or cancelled write. Cancellation without
 an observed write failure is unknown. The event does not claim that a peer
 received all advertised bytes or headers.
 
 Gateway-generated Problems share the request correlation and preserve native
 HTTP status and applicable error headers. Unknown exceptions that can still be
-handled produce a safe 500 Problem and one `SYS_UNEXPECTED` ERROR. Errors after
-response commitment remain transport-owned: the Gateway cannot replace a
-partially sent body, and its canonical still records the failed termination.
+handled produce a safe 500 Problem and one `SYS_UNEXPECTED` ERROR. Unexpected
+errors after commitment have the same safe final-error owner. The Gateway
+closes the underlying Netty response connection without a replacement body or
+terminating success chunk; the canonical retains the committed status and failed
+outcome. Spring's disconnect classification keeps ordinary peer disconnects
+out of intervention-level ERROR output. The direct abort prevents Spring and
+Netty from repeating the original exception outside the captured safe scope.
 Downstream bodies, including Problems, remain unchanged. A missing or different
 downstream response correlation produces `SYS_GATEWAY_CORRELATION_MISMATCH`;
 the Gateway keeps its own response headers and does not log the foreign value.

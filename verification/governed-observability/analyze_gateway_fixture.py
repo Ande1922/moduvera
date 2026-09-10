@@ -38,9 +38,11 @@ for event in canonical:
 assert len(unsampled) == 1
 assert len([span for span in spans if span["traceId"] == known_trace]) == 1, \
     "sampled parent must have exactly one Gateway server Span and unsampled parent must not export"
-assert len([event for event in canonical if event["url"]["path"].startswith("/lifecycle/pending/")]) == 1
+assert len([event for event in canonical if event["url"]["path"].startswith("/lifecycle/pending/")]) == 2
 for event in canonical:
+    assert event["client"]["ip"] in ("127.0.0.1", "0:0:0:0:0:0:0:1")
     if event["url"]["path"].startswith("/lifecycle/pending/"):
+        assert "user_agent" not in event
         assert event["event"]["outcome"] in ("failure", "unknown")
         assert event["http"]["response"]["status_code"] == 200
 errors = [event for event in events if event["log"].get("level") == "ERROR"]
@@ -56,8 +58,15 @@ status = json.loads((root / "receiver-status.json").read_text())
 assert status["sensitiveMatches"] == []
 assert status["postRequestsBySignal"]["logs"] == 0 and status["postRequestsBySignal"]["metrics"] == 0
 assert len([event for event in owned if event["error"]["code"] == "SYS_GATEWAY_CORRELATION_MISMATCH"]) == 1
-assert len([event for event in owned if event["error"]["code"] == "SYS_UNEXPECTED"]) == 1
-assert len(owned) == 2
+assert len([event for event in owned if event["error"]["code"] == "SYS_UNEXPECTED"]) == 2
+assert len(owned) == 3
+assert len({event["correlation_id"] for event in owned}) == 3, "duplicate final-error ownership"
+assert len([event for event in owned if by_correlation[event["correlation_id"]]["url"]["path"].startswith(
+    "/lifecycle/pending/")]) == 1, "unexpected post-commit failure must have one final ERROR; reset has none"
+metadata = [event for event in canonical if event["url"]["path"] == "/lifecycle/scheduled/metadata"]
+assert len(metadata) == 2
+assert {event["user_agent"]["original"] for event in metadata} == {
+    "gateway-fixture/1.0", "gateway-fixture credential=[REDACTED]"}
 platform = [event for event in errors if event["log"]["logger"] ==
             "io.netty.resolver.dns.DnsServerAddressStreamProviders" and event.get("message", "").startswith(
                 "Unable to load io.netty.resolver.dns.macos.MacOSDnsServerAddressStreamProvider, fallback to system defaults.")]

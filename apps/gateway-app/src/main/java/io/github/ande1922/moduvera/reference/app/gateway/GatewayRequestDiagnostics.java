@@ -126,6 +126,14 @@ final class GatewayRequestDiagnostics {
                     .addKeyValue("url.path", request.getURI().getRawPath())
                     .addKeyValue("event.outcome", outcome)
                     .addKeyValue("duration_ms", (System.nanoTime() - started) / 1_000_000.0);
+            var peer = request.getRemoteAddress();
+            if (peer != null && peer.getAddress() != null) {
+                event.addKeyValue("client.ip", peer.getAddress().getHostAddress());
+            }
+            String userAgent = request.getHeaders().getFirst("User-Agent");
+            if (userAgent != null) {
+                event.addKeyValue("user_agent.original", userAgent);
+            }
             if (observedStatus != null) {
                 event.addKeyValue("http.response.status_code", observedStatus);
             }

@@ -1,7 +1,6 @@
 package io.github.ande1922.moduvera.reference.app.gateway;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 
 import io.github.ande1922.moduvera.context.ExecutionContextHolder;
@@ -14,7 +13,6 @@ import io.opentelemetry.api.trace.SpanContext;
 import io.opentelemetry.api.trace.TraceFlags;
 import io.opentelemetry.api.trace.TraceState;
 import io.opentelemetry.context.Context;
-import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Map;
@@ -150,24 +148,6 @@ class GatewayRequestDiagnosticsTest {
             assertThat(logs.errors()).isEmpty();
         } finally {
             scheduler.dispose();
-        }
-    }
-
-    @Test
-    void responseWriteFailureKeepsCommittedStatusAndDoesNotReportSuccess() {
-        var response = new MockServerHttpResponse();
-        HttpHandler handler = handler(exchange -> exchange.getResponse().writeWith(Flux.concat(
-                Mono.just(exchange.getResponse().bufferFactory().wrap(new byte[] {1})),
-                Mono.error(new IOException("response transport failed")))));
-        try (GatewayLogProbe logs = new GatewayLogProbe()) {
-            assertThatThrownBy(() -> handler.handle(MockServerHttpRequest.get("/write-failure").build(), response)
-                    .block(TIMEOUT)).isInstanceOf(RuntimeException.class);
-            assertThat(logs.canonical()).hasSize(1);
-            var event = logs.canonical().getFirst();
-            assertThat(event.path("event").path("outcome").asString()).isEqualTo("failure");
-            assertThat(event.path("http").path("response").path("status_code").asInt()).isEqualTo(200);
-            assertThat(event.path("log").path("level").asString()).isEqualTo("INFO");
-            assertThat(logs.errors()).isEmpty();
         }
     }
 
