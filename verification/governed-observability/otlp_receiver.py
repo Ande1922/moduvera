@@ -95,7 +95,9 @@ def any_value(data: bytes) -> Any:
     if field == 2 and wire == 0:
         return bool(value)
     if field == 3 and wire == 0:
-        return value
+        if value >= 1 << 64:
+            raise ValueError("AnyValue int_value exceeds int64")
+        return value - (1 << 64) if value >= 1 << 63 else value
     if field == 4 and wire == 1:
         return struct.unpack("<d", value)[0]
     if field == 5 and wire == 2:

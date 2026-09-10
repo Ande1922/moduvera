@@ -73,6 +73,13 @@ public final class DiagnosticLogSnapshot {
         return scope;
     }
 
+    /** Projects diagnostic fields without changing the transport parent or authorization state. */
+    public Scope openFieldsScope() {
+        Scope scope = new Scope(this, CURRENT.get(), () -> {});
+        CURRENT.set(scope);
+        return scope;
+    }
+
     static Map<String, String> currentFields() {
         Scope scope = CURRENT.get();
         return scope == null ? null : scope.snapshot.fields;

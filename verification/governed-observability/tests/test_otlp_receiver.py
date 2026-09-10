@@ -62,6 +62,12 @@ def export_request(attribute_value: str = "/orders") -> bytes:
 
 
 class OtlpReceiverTest(unittest.TestCase):
+    def test_signed_int64_attributes_preserve_unknown_kafka_offset(self) -> None:
+        self.assertEqual(-1, OTLP.any_value(b"\x18" + b"\xff" * 9 + b"\x01"))
+        self.assertEqual(-(1 << 63), OTLP.any_value(b"\x18" + b"\x80" * 9 + b"\x01"))
+        self.assertEqual((1 << 63) - 1, OTLP.any_value(b"\x18" + b"\xff" * 8 + b"\x7f"))
+        self.assertEqual(0, OTLP.any_value(b"\x18\x00"))
+
     def test_decodes_resource_scope_span_and_link(self) -> None:
         spans = OTLP.parse_export_request(export_request())
 

@@ -80,19 +80,22 @@ final class ReliableInboundEndpoint implements Consumer<Message<byte[]>> {
             } catch (NonRetryableMessageException terminal) {
                 observation.failed(terminal, false);
                 var owned = new NonRetryableMessageException(terminal.getMessage(), terminal);
-                InboundFailureDiagnostics.retain(owned);
+                InboundFailureDiagnostics.retain(owned, observation);
                 throw owned;
             } catch (RuntimeException retryable) {
                 observation.failed(retryable, attempt < maxAttempts);
                 if (attempt == maxAttempts) {
                     var exhausted = new NonRetryableMessageException(
                             "message handling exhausted " + maxAttempts + " attempts", retryable);
-                    InboundFailureDiagnostics.retain(exhausted);
+                    InboundFailureDiagnostics.retain(exhausted, observation);
                     throw exhausted;
                 }
                 throw retryable;
             } catch (Error failure) {
                 observation.failed(failure, false);
+                if (InboundDeadLetterDiagnostics.isDeliveryObserved()) {
+                    InboundContainerFailureDiagnostics.retain(failure);
+                }
                 throw failure;
             }
         }

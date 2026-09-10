@@ -12,6 +12,7 @@ import io.opentelemetry.api.trace.propagation.W3CTraceContextPropagator;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.propagation.TextMapGetter;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.spi.LoggingEventBuilder;
@@ -50,6 +51,9 @@ final class InboundAttemptObservation implements AutoCloseable {
     private boolean success;
     private boolean retry;
     private String errorType;
+    private boolean deferred;
+    private double durationMillis;
+    private final AtomicBoolean emitted = new AtomicBoolean();
 
     InboundAttemptObservation(SerializedMessage message, int bodySize, int attempt, int maxAttempts) {
         this.message = message;
@@ -83,16 +87,32 @@ final class InboundAttemptObservation implements AutoCloseable {
         retry = willRetry;
     }
 
+    void defer() {
+        deferred = true;
+    }
+
+    void complete(boolean deadLetter) {
+        if (emitted.compareAndSet(false, true)) {
+            var event = fields(LOGGER.atInfo())
+                    .addKeyValue("event.outcome", success ? "success" : "failure")
+                    .addKeyValue("duration_ms", durationMillis);
+            if (deadLetter) {
+                event.addKeyValue("disposition", "dead_letter");
+            }
+            event.log("消息处理结束");
+        }
+    }
+
     @Override
     public void close() {
         try {
             if (!success) {
                 span.setStatus(StatusCode.ERROR);
             }
-            fields(LOGGER.atInfo())
-                    .addKeyValue("event.outcome", success ? "success" : "failure")
-                    .addKeyValue("duration_ms", (System.nanoTime() - started) / 1_000_000.0d)
-                    .log("消息处理结束");
+            durationMillis = (System.nanoTime() - started) / 1_000_000.0d;
+            if (!deferred) {
+                complete(false);
+            }
             if (retry) {
                 fields(LOGGER.atWarn()).log("消息处理失败，已决定重试");
             }

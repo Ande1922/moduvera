@@ -81,6 +81,7 @@ import tools.jackson.databind.ObjectMapper;
 
 @Testcontainers
 @DirtiesContext
+@org.junit.jupiter.api.TestMethodOrder(org.junit.jupiter.api.MethodOrderer.OrderAnnotation.class)
 @SpringBootTest(classes = InboundCausalityIT.FixtureConfiguration.class,
         webEnvironment = SpringBootTest.WebEnvironment.NONE)
 public class InboundCausalityIT {
@@ -94,6 +95,11 @@ public class InboundCausalityIT {
     private static final Map<String, AtomicInteger> ATTEMPTS = new ConcurrentHashMap<>();
     private static final CountDownLatch PUBLISHED = new CountDownLatch(1);
     private static final AtomicInteger BATCH = new AtomicInteger();
+    private static final AtomicInteger CUSTOMIZED_ENDPOINTS = new AtomicInteger();
+    private static final CountDownLatch STOPPED_ON_ERROR = new CountDownLatch(1);
+    private static final java.util.concurrent.atomic.AtomicReference<Thread> STOPPED_THREAD = new java.util.concurrent.atomic.AtomicReference<>();
+    private static final AssertionError FATAL_ERROR = new AssertionError(PRIVATE_CAUSE);
+    private static final Map<String, Object> ERROR_STOP = new ConcurrentHashMap<>();
     private static final ContextKey<String> EXTRA_CONTEXT = ContextKey.named("inbound-fixture-extra");
 
     @Container
@@ -154,6 +160,7 @@ public class InboundCausalityIT {
     private Consumer<Message<byte[]>> observe;
 
     @Test
+    @org.junit.jupiter.api.Order(1)
     void realTransportInboxRetryAndInterleavedIdentities() throws Exception {
         assertThat(transport).isInstanceOf(StreamBridgeMessageTransport.class);
         ProgressBarrier progress = ProgressBarrier.capture(InboundCausalityIT::consumed);
@@ -164,6 +171,7 @@ public class InboundCausalityIT {
         messages.add(message("retry", "tenant-b", CREATION));
         messages.add(message("terminal", "tenant-a", CREATION));
         messages.add(message("exhausted", "tenant-b", CREATION));
+        messages.add(message("dlq-failed", "tenant-a", CREATION));
         messages.add(message("invalid-creation", "tenant-a", "invalid-trace"));
         messages.add(message("no-creation", "tenant-b", null));
         messages.add(messages.getFirst());
@@ -198,12 +206,57 @@ public class InboundCausalityIT {
         assertThat(ATTEMPTS.get("retry")).hasValue(3);
         assertThat(ATTEMPTS.get("terminal")).hasValue(1);
         assertThat(ATTEMPTS.get("exhausted")).hasValue(3);
-        assertThat(RECEIPTS.stream().filter(row -> row.get("phase").equals("restored"))).hasSize(13);
+        assertThat(ATTEMPTS.get("dlq-failed")).hasValue(1);
+        assertThat(CUSTOMIZED_ENDPOINTS).hasValue(1);
+        assertThat(RECEIPTS.stream().filter(row -> row.get("phase").equals("restored"))).hasSize(14);
         String evidence = System.getenv("MODUVERA_OBSERVABILITY_EVIDENCE_DIR");
         if (evidence != null) {
             Files.writeString(Path.of(evidence, "inbound-receipts.json"),
                     new ObjectMapper().writeValueAsString(Map.of(
                             "baseline", progress.baseline(), "committed", consumed(), "receipts", RECEIPTS)));
+        }
+    }
+
+    @Test
+    @org.junit.jupiter.api.Order(2)
+    void originalErrorStopsContainerRollsBackAndDoesNotConsumeFollowingMessage() throws Exception {
+        ProgressBarrier progress = ProgressBarrier.capture(InboundCausalityIT::consumed);
+        for (String id : List.of("fatal-error", "after-fatal")) {
+            Span operation = GlobalOpenTelemetry.getTracer("moduvera.inbound.fixture")
+                    .spanBuilder("fixture.publish").setNoParent().startSpan();
+            try (var ignored = operation.makeCurrent()) {
+                transport.send(message(id, "tenant-a", CREATION));
+            } finally {
+                operation.end();
+            }
+        }
+        assertThat(STOPPED_ON_ERROR.await(30, TimeUnit.SECONDS)).isTrue();
+        Thread consumer = STOPPED_THREAD.get();
+        consumer.join(10_000);
+        assertThat(consumer.isAlive()).as("original container task and its completion callbacks finished").isFalse();
+        long brokerEnd;
+        try (Admin admin = Admin.create(Map.of(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, KAFKA.getBootstrapServers()))) {
+            var partition = new org.apache.kafka.common.TopicPartition(TOPIC, 0);
+            brokerEnd = admin.listOffsets(Map.of(partition, org.apache.kafka.clients.admin.OffsetSpec.latest()))
+                    .all().get(5, TimeUnit.SECONDS).get(partition).offset();
+        }
+        // Broker ACKs plus the completed container-stop lifecycle bound these negative assertions.
+        assertThat(brokerEnd).isEqualTo(progress.baseline() + 2);
+        assertThat(consumed()).isEqualTo(progress.baseline());
+        assertThat(ATTEMPTS.get("fatal-error")).hasValue(1);
+        assertThat(ATTEMPTS).doesNotContainKey("after-fatal");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM fixture_inbound_business", Integer.class)).isEqualTo(10);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM moduvera_message_inbox", Integer.class)).isEqualTo(10);
+        assertThat(ERROR_STOP).containsEntry("reason", "ERROR").containsEntry("business_scope_present", false)
+                .containsEntry("delivery_scope_present", false);
+        assertThat(FATAL_ERROR.getSuppressed()).isEmpty();
+        assertThat(FATAL_ERROR.getCause()).isNull();
+        String evidence = System.getenv("MODUVERA_OBSERVABILITY_EVIDENCE_DIR");
+        if (evidence != null) {
+            Files.writeString(Path.of(evidence, "inbound-error-receipts.json"), new ObjectMapper().writeValueAsString(Map.of(
+                    "baseline", progress.baseline(), "committed", consumed(), "broker_end", brokerEnd,
+                    "stop", ERROR_STOP, "receipts", RECEIPTS.stream()
+                            .filter(row -> List.of("fatal-error", "after-fatal").contains(row.get("id"))).toList())));
         }
     }
 
@@ -295,6 +348,33 @@ public class InboundCausalityIT {
     @Configuration(proxyBeanMethods = false)
     @EnableAutoConfiguration
     static class FixtureConfiguration {
+        @org.springframework.context.event.EventListener
+        void consumerStopped(org.springframework.kafka.event.ConsumerStoppedEvent event) {
+            if (event.getReason() == org.springframework.kafka.event.ConsumerStoppedEvent.Reason.ERROR) {
+                ERROR_STOP.put("reason", event.getReason().name());
+                ERROR_STOP.put("business_scope_present", ExecutionContextHolder.current().isPresent());
+                ERROR_STOP.put("delivery_scope_present", InboundDeadLetterDiagnostics.isDeliveryObserved());
+                STOPPED_THREAD.set(Thread.currentThread());
+                STOPPED_ON_ERROR.countDown();
+            }
+        }
+
+        @Bean
+        org.springframework.cloud.stream.config.ConsumerEndpointCustomizer<
+                org.springframework.integration.kafka.inbound.KafkaMessageDrivenChannelAdapter<?, ?>>
+                fixtureEndpointCustomizer() {
+            return (endpoint, destination, group) -> CUSTOMIZED_ENDPOINTS.incrementAndGet();
+        }
+
+        @Bean
+        org.springframework.cloud.stream.binder.kafka.utils.DlqDestinationResolver fixtureDlqDestination() {
+            return (record, failure) -> {
+                var message = new KafkaMessageMapper().fromSpringMessage(
+                        new org.springframework.messaging.support.GenericMessage<>((byte[]) record.value(),
+                                Map.of("contentType", "application/cloudevents+json")));
+                return message.descriptor().id().value().equals("dlq-failed") ? "invalid!topic" : TOPIC + "-dlq";
+            };
+        }
 
         @Bean
         ObjectMapper fixtureObjectMapper() {
@@ -345,7 +425,10 @@ public class InboundCausalityIT {
                 fixtureInbox.handle(message.descriptor().id(), () -> {
                     jdbc.update("INSERT INTO fixture_inbound_business (tenant_id, message_id) VALUES (?, ?)",
                             identity.requireTenantId().value(), id);
-                    if (id.equals("terminal")) {
+                    if (id.equals("fatal-error")) {
+                        throw FATAL_ERROR;
+                    }
+                    if (id.equals("terminal") || id.equals("dlq-failed")) {
                         throw new NonRetryableMessageException(PRIVATE_CAUSE);
                     }
                     if (id.equals("exhausted") || (id.equals("retry") && attempt < 3)) {

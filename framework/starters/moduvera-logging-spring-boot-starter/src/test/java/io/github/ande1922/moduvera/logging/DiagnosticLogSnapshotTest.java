@@ -18,6 +18,28 @@ import org.junit.jupiter.api.Test;
 import org.slf4j.MDC;
 
 class DiagnosticLogSnapshotTest {
+    @Test void fieldsOnlyScopeDoesNotReplaceCurrentTransportContextOrAuthorization() {
+        var original = SpanContext.create("12345678901234567890123456789012", "1234567890123456",
+                TraceFlags.getSampled(), TraceState.getDefault());
+        DiagnosticLogSnapshot captured;
+        try (var ignored = Context.root().with(Span.wrap(original)).makeCurrent()) {
+            captured = DiagnosticLogSnapshot.capture("finished-attempt");
+        }
+        Context outer = Context.current();
+        MDC.put("correlation_id", "outer-mdc");
+        try (var ignored = captured.openFieldsScope()) {
+            assertThat(Context.current()).isSameAs(outer);
+            assertThat(ExecutionContextHolder.current()).isEmpty();
+            assertThat(MDC.get("correlation_id")).isEqualTo("outer-mdc");
+            assertThat(TrustedLogContext.currentFields()).containsEntry("trace_id", original.getTraceId())
+                    .containsEntry("correlation_id", "finished-attempt");
+        } finally {
+            MDC.remove("correlation_id");
+        }
+        assertThat(DiagnosticLogSnapshot.currentFields()).isNull();
+        assertThat(Context.current()).isSameAs(outer);
+    }
+
     @Test void identityEnrichmentRetainsServerTraceAndCorrelationWithoutRestoringAuthorization() {
         var server = SpanContext.create("12345678901234567890123456789012", "1234567890123456",
                 TraceFlags.getDefault(), TraceState.getDefault());

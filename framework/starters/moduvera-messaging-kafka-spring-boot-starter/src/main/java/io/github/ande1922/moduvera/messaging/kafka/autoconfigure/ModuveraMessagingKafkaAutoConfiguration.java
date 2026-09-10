@@ -10,6 +10,8 @@ import io.github.ande1922.moduvera.message.publication.DurablePublication;
 import io.github.ande1922.moduvera.message.publication.ImmediatePublication;
 import io.github.ande1922.moduvera.messaging.kafka.JdbcDurablePublication;
 import io.github.ande1922.moduvera.messaging.kafka.InboundFailureDiagnostics;
+import io.github.ande1922.moduvera.messaging.kafka.InboundDeadLetterDiagnostics;
+import io.github.ande1922.moduvera.messaging.kafka.InboundRecoveryLogFilter;
 import io.github.ande1922.moduvera.messaging.kafka.JdbcInboxRepository;
 import io.github.ande1922.moduvera.messaging.kafka.JdbcMessagingDialect;
 import io.github.ande1922.moduvera.messaging.kafka.JdbcOutboxStore;
@@ -33,6 +35,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.cloud.stream.config.BindingServiceProperties;
+import org.springframework.cloud.stream.config.ConsumerEndpointCustomizer;
+import org.springframework.integration.kafka.inbound.KafkaMessageDrivenChannelAdapter;
 import org.springframework.cloud.stream.function.StreamOperations;
 import org.springframework.context.annotation.Bean;
 import tools.jackson.databind.ObjectMapper;
@@ -48,6 +52,22 @@ public class ModuveraMessagingKafkaAutoConfiguration {
     @Bean
     static InboundFailureDiagnostics moduveraInboundFailureDiagnostics() {
         return new InboundFailureDiagnostics();
+    }
+
+    @Bean
+    InboundDeadLetterDiagnostics moduveraInboundDeadLetterDiagnostics() {
+        return new InboundDeadLetterDiagnostics();
+    }
+
+    @Bean
+    InboundRecoveryLogFilter moduveraInboundRecoveryLogFilter() {
+        return new InboundRecoveryLogFilter();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(ConsumerEndpointCustomizer.class)
+    ConsumerEndpointCustomizer<KafkaMessageDrivenChannelAdapter<?, ?>> moduveraInboundEndpointDiagnostics() {
+        return (endpoint, destination, group) -> InboundDeadLetterDiagnostics.configureEndpoint(endpoint);
     }
 
     @Bean

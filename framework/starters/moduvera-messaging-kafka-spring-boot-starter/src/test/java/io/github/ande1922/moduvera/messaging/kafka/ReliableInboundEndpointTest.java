@@ -11,6 +11,7 @@ import io.github.ande1922.moduvera.context.ExecutionContextHolder;
 import io.github.ande1922.moduvera.context.Initiator;
 import io.github.ande1922.moduvera.context.TenantId;
 import io.github.ande1922.moduvera.data.TransactionBoundary;
+import io.github.ande1922.moduvera.logging.ModuveraEcsStructuredLogFormatter;
 import io.github.ande1922.moduvera.message.Destination;
 import io.github.ande1922.moduvera.message.InboundMessageContract;
 import io.github.ande1922.moduvera.message.MessageDescriptor;
@@ -29,6 +30,7 @@ import ch.qos.logback.core.read.ListAppender;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.ContextKey;
 import java.util.List;
+import java.util.ArrayList;
 import java.util.Map;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -49,6 +51,7 @@ import org.springframework.messaging.support.ErrorMessage;
 import org.springframework.integration.handler.LoggingHandler;
 import org.springframework.integration.context.IntegrationContextUtils;
 import org.springframework.integration.config.IntegrationConfigUtils;
+import org.springframework.mock.env.MockEnvironment;
 
 class ReliableInboundEndpointTest {
 
@@ -280,17 +283,21 @@ class ReliableInboundEndpointTest {
         MessageHandler handler = (MessageHandler) processor.postProcessAfterInitialization(originalLogger,
                 IntegrationContextUtils.ERROR_LOGGER_BEAN_NAME + IntegrationConfigUtils.HANDLER_ALIAS_SUFFIX);
         Logger logger = (Logger) LoggerFactory.getLogger("mq.consume.failure");
+        var formatted = new ArrayList<String>();
+        var formatter = new ModuveraEcsStructuredLogFormatter(new MockEnvironment());
+        var previous = ExecutionContext.initiatedBy(new TenantId("prior"),
+                new Actor(ActorType.SERVICE, "worker"), "corr-prior");
         var events = new ListAppender<ILoggingEvent>() {
             @Override
             protected void append(ILoggingEvent event) {
+                assertThat(ExecutionContextHolder.require()).isSameAs(previous);
+                formatted.add(formatter.format(event));
                 event.prepareForDeferredProcessing();
                 super.append(event);
             }
         };
         events.start();
         logger.addAppender(events);
-        var previous = ExecutionContext.initiatedBy(new TenantId("prior"),
-                new Actor(ActorType.SERVICE, "worker"), "corr-prior");
         MDC.put("correlation_id", "prior-mdc");
         try (var ignored = ExecutionContextHolder.open(previous)) {
             // Deliberately handle the older failure after the newer one was created.
@@ -300,11 +307,11 @@ class ReliableInboundEndpointTest {
             assertThat(ExecutionContextHolder.require()).isSameAs(previous);
             assertThat(MDC.get("correlation_id")).isEqualTo("prior-mdc");
             assertThat(events.list).hasSize(3);
-            assertThat(events.list).extracting(event -> event.getMDCPropertyMap().get("correlation_id"))
-                    .containsExactly("corr-first", "corr-second", "corr-interrupted");
+            assertThat(formatted).zipSatisfy(List.of("corr-first", "corr-second", "corr-interrupted"),
+                    (json, correlation) -> assertThat(json).contains("\"correlation_id\":\"" + correlation + "\"")
+                            .contains("\"actor_id\":\"notes-service\""));
             assertThat(events.list).allSatisfy(event -> {
                 assertThat(event.getLevel()).isEqualTo(Level.ERROR);
-                assertThat(event.getMDCPropertyMap()).containsEntry("actor_id", "notes-service");
                 assertThat(event.getFormattedMessage()).isEqualTo("消息处理最终失败");
                 assertThat(event.getKeyValuePairs()).noneSatisfy(pair ->
                         assertThat(pair.key).isIn("event.outcome", "duration_ms", "retry.attempt"));
