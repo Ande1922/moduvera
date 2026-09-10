@@ -82,6 +82,8 @@ canonical 与交互结果即使失败也保持 INFO，结果写入 `event.outcom
 
 HTTP 最终 2xx / 3xx 为 `success`，4xx / 5xx 为 `failure`；无状态码但已经观察到 DNS、连接、超时或传输失败时仍为 `failure`，仅无法得知本次尝试结果时为 `unknown`。1xx 不是完成状态，不提前记录完成。中断/取消按实际终止原因记录，不凭预设 200 推断完整响应成功；发送失败也不证明远端业务一定未执行。gRPC OK 为 `success`，其它状态为 `failure`。`event.outcome` 不承载 retry / dead-letter 状态。
 
+[现有业务事实登记](BUSINESS-FACTS.md)列出 Order / Inventory 的稳定值、成立条件与唯一责任方。
+
 `event.action` 和 `error.code` 是聚合键，`message` 不是。`event.action` 只表示已经成立的业务事实；预期业务拒绝是业务结果，使用 `BIZ_` 类 `error.code`，不为通用异常处理器编造 `event.action`。业务事实不等同于 MQ 集成事件；合规审计使用独立通道。具体场景字段由[场景文件](#8-场景)补充。
 
 依赖事务提交成立的业务事实在提交后记录，回滚不记该成功事实；纯计算事实按实际成立点记录。技术日志的提交后输出不保证审计持久性。HTTP 计完整请求耗时，任务计实际执行到终止，发送计可观察尝试；排队等待与执行耗时分开。
