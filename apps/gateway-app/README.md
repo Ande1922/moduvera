@@ -63,3 +63,22 @@ against that evidence directory after the fixture JVM exits. It matches each
 canonical to its exported SERVER Span (with one explicit unsampled exception),
 checks supplied parents, rejects duplicate completion/extra fixture ERRORs,
 and checks the receiver's sensitive-data and signal-export results.
+
+## Identity HTTP attempts
+
+Token exchange now records one `http.client` INFO per observable WebClient
+exchange, including response-body decoding and the configured deadline. The
+client request supplies actual method/path and available lengths; query,
+headers and credential payloads are not logged. Subscription-local diagnostics
+retain the supplied C and initiating operation Context across timeout and
+cancellation callbacks. Agent owns W3C injection and client Spans. The client
+keeps its existing exceptions and adds no recovery WARN, final ERROR, retry or
+body buffer. Hidden lower-level resends are not presented as measured retries.
+
+Actual first-buffer cancellation is unknown; an observed deadline or connection
+failure is failure even without status. The real-client fixture checks these
+boundaries and the shared formatter's INFO type-only cause projection. A
+pre-existing Reactor dropped-error race was also reproduced against the client
+at `3b10883` by cancelling while response-header delivery is paused before body
+subscription. This change does not claim to repair or suppress that native
+library race; its reproduction is retained in external delivery evidence.

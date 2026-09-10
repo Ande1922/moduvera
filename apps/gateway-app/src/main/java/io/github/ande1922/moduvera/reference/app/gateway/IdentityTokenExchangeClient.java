@@ -17,13 +17,19 @@ final class IdentityTokenExchangeClient {
 
     IdentityTokenExchangeClient(
             WebClient identity, String gatewayAuthorization, Duration timeout) {
-        this.identity = identity;
+        this.identity = identity.mutate().filter((request, next) -> Mono.deferContextual(context -> {
+            IdentityExchangeDiagnostics diagnostics = context.get(IdentityExchangeDiagnostics.class);
+            diagnostics.request(request);
+            return next.exchange(request).doOnNext(diagnostics::response);
+        })).build();
         this.gatewayAuthorization = gatewayAuthorization;
         this.timeout = timeout;
     }
 
     Mono<String> exchange(String sessionToken, String correlationId) {
-        return identity.post()
+        return Mono.defer(() -> {
+            IdentityExchangeDiagnostics diagnostics = new IdentityExchangeDiagnostics(correlationId);
+            return identity.post()
                 .uri(EXCHANGE_PATH)
                 .header(HttpHeaders.AUTHORIZATION, gatewayAuthorization)
                 .header(GatewayRequestDiagnostics.HEADER, correlationId)
@@ -45,10 +51,14 @@ final class IdentityTokenExchangeClient {
                 })
                 .switchIfEmpty(Mono.error(new IdentityUnavailableException()))
                 .timeout(timeout)
+                .doOnError(diagnostics::failed)
                 .onErrorMap(
                         error -> !(error instanceof SessionRejectedException)
                                 && !(error instanceof IdentityUnavailableException),
-                        error -> new IdentityUnavailableException());
+                        error -> new IdentityUnavailableException())
+                .doFinally(diagnostics::complete)
+                .contextWrite(context -> context.put(IdentityExchangeDiagnostics.class, diagnostics));
+        });
     }
 
     static final class SessionRejectedException extends RuntimeException {}

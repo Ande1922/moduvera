@@ -31,7 +31,9 @@ final class OrderHttpServiceClientGroupSupport {
         var noRetryRequestFactoryBuilder = httpComponents.withHttpClientCustomizer(
                 HttpClientBuilder::disableAutomaticRetries);
         return groups -> groups.filterByName(groupName).forEachClient((group, client) -> client.requestFactory(
-                noRetryRequestFactoryBuilder.build(settingsMapper.map(serviceClients.get(group.name())))));
+                new OrderHttpDiagnostics(
+                        noRetryRequestFactoryBuilder.build(settingsMapper.map(serviceClients.get(group.name()))),
+                        group.name() + "-service")));
     }
 
     static void requireAbsoluteHttpBaseUrl(URI baseUrl, String propertyName) {

@@ -37,6 +37,10 @@ final class GatewayLogProbe extends AppenderBase<ILoggingEvent> implements AutoC
                 .toList();
     }
 
+    List<JsonNode> clients() {
+        return events.stream().filter(event -> event.path("log").path("logger").asString().equals("http.client")).toList();
+    }
+
     List<JsonNode> errors() {
         return events.stream()
                 .filter(event -> event.path("log").path("level").asString().equals("ERROR"))
