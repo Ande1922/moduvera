@@ -113,7 +113,7 @@ class ServletRequestDiagnosticsIT {
     }
 
     @Test void publicQueriesIgnoreCallerCorrelationAndPreserveUnwrappedResponses() throws Exception {
-        var response = get("/fixture/ok?token=secret-query", "caller-secret", null);
+        var response = get("/fixture/ok?search=secret-query", "caller-secret", null);
         assertThat(response.statusCode()).isEqualTo(200);
         assertThat(response.body()).isEqualTo("plain");
         String correlation = response.headers().firstValue("X-Correlation-Id").orElseThrow();
