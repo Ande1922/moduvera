@@ -69,6 +69,8 @@ Correlation ID 独立标识一次根入口操作及其因果派生工作；OTel 
 
 canonical 与交互结果按活规范保持 INFO，实际恢复/确定再试记 WARN，耗尽时不再记“将重试”；最终失败无人接盘且需人工介入时，最终处理点记一次 ERROR。ERROR 的 code 与安全 cause 共存，WARN/INFO 不带堆栈。异步发送 callback 同时承担最终处理和结果记录时才适用场景合并例外；当前同步 ACK Outbox 的重试/terminal 由 Worker 决定，底层不能抢先记最终 ERROR。
 
+Servlet 最终 ERROR 的本轮接入边界为现有 Spring MVC `ApiExceptionHandler` Advice：同步和异步 MVC 未知异常在此记录一次安全 cause，并在响应尚未提交时返回安全 500 Problem（`system.unexpected`、同一请求 C）。既有 Coded、校验、Spring 状态映射与 Security 401/403 专用处理器保持其原有响应和记录语义；本轮不提供 domain code 到日志失败类别的映射，也不宣称既有 Coded 依赖错误已经纳入新增最终 ERROR。原生 Servlet/Tomcat 容器日志不纳入最终 ERROR 次数及请求投影验收，不安装 Valve 或 AOP；这些请求仍须通过 canonical、真实响应状态及上下文清理验证，证据分析器单列其原生 ERROR。
+
 HTTP 最终 2xx/3xx 为 success，4xx/5xx 为 failure；已观察到 DNS/连接/超时/传输失败时即使无状态也为 failure，仅确实无法判断时 unknown。取消/中断按实际终止原因记录，预设 200 不证明完整响应成功。依赖提交成立的业务事实在提交后打印，纯计算事实按实际成立点打印；这不提供审计持久性保证。
 
 自有数据库/缓存正常调用默认不记 INFO；业务边界按关系分类，不按协议决定。禁止原始 Header、query、SQL 全文、HTTP/消息正文、凭据、权限集合等敏感内容通过 message、结构化字段、完整 cause 或自动埋点输出。长度来自已知值或已有计数，不为日志读取/缓存正文；关闭级别时不提前组装昂贵消息。实现使用 Boot 原生 ECS，只有真实输出证明 code/throwable 等冲突才补最小 Formatter 修正。

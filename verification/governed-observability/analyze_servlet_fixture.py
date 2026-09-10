@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify real Agent/canonical relations; require container error projection and expose request-bound duplicates."""
+"""Verify real Agent/canonical relations; verify Advice error ownership and report native container errors separately."""
 import json
 from pathlib import Path
 import sys
@@ -41,20 +41,23 @@ assert status["sensitiveMatches"] == []
 assert status["postRequestsBySignal"]["logs"] == 0
 assert status["postRequestsBySignal"]["metrics"] == 0
 errors = [event for event in events if event.get("log", {}).get("level") == "ERROR"]
+advice_logger = "io.github.ande1922.moduvera.web.ApiExceptionHandler"
+governed_errors = [event for event in errors if event["log"]["logger"] == advice_logger]
+native_errors = [event for event in errors if event["log"]["logger"] != advice_logger]
+assert all(event["log"]["logger"].startswith("org.apache.catalina.") for event in native_errors), \
+    "unexpected ERROR owner outside the declared Advice/container boundary"
 by_correlation = {event["correlation_id"]: event for event in canonical}
 projection_fields = ("correlation_id", "trace_id", "span_id", "tenant_id", "actor_type", "actor_id",
                      "initiator_type", "initiator_id", "user_id")
 error_rows = []
-for event in errors:
-    assert event.get("correlation_id"), "container ERROR is missing request correlation"
+for event in governed_errors:
+    assert event.get("correlation_id"), "Advice ERROR is missing request correlation"
     completion = by_correlation[event["correlation_id"]]
     for field in ("correlation_id", "trace_id", "span_id"):
         assert event.get(field) == completion.get(field), f"ERROR projection mismatch: {field}"
     path = completion["url"]["path"]
-    assert path in ("/fixture/async-error", "/fixture/error", "/managed/error", "/excluded/missing-context",
-                    "/fixture/application-io", "/fixture/wrapped-application-io")
+    assert path in ("/mvc/error", "/mvc/async-error", "/managed/error", "/excluded/missing-context")
     # ManagedController is PLATFORM; ExcludedController bypasses the identity snapshot producer.
-    # BasicErrorController later adds tenant identity, so canonical is not an emission-time identity oracle.
     expected_identity = ({"actor_type": "USER", "actor_id": "alice", "initiator_type": "USER",
                           "initiator_id": "alice", "user_id": "alice"} if path == "/managed/error" else {})
     for field in projection_fields[3:]:
@@ -70,10 +73,8 @@ for event in errors:
                        "canonicalIdentity": {field: completion[field] for field in projection_fields[3:]
                                              if field in completion},
                        **{field: event.get(field) for field in projection_fields}})
-original_errors = [row for row in error_rows if row["canonicalPath"] not in
-                   ("/fixture/application-io", "/fixture/wrapped-application-io")]
-assert len(original_errors) == 6, "fixture must retain all six original container ERROR events"
-assert len(errors) == 8, "six original errors plus two application-I/O regression errors expected"
+assert len(governed_errors) == 4, "two MVC, one managed and one excluded Advice failure expected"
+assert len(native_errors) == 5, "five native servlet/container diagnostics remain outside Advice ownership"
 for path in ("/fixture/application-io", "/fixture/wrapped-application-io"):
     matches = [event for event in canonical if event["url"]["path"] == path]
     assert len(matches) == 1
@@ -81,7 +82,13 @@ for path in ("/fixture/application-io", "/fixture/wrapped-application-io"):
 duplicates = {correlation: sum(row["correlation_id"] == correlation for row in error_rows)
               for correlation in by_correlation
               if sum(row["correlation_id"] == correlation for row in error_rows) > 1}
+assert not duplicates, "Advice must emit one final ERROR per failed request"
+native_rows = [{"line": event_lines[id(event)], "logger": event["log"]["logger"],
+                "message": event.get("message"), "correlation_id": event.get("correlation_id"),
+                "scope": "native-container-outside-advice-acceptance"} for event in native_errors]
 print(json.dumps({"canonical": len(canonical), "exportedServerSpans": len(by_span),
                   "unsampled": len(unsampled), "sensitiveMatches": [], "errors": error_rows,
                   "requestBoundDuplicateErrors": duplicates,
+                  "nativeContainerErrors": native_rows,
+                  "errorOwnershipScope": "Spring MVC ApiExceptionHandler unexpected exceptions only",
                   "errorOwnershipComplete": not duplicates}, ensure_ascii=False, indent=2))

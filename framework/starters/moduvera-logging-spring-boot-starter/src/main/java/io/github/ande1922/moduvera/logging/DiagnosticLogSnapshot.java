@@ -63,10 +63,6 @@ public final class DiagnosticLogSnapshot {
         return new DiagnosticLogSnapshot(telemetry, enriched);
     }
 
-    Map<String, String> fields() {
-        return fields;
-    }
-
     public String traceId() {
         return fields.get("trace_id");
     }

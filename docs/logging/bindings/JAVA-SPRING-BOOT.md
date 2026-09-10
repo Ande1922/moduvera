@@ -24,6 +24,8 @@ log.atInfo()
 
 最终处理点的 ERROR 带稳定 `error.code`，有异常时通过 fluent API 设置 cause。此写法的输出仍须经下节的 Formatter 验证；仅有调用代码不证明 JSON 字段已经合规。
 
+Servlet 最终 ERROR 的本轮接入边界为现有 Spring MVC `ApiExceptionHandler` Advice：同步和异步 MVC 未知异常在此记录一次安全 cause，并在响应尚未提交时返回安全 500 Problem（`system.unexpected`、同一请求 C）。既有 Coded、校验、Spring 状态映射与 Security 401/403 专用处理器保持其原有响应和记录语义；本轮不提供 domain code 到日志失败类别的映射，也不宣称既有 Coded 依赖错误已经纳入新增最终 ERROR。原生 Servlet/Tomcat 容器日志不纳入最终 ERROR 次数及请求投影验收，不安装 Valve 或 AOP；这些请求仍须通过 canonical、真实响应状态及上下文清理验证，证据分析器单列其原生 ERROR。
+
 ```java
 log.atError()
         .addKeyValue("error.code", errorCode)

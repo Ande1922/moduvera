@@ -37,12 +37,49 @@ class ApiExceptionHandlerTest {
                 .andExpect(jsonPath("$.correlationId").value("corr-42"));
     }
 
+    @Test
+    void preservesSpecificMappingsInsideWrappedExceptions() throws Exception {
+        mockMvc.perform(get("/wrapped-failure"))
+                .andExpect(status().isUnprocessableContent())
+                .andExpect(jsonPath("$.code").value("order.stock-rejected"));
+        mockMvc.perform(get("/wrapped-validation"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("request.validation-failed"));
+    }
+
+    @Test
+    void keepsCommittedResponseWhenUnexpectedFailureArrives() throws Exception {
+        mockMvc.perform(get("/committed"))
+                .andExpect(status().isAccepted())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content().string("started"));
+    }
+
     @RestController
     private static final class FailingController {
 
         @GetMapping("/failure")
         String fail() {
             throw new CodedException(new ErrorCode("order.stock-rejected"), "Stock was rejected");
+        }
+
+        @GetMapping("/wrapped-failure")
+        String wrappedFailure() throws jakarta.servlet.ServletException {
+            throw new jakarta.servlet.ServletException(
+                    new CodedException(new ErrorCode("order.stock-rejected"), "Stock was rejected"));
+        }
+
+        @GetMapping("/wrapped-validation")
+        String wrappedValidation() throws jakarta.servlet.ServletException {
+            throw new jakarta.servlet.ServletException(
+                    new jakarta.validation.ConstraintViolationException(java.util.Set.of()));
+        }
+
+        @GetMapping("/committed")
+        void committed(jakarta.servlet.http.HttpServletResponse response) throws java.io.IOException {
+            response.setStatus(202);
+            response.getWriter().write("started");
+            response.flushBuffer();
+            throw new IllegalStateException("after response commit");
         }
     }
 }

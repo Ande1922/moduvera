@@ -238,7 +238,7 @@ class HttpExecutionBoundaryIT {
         assertThat(async.statusCode()).isEqualTo(200);
         assertThat(async.body()).isEqualTo("async-complete");
 
-        HttpResponse<String> error = get("/managed/error", alice, null, "corr-error");
+        HttpResponse<String> error = get("/managed/container-error", alice, null, "corr-container-error");
         assertThat(error.statusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR.value());
 
         assertThat(evidence.dispatches())
@@ -290,6 +290,14 @@ class HttpExecutionBoundaryIT {
         evidence.reset();
         HttpResponse<String> error = get("/managed/error", alice, null, null);
         assertThat(error.statusCode()).isEqualTo(500);
+        assertThat(error.body()).contains("system.unexpected");
+        assertThat(evidence.observedContexts()).satisfiesExactly(observed -> assertFullIdentity(
+                observed, DispatcherType.REQUEST, ExecutionScope.platform(), "alice"));
+        assertThat(evidence.contextAfterDispatch()).containsOnly(false);
+
+        evidence.reset();
+        HttpResponse<String> containerError = get("/managed/container-error", alice, null, null);
+        assertThat(containerError.statusCode()).isEqualTo(500);
         assertThat(evidence.observedContexts())
                 .satisfiesExactly(
                         observed -> assertFullIdentity(
@@ -506,6 +514,12 @@ class HttpExecutionBoundaryIT {
         String error() {
             ExecutionContextHolder.require();
             throw new IllegalStateException("expected test error");
+        }
+
+        @GetMapping("/container-error")
+        void containerError(HttpServletResponse response) throws java.io.IOException {
+            ExecutionContextHolder.require();
+            response.sendError(500);
         }
 
         @GetMapping("/context-then-denied")

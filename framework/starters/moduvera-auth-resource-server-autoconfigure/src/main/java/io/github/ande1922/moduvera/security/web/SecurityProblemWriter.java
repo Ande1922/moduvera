@@ -6,13 +6,19 @@ import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 import org.springframework.http.MediaType;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.security.web.access.AccessDeniedHandler;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
 import tools.jackson.databind.ObjectMapper;
 
+@RestControllerAdvice
+@Order(Ordered.HIGHEST_PRECEDENCE)
 public final class SecurityProblemWriter implements AuthenticationEntryPoint, AccessDeniedHandler {
 
     private static final String UNAUTHENTICATED = "security.unauthenticated";
@@ -24,6 +30,11 @@ public final class SecurityProblemWriter implements AuthenticationEntryPoint, Ac
     public SecurityProblemWriter(ObjectMapper objectMapper, RequestCorrelationIdResolver correlationIds) {
         this.objectMapper = objectMapper;
         this.correlationIds = correlationIds;
+    }
+
+    @ExceptionHandler({AuthenticationException.class, AccessDeniedException.class})
+    void propagateSecurityFailure(Exception exception) throws Exception {
+        throw exception;
     }
 
     @Override

@@ -20,6 +20,8 @@ Servlet 正常、安全拒绝及异步终止通过同一请求诊断状态输出
 
 Web、Resource Server、Identity 等现有 Servlet 入口和异常处理器复用一份 request attribute 状态：C、单调起点、server Context、可信快照和完成标记。受保护装配决定公网/内部入口，错误处理只衔接当前请求关联。
 
+Servlet 最终 ERROR 的本轮接入边界为现有 Spring MVC `ApiExceptionHandler` Advice：同步和异步 MVC 未知异常在此记录一次安全 cause，并在响应尚未提交时返回安全 500 Problem（`system.unexpected`、同一请求 C）。既有 Coded、校验、Spring 状态映射与 Security 401/403 专用处理器保持其原有响应和记录语义；本轮不提供 domain code 到日志失败类别的映射，也不宣称既有 Coded 依赖错误已经纳入新增最终 ERROR。原生 Servlet/Tomcat 容器日志不纳入最终 ERROR 次数及请求投影验收，不安装 Valve 或 AOP；这些请求仍须通过 canonical、真实响应状态及上下文清理验证，证据分析器单列其原生 ERROR。
+
 ## Acceptance criteria
 
 - [ ] 所有公网请求（含查询）创建新 UUID v4 C，不采信或记录调用方 correlation；内部合法 C 原样继承，缺失/非法只补建一次并 WARN，不因诊断字段单独拒绝业务。

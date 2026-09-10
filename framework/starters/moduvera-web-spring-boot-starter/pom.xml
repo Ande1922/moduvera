@@ -14,16 +14,6 @@
 
   <dependencies>
     <dependency>
-      <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-tomcat</artifactId>
-      <optional>true</optional>
-    </dependency>
-    <dependency>
-      <groupId>org.apache.tomcat.embed</groupId>
-      <artifactId>tomcat-embed-core</artifactId>
-      <optional>true</optional>
-    </dependency>
-    <dependency>
       <groupId>io.github.ande1922.moduvera</groupId>
       <artifactId>moduvera-logging-spring-boot-starter</artifactId>
       <version>${project.version}</version>

@@ -11,3 +11,5 @@
 - 载荷字节（见[字段契约](../LOGGING.md#2-字段契约)）：**仅当长度已知**才写。入站请求用 `Content-Length`，不要读请求体流；响应在出口时流往往已写出、不可回读，有 `Content-Length` 才记，否则省略。需要长度时用只计数、不缓存内容的包装，禁止为打日志把整包进堆。流式 / SSE / 大文件下载不包、字段省略。未知则省略，不要写 0
 - gRPC 事件字段：`event.outcome`、`rpc.system=grpc`、`rpc.service`、`rpc.method`、`rpc.grpc.status_code`、`duration_ms`；有已知载荷大小时再记字节数
 - 业务拒绝与异常最终处理点：全局异常处理器 / gRPC ServerInterceptor。预期业务拒绝按主规范记录业务结果 INFO；实际恢复才记 WARN；无人接盘且需要人工介入才记 ERROR。均不改变 canonical 的 INFO 级别
+
+Servlet 最终 ERROR 的本轮接入边界为现有 Spring MVC `ApiExceptionHandler` Advice：同步和异步 MVC 未知异常在此记录一次安全 cause，并在响应尚未提交时返回安全 500 Problem（`system.unexpected`、同一请求 C）。既有 Coded、校验、Spring 状态映射与 Security 401/403 专用处理器保持其原有响应和记录语义；本轮不提供 domain code 到日志失败类别的映射，也不宣称既有 Coded 依赖错误已经纳入新增最终 ERROR。原生 Servlet/Tomcat 容器日志不纳入最终 ERROR 次数及请求投影验收，不安装 Valve 或 AOP；这些请求仍须通过 canonical、真实响应状态及上下文清理验证，证据分析器单列其原生 ERROR。

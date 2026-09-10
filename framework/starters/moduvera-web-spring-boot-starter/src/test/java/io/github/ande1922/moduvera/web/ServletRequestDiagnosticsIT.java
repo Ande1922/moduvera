@@ -41,8 +41,6 @@ class ServletRequestDiagnosticsIT {
     private static final HttpClient HTTP = HttpClient.newHttpClient();
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final List<String> OUTPUT = new CopyOnWriteArrayList<>();
-    private static final List<String> ERROR_ORIGINS = new CopyOnWriteArrayList<>();
-    private static final List<Throwable> ERROR_CAUSES = new CopyOnWriteArrayList<>();
     private static volatile CountDownLatch started;
     private static volatile CountDownLatch release;
     private static volatile String cancelledCorrelation;
@@ -51,25 +49,12 @@ class ServletRequestDiagnosticsIT {
         private final ModuveraEcsStructuredLogFormatter formatter = new ModuveraEcsStructuredLogFormatter(new MockEnvironment());
         @Override protected void append(ILoggingEvent event) {
             OUTPUT.add(formatter.format(event));
-            if (event.getLevel() == ch.qos.logback.classic.Level.ERROR
-                    && event.getThrowableProxy() instanceof ch.qos.logback.classic.spi.ThrowableProxy proxy) {
-                Throwable root = proxy.getThrowable();
-                while (root.getCause() != null) {
-                    root = root.getCause();
-                }
-                ERROR_CAUSES.add(root);
-                ERROR_ORIGINS.add(java.util.Arrays.stream(event.getCallerData())
-                        .map(StackTraceElement::getClassName)
-                        .filter(name -> name.startsWith("org.apache.catalina.core."))
-                        .findFirst().orElse("unknown"));
-            }
+
         }
     };
 
     @BeforeEach void attachOutput() {
         OUTPUT.clear();
-        ERROR_CAUSES.clear();
-        ERROR_ORIGINS.clear();
         appender.start();
         ((Logger) LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME)).addAppender(appender);
     }
@@ -77,6 +62,54 @@ class ServletRequestDiagnosticsIT {
     @AfterEach void detachOutput() {
         ((Logger) LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME)).detachAppender(appender);
         appender.stop();
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"/mvc/error", "/mvc/async-error"})
+    void mvcUnexpectedFailuresUseOneSafeAdviceProblemAndError(String path) throws Exception {
+        var response = get(path, "caller-secret", null);
+        assertThat(response.statusCode()).isEqualTo(500);
+        var problem = JSON.readTree(response.body());
+        assertThat(problem.path("code").asString()).isEqualTo("system.unexpected");
+        assertThat(problem.path("status").asInt()).isEqualTo(500);
+        String correlation = response.headers().firstValue("X-Correlation-Id").orElseThrow();
+        assertThat(problem.path("correlationId").asString()).isEqualTo(correlation);
+        assertThat(response.body()).doesNotContain("advice-secret", "IllegalStateException", "stack", "traceId");
+        var completion = awaitEvent(correlation);
+        var errors = OUTPUT.stream().map(JSON::readTree)
+                .filter(event -> "ERROR".equals(event.path("log").path("level").asString())).toList();
+        assertThat(errors).hasSize(1);
+        var error = errors.getFirst();
+        assertThat(error.path("log").path("logger").asString()).isEqualTo(ApiExceptionHandler.class.getName());
+        assertThat(error.path("error").path("code").asString()).isEqualTo("SYS_UNEXPECTED");
+        assertThat(error.path("error").path("stack_trace").asString()).isNotBlank();
+        for (String field : List.of("correlation_id", "trace_id", "span_id")) {
+            assertThat(error.path(field)).isEqualTo(completion.path(field));
+        }
+        assertThat(String.join("", OUTPUT)).doesNotContain("advice-secret", "caller-secret");
+    }
+
+    @Test void knownMvcErrorsKeepTheirExistingResolverStatusAndBody() throws Exception {
+        var requests = List.of(
+                java.util.Map.entry(request("/mvc/status", "ignored", null), 410),
+                java.util.Map.entry(request("/mvc/wrapped-status", "ignored", null), 410),
+                java.util.Map.entry(request("/mvc/annotated-status", "ignored", null), 409),
+                java.util.Map.entry(request("/mvc/number?value=invalid", "ignored", null), 400),
+                java.util.Map.entry(HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/mvc/get-only"))
+                        .POST(HttpRequest.BodyPublishers.noBody()).build(), 405),
+                java.util.Map.entry(HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/mvc/json"))
+                        .header("Content-Type", "text/plain").POST(HttpRequest.BodyPublishers.ofString("plain")).build(), 415));
+        for (var entry : requests) {
+            var response = HTTP.send(entry.getKey(), HttpResponse.BodyHandlers.ofString());
+            assertThat(response.statusCode()).isEqualTo(entry.getValue());
+            var body = JSON.readTree(response.body());
+            assertThat(body.path("status").asInt()).isEqualTo(entry.getValue());
+            assertThat(body.has("error")).isTrue();
+            assertThat(body.has("code")).isFalse();
+            awaitEvent(response.headers().firstValue("X-Correlation-Id").orElseThrow());
+        }
+        assertThat(OUTPUT.stream().map(JSON::readTree)
+                .filter(event -> "ERROR".equals(event.path("log").path("level").asString()))).isEmpty();
     }
 
     @Test void publicQueriesIgnoreCallerCorrelationAndPreserveUnwrappedResponses() throws Exception {
@@ -118,7 +151,6 @@ class ServletRequestDiagnosticsIT {
             assertThat(event.path("log").path("level").asString()).isEqualTo("INFO");
         }
         assertThat(canonical()).hasSize(3);
-        assertContainerErrorProjection(1);
     }
 
     @Test void applicationIoFailuresRetainTheActuallyReceivedErrorStatus() throws Exception {
@@ -134,7 +166,6 @@ class ServletRequestDiagnosticsIT {
                             .isEqualTo(Long.parseLong(length)));
         }
         assertThat(canonical()).hasSize(2);
-        assertContainerErrorProjection(2);
     }
 
     @Test void observesClientResetWithoutClaimingResponseStatusDelivered() throws Exception {
@@ -165,13 +196,7 @@ class ServletRequestDiagnosticsIT {
         assertThat(event.path("event").path("outcome").asString()).isEqualTo("success");
         assertThat(event.path("http").path("response").path("status_code").asInt()).isEqualTo(204);
         assertThat(canonical()).hasSize(2);
-        assertContainerErrorProjection(2);
-        // The intermediate dispatch log and final wrapper log refer to the identical failed request
-        // and the identical original Throwable, not merely equal exception text.
-        assertThat(ERROR_CAUSES).hasSize(2);
-        assertThat(ERROR_CAUSES.get(0)).isSameAs(ERROR_CAUSES.get(1));
-        assertThat(ERROR_ORIGINS).containsExactly("org.apache.catalina.core.ApplicationDispatcher",
-                "org.apache.catalina.core.StandardWrapperValve");
+
     }
 
     @Test void usesAgentServerContextForValidInvalidAndUnsampledParents() throws Exception {
@@ -192,21 +217,6 @@ class ServletRequestDiagnosticsIT {
             var event = awaitEvent(response.headers().firstValue("X-Correlation-Id").orElseThrow());
             assertThat(event.path("trace_id").asString()).isEqualTo(responseTrace);
             assertThat(event.path("span_id").asString()).hasSize(16).isNotEqualTo("1234567890123456");
-        }
-    }
-
-    private static void assertContainerErrorProjection(int expected) {
-        var errors = OUTPUT.stream().map(JSON::readTree)
-                .filter(event -> "ERROR".equals(event.path("log").path("level").asString())).toList();
-        assertThat(errors).hasSize(expected);
-        for (var error : errors) {
-            assertThat(error.has("correlation_id")).isTrue();
-            var completion = canonical().stream()
-                    .filter(event -> event.path("correlation_id").equals(error.path("correlation_id")))
-                    .findFirst().orElseThrow();
-            for (String field : List.of("correlation_id", "actor_id", "tenant_id", "trace_id", "span_id")) {
-                assertThat(error.path(field)).as(field).isEqualTo(completion.path(field));
-            }
         }
     }
 
@@ -241,9 +251,44 @@ class ServletRequestDiagnosticsIT {
         throw new AssertionError("missing canonical for " + correlation);
     }
 
+    @org.springframework.web.bind.annotation.RestController
+    static class MvcFixture {
+        @org.springframework.web.bind.annotation.GetMapping("/mvc/error")
+        String error() { throw new IllegalStateException("token=advice-secret"); }
+
+        @org.springframework.web.bind.annotation.GetMapping("/mvc/async-error")
+        java.util.concurrent.Callable<String> asyncError() {
+            return () -> { throw new IllegalStateException("token=advice-secret"); };
+        }
+
+        @org.springframework.web.bind.annotation.GetMapping("/mvc/status")
+        String status() { throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.GONE); }
+
+        @org.springframework.web.bind.annotation.GetMapping("/mvc/wrapped-status")
+        String wrappedStatus() throws jakarta.servlet.ServletException {
+            throw new jakarta.servlet.ServletException(new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.GONE));
+        }
+
+        @org.springframework.web.bind.annotation.GetMapping("/mvc/annotated-status")
+        String annotatedStatus() { throw new Conflict(); }
+
+        @org.springframework.web.bind.annotation.GetMapping("/mvc/number")
+        String number(@org.springframework.web.bind.annotation.RequestParam int value) { return Integer.toString(value); }
+
+        @org.springframework.web.bind.annotation.GetMapping("/mvc/get-only")
+        String getOnly() { return "plain"; }
+
+        @org.springframework.web.bind.annotation.PostMapping(value = "/mvc/json", consumes = "application/json")
+        String json() { return "plain"; }
+    }
+
+    @org.springframework.web.bind.annotation.ResponseStatus(org.springframework.http.HttpStatus.CONFLICT)
+    static class Conflict extends RuntimeException {}
+
     @SpringBootConfiguration
     @EnableAutoConfiguration
     static class Application {
+        @Bean MvcFixture mvcFixture() { return new MvcFixture(); }
         @Bean ServletRegistrationBean<HttpServlet> diagnosticFixture() {
             var registration = new ServletRegistrationBean<HttpServlet>(new HttpServlet() {
                 @Override protected void doGet(HttpServletRequest request, HttpServletResponse response) throws IOException, jakarta.servlet.ServletException {
