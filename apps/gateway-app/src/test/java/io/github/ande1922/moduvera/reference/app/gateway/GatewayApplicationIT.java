@@ -1,6 +1,7 @@
 package io.github.ande1922.moduvera.reference.app.gateway;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -11,6 +12,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
@@ -80,7 +82,7 @@ class GatewayApplicationIT {
                 "tenant-evil");
         assertThat(created.statusCode()).isEqualTo(201);
         assertThat(created.headers().firstValue("Location")).contains("/api/order/v1/orders/9001");
-        assertThat(created.headers().firstValue("X-Correlation-Id")).contains("corr-public-order");
+        String createdCorrelation = publicCorrelation(created, "corr-public-order");
         assertThat(created.headers().firstValue("X-Downstream-Probe")).contains("order");
         assertThat(created.body())
                 .contains("\"orderId\":\"9001\"")
@@ -88,12 +90,12 @@ class GatewayApplicationIT {
                 .doesNotContain("internal-jwt-sensitive");
         assertThat(ORDER_AUTHORIZATION).hasValue("Bearer internal-jwt-sensitive");
         assertThat(ORDER_TENANT).hasValue(null);
-        assertThat(ORDER_CORRELATION).hasValue("corr-public-order");
+        assertThat(ORDER_CORRELATION).hasValue(createdCorrelation);
         assertThat(ORDER_PATH).hasValue("/v1/orders");
         assertThat(LOGIN_PATH).hasValue("/v1/session/login");
         assertThat(LOGIN_TENANT).hasValue(null);
         assertThat(LOGIN_AUTHORIZATION).hasValue(null);
-        assertThat(EXCHANGE_CORRELATION).hasValue("corr-public-order");
+        assertThat(EXCHANGE_CORRELATION).hasValue(createdCorrelation);
 
         assertThat(get("/internal/api/v1/token/exchange", null, null).statusCode()).isEqualTo(404);
         assertThat(get("/internal/api/v1/catalog/products/100", null, null).statusCode()).isEqualTo(404);
@@ -143,6 +145,57 @@ class GatewayApplicationIT {
                 .matches("[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
                 .isNotEqualTo("bad/value");
         assertThat(ORDER_CORRELATION).hasValue(normalized);
+    }
+
+    @Test
+    void publicCorrelationCoversRejectionAndUnmatchedRoutesWithoutTrustingCallerClaims() throws Exception {
+        HttpResponse<String> rejected = get("/api/order/v1/orders/9001", null, "caller-correlation");
+        assertThat(rejected.statusCode()).isEqualTo(401);
+        String rejectedCorrelation = publicCorrelation(rejected, "caller-correlation");
+        assertThat(JSON.readTree(rejected.body()).path("correlationId").asString())
+                .isEqualTo(rejectedCorrelation);
+        assertThat(JSON.readTree(rejected.body()).has("traceId")).isFalse();
+
+        HttpResponse<String> missing = HTTP.send(
+                HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/not-a-route"))
+                        .header("X-Correlation-Id", "caller-correlation")
+                        .header("X-Internal-Request", "true")
+                        .header("Tenant-Id", "untrusted-tenant")
+                        .GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertThat(missing.statusCode()).isEqualTo(404);
+        String missingCorrelation = publicCorrelation(missing, "caller-correlation");
+        assertThat(missingCorrelation).isNotEqualTo(rejectedCorrelation);
+        assertThat(JSON.readTree(missing.body()).path("correlationId").asString())
+                .isEqualTo(missingCorrelation);
+        assertThat(JSON.readTree(missing.body()).has("traceId")).isFalse();
+    }
+
+    @Test
+    void preservesMismatchedDownstreamProblemAndLogsThePropagationFailure() throws Exception {
+        try (GatewayLogProbe logs = new GatewayLogProbe()) {
+            HttpResponse<String> response = get("/api/order/v1/orders/mismatched-correlation", "Bearer " + SESSION,
+                    "caller-correlation");
+            String correlation = publicCorrelation(response, "caller-correlation");
+            assertThat(response.statusCode()).isEqualTo(422);
+            assertThat(response.body()).isEqualTo("{\"code\":\"downstream.rejected\",\"correlationId\":\"downstream-correlation\"}");
+            assertThat(response.body()).doesNotContain(correlation);
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(logs.canonical()).hasSize(1));
+            assertThat(logs.errors()).hasSize(1);
+            assertThat(logs.errors().getFirst().path("correlation_id").asString()).isEqualTo(correlation);
+            assertThat(logs.errors().getFirst().path("error").path("code").asString())
+                    .isEqualTo("SYS_GATEWAY_CORRELATION_MISMATCH");
+            assertThat(logs.errors().getFirst().toString()).doesNotContain("downstream-correlation");
+            assertThat(logs.canonical().getFirst().path("event").path("outcome").asString()).isEqualTo("failure");
+        }
+    }
+
+    private static String publicCorrelation(HttpResponse<String> response, String supplied) {
+        String correlation = response.headers().firstValue("X-Correlation-Id").orElseThrow();
+        assertThat(correlation)
+                .matches("[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")
+                .isNotEqualTo(supplied);
+        return correlation;
     }
 
     private HttpResponse<String> post(
@@ -218,7 +271,11 @@ class GatewayApplicationIT {
             ORDER_CORRELATION.set(exchange.getRequestHeaders().getFirst("X-Correlation-Id"));
             ORDER_PATH.set(exchange.getRequestURI().getPath());
             exchange.getResponseHeaders().add("X-Downstream-Probe", "order");
-            if ("POST".equals(exchange.getRequestMethod())) {
+            if (exchange.getRequestURI().getPath().endsWith("/mismatched-correlation")) {
+                exchange.getResponseHeaders().set("X-Correlation-Id", "downstream-correlation");
+                send(exchange, 422, "application/problem+json",
+                        "{\"code\":\"downstream.rejected\",\"correlationId\":\"downstream-correlation\"}");
+            } else if ("POST".equals(exchange.getRequestMethod())) {
                 exchange.getResponseHeaders().add("Location", "/v1/orders/9001");
                 send(
                         exchange,
@@ -253,6 +310,9 @@ class GatewayApplicationIT {
 
     private static void send(HttpExchange exchange, int status, String contentType, String body)
             throws IOException {
+        if (!exchange.getResponseHeaders().containsKey("X-Correlation-Id")) {
+            exchange.getResponseHeaders().set("X-Correlation-Id", exchange.getRequestHeaders().getFirst("X-Correlation-Id"));
+        }
         exchange.getResponseHeaders().add("Content-Type", contentType);
         byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
         exchange.sendResponseHeaders(status, bytes.length);

@@ -38,7 +38,7 @@ final class OrderSessionGatewayFilter implements GatewayFilter {
 
         String correlationId = exchange.getRequest()
                 .getHeaders()
-                .getFirst(CorrelationGlobalFilter.HEADER);
+                .getFirst(GatewayRequestDiagnostics.HEADER);
         return identities
                 .exchange(sessionToken, correlationId)
                 .flatMap(internalJwt -> chain.filter(withInternalJwt(exchange, internalJwt)))

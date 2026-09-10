@@ -26,7 +26,7 @@ final class IdentityTokenExchangeClient {
         return identity.post()
                 .uri(EXCHANGE_PATH)
                 .header(HttpHeaders.AUTHORIZATION, gatewayAuthorization)
-                .header(CorrelationGlobalFilter.HEADER, correlationId)
+                .header(GatewayRequestDiagnostics.HEADER, correlationId)
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(new TokenExchangeRequest(sessionToken, ORDER_AUDIENCE))
                 .exchangeToMono(response -> {

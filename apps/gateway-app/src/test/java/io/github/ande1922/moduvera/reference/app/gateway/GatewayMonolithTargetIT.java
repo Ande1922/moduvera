@@ -118,6 +118,7 @@ class GatewayMonolithTargetIT {
 
     private static void respond(HttpExchange exchange, int status, String body) throws IOException {
         byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().set("X-Correlation-Id", exchange.getRequestHeaders().getFirst("X-Correlation-Id"));
         exchange.getResponseHeaders().add("Content-Type", "application/json");
         exchange.sendResponseHeaders(status, bytes.length);
         exchange.getResponseBody().write(bytes);

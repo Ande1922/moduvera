@@ -3,6 +3,7 @@ package io.github.ande1922.moduvera.reference.app.gateway;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.webflux.autoconfigure.WebHttpHandlerBuilderCustomizer;
 import org.springframework.cloud.gateway.route.RouteLocator;
 import org.springframework.cloud.gateway.route.builder.RouteLocatorBuilder;
 import org.springframework.context.annotation.Bean;
@@ -45,8 +46,15 @@ class GatewayConfiguration {
     }
 
     @Bean
-    CorrelationGlobalFilter correlationGlobalFilter() {
-        return new CorrelationGlobalFilter();
+    WebHttpHandlerBuilderCustomizer gatewayRequestDiagnostics() {
+        return builder -> builder
+                .filters(filters -> filters.addFirst(GatewayRequestDiagnostics::bind))
+                .httpHandlerDecorator(GatewayRequestDiagnostics::decorate);
+    }
+
+    @Bean
+    GatewayErrorHandler gatewayErrorHandler(GatewayProblemWriter problems) {
+        return new GatewayErrorHandler(problems);
     }
 
     @Bean
