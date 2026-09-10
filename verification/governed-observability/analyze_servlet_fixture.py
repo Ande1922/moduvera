@@ -51,7 +51,8 @@ for event in errors:
     for field in ("correlation_id", "trace_id", "span_id"):
         assert event.get(field) == completion.get(field), f"ERROR projection mismatch: {field}"
     path = completion["url"]["path"]
-    assert path in ("/fixture/async-error", "/fixture/error", "/managed/error", "/excluded/missing-context")
+    assert path in ("/fixture/async-error", "/fixture/error", "/managed/error", "/excluded/missing-context",
+                    "/fixture/application-io", "/fixture/wrapped-application-io")
     # ManagedController is PLATFORM; ExcludedController bypasses the identity snapshot producer.
     # BasicErrorController later adds tenant identity, so canonical is not an emission-time identity oracle.
     expected_identity = ({"actor_type": "USER", "actor_id": "alice", "initiator_type": "USER",
@@ -69,7 +70,14 @@ for event in errors:
                        "canonicalIdentity": {field: completion[field] for field in projection_fields[3:]
                                              if field in completion},
                        **{field: event.get(field) for field in projection_fields}})
-assert len(errors) == 6, "fixture must retain all six original container ERROR events"
+original_errors = [row for row in error_rows if row["canonicalPath"] not in
+                   ("/fixture/application-io", "/fixture/wrapped-application-io")]
+assert len(original_errors) == 6, "fixture must retain all six original container ERROR events"
+assert len(errors) == 8, "six original errors plus two application-I/O regression errors expected"
+for path in ("/fixture/application-io", "/fixture/wrapped-application-io"):
+    matches = [event for event in canonical if event["url"]["path"] == path]
+    assert len(matches) == 1
+    assert matches[0]["http"]["response"]["status_code"] == 500
 duplicates = {correlation: sum(row["correlation_id"] == correlation for row in error_rows)
               for correlation in by_correlation
               if sum(row["correlation_id"] == correlation for row in error_rows) > 1}

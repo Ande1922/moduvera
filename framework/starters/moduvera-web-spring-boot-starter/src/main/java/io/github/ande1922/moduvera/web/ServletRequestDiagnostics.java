@@ -99,13 +99,12 @@ public final class ServletRequestDiagnostics {
 
     void failed(Throwable failure) {
         unhandledFailure = failure;
-        Throwable cause = failure;
-        while (cause != null && !(cause instanceof java.io.IOException)) {
-            cause = cause.getCause();
-        }
-        if (cause != null) {
-            transportFailure = true;
-        }
+    }
+
+    /** Records a failure observed at this response's output boundary, not arbitrary application I/O. */
+    void transportFailed(Throwable failure) {
+        transportFailure = true;
+        failed(failure);
     }
 
     void timedOut() {

@@ -121,6 +121,22 @@ class ServletRequestDiagnosticsIT {
         assertContainerErrorProjection(1);
     }
 
+    @Test void applicationIoFailuresRetainTheActuallyReceivedErrorStatus() throws Exception {
+        for (String path : List.of("/fixture/application-io", "/fixture/wrapped-application-io")) {
+            var response = get(path, "ignored", null);
+            assertThat(response.statusCode()).isEqualTo(500);
+            assertThat(response.body()).isNotEmpty();
+            var event = awaitEvent(response.headers().firstValue("X-Correlation-Id").orElseThrow());
+            assertThat(event.path("event").path("outcome").asString()).isEqualTo("failure");
+            assertThat(event.path("http").path("response").path("status_code").asInt()).isEqualTo(500);
+            response.headers().firstValue("Content-Length").ifPresent(length ->
+                    assertThat(event.path("http").path("response").path("body").path("bytes").asLong())
+                            .isEqualTo(Long.parseLong(length)));
+        }
+        assertThat(canonical()).hasSize(2);
+        assertContainerErrorProjection(2);
+    }
+
     @Test void observesClientResetWithoutClaimingResponseStatusDelivered() throws Exception {
         started = new CountDownLatch(1);
         release = new CountDownLatch(1);
@@ -230,9 +246,12 @@ class ServletRequestDiagnosticsIT {
     static class Application {
         @Bean ServletRegistrationBean<HttpServlet> diagnosticFixture() {
             var registration = new ServletRegistrationBean<HttpServlet>(new HttpServlet() {
-                @Override protected void doGet(HttpServletRequest request, HttpServletResponse response) throws IOException {
+                @Override protected void doGet(HttpServletRequest request, HttpServletResponse response) throws IOException, jakarta.servlet.ServletException {
                     switch (request.getRequestURI()) {
                         case "/fixture/error" -> throw new IllegalStateException("token=exception-secret");
+                        case "/fixture/application-io" -> throw new IOException("application file read failed");
+                        case "/fixture/wrapped-application-io" ->
+                                throw new jakarta.servlet.ServletException(new IOException("application dependency read failed"));
                         case "/fixture/timeout" -> request.startAsync().setTimeout(100);
                         case "/fixture/async-error" -> request.startAsync().dispatch("/fixture/error");
                         case "/fixture/timeout-recovered" -> {

@@ -29,7 +29,7 @@ final class DiagnosticResponse extends HttpServletResponseWrapper {
         try {
             super.flushBuffer();
         } catch (IOException failure) {
-            state.failed(failure);
+            state.transportFailed(failure);
             throw failure;
         }
     }
@@ -57,7 +57,7 @@ final class DiagnosticResponse extends HttpServletResponseWrapper {
                     listener.onWritePossible();
                 }
                 @Override public void onError(Throwable failure) {
-                    state.failed(failure);
+                    state.transportFailed(failure);
                     listener.onError(failure);
                 }
             });
@@ -67,7 +67,7 @@ final class DiagnosticResponse extends HttpServletResponseWrapper {
             try {
                 delegate.write(value);
             } catch (IOException failure) {
-                state.failed(failure);
+                state.transportFailed(failure);
                 throw failure;
             }
         }
@@ -76,7 +76,7 @@ final class DiagnosticResponse extends HttpServletResponseWrapper {
             try {
                 delegate.write(value, offset, length);
             } catch (IOException failure) {
-                state.failed(failure);
+                state.transportFailed(failure);
                 throw failure;
             }
         }
@@ -85,7 +85,7 @@ final class DiagnosticResponse extends HttpServletResponseWrapper {
             try {
                 delegate.flush();
             } catch (IOException failure) {
-                state.failed(failure);
+                state.transportFailed(failure);
                 throw failure;
             }
         }
@@ -94,7 +94,7 @@ final class DiagnosticResponse extends HttpServletResponseWrapper {
             try {
                 delegate.close();
             } catch (IOException failure) {
-                state.failed(failure);
+                state.transportFailed(failure);
                 throw failure;
             }
         }
