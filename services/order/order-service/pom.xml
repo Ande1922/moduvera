@@ -12,6 +12,12 @@
   <dependencies>
     <dependency>
       <groupId>io.github.ande1922.moduvera</groupId>
+      <artifactId>moduvera-logging-spring-boot-starter</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>io.github.ande1922.moduvera</groupId>
       <artifactId>order-api</artifactId>
       <version>${project.version}</version>
     </dependency>

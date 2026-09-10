@@ -19,8 +19,12 @@ import io.github.ande1922.moduvera.reference.order.domain.OrderRepository;
 import java.time.Clock;
 import java.util.Currency;
 import java.util.List;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public final class OrderApplicationService implements OrderApi {
+
+    private static final Logger LOG = LoggerFactory.getLogger(OrderApplicationService.class);
 
     public static final PermissionCode CREATE = new PermissionCode("order:create");
     public static final PermissionCode READ = new PermissionCode("order:read");
@@ -80,6 +84,11 @@ public final class OrderApplicationService implements OrderApi {
             orders.save(order);
             publisher.publish(reserve);
         });
+        // The top-level boundary returns only after commit; save/append alone is not a fact.
+        LOG.atInfo()
+                .addKeyValue("event.action", "order_created")
+                .addKeyValue("order_id", orderId)
+                .log("订单创建成功");
         return order.toView();
     }
 
