@@ -1,5 +1,5 @@
 Type: issue
-Status: blocked
+Status: ready-for-agent
 Blocked by: 02, 07
 
 # 09 — Immediate 一次 ACK 发布诊断
@@ -49,3 +49,5 @@ ImmediatePublication 在事务外一次发送中保留 C 与实际 Trace，并�
 ## Comments
 
 - 2026-09-06：维护者确认 17 票粒度、依赖关系与落票。当前仅创建实施票；未开始实现、运行功能验证或取得交付通过证据。
+
+- 2026-09-06：前置 02 已经独立双轴评审并快进集成，直接前置均已交付，本票解除阻塞；不在第二批 02/14 的实施范围内，未认领或开始。

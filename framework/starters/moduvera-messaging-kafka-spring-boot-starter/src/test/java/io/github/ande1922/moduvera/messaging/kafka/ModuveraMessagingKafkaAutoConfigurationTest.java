@@ -2,10 +2,12 @@ package io.github.ande1922.moduvera.messaging.kafka;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import io.github.ande1922.moduvera.data.TransactionBoundary;
+import io.github.ande1922.moduvera.message.outbox.PublicationObserver;
 import io.github.ande1922.moduvera.message.publication.DurablePublication;
 import io.github.ande1922.moduvera.message.publication.ImmediatePublication;
 import io.github.ande1922.moduvera.migration.MigrationDefinition;
 import io.github.ande1922.moduvera.messaging.kafka.autoconfigure.ModuveraMessagingKafkaAutoConfiguration;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.util.Map;
 import java.util.function.Supplier;
 import javax.sql.DataSource;
@@ -62,9 +64,33 @@ class ModuveraMessagingKafkaAutoConfigurationTest {
                     assertThat(context).hasSingleBean(ReliableMessageConsumerFactory.class);
                     assertThat(context).hasSingleBean(StreamBridgeMessageTransport.class);
                     assertThat(context).hasSingleBean(LocalOutboxWakeSignal.class);
-                    assertThat(context).hasSingleBean(io.github.ande1922.moduvera.message.outbox.PublicationObserver.class);
+                    assertThat(context).hasSingleBean(PublicationObserver.class);
+                    assertThat(context.getBean(PublicationObserver.class))
+                            .isNotInstanceOf(MicrometerPublicationObserver.class);
                     assertThat(context).doesNotHaveBean(MigrationDefinition.class);
                     assertThat(context).doesNotHaveBean(OutboxRelay.class);
+                });
+    }
+
+    @Test
+    void usesTheApplicationMeterRegistryWhenOneIsAvailable() {
+        runner.withBean(SimpleMeterRegistry.class, SimpleMeterRegistry::new)
+                .withPropertyValues(
+                        "moduvera.messaging.kafka.routes[inventory.commands]=inventoryCommands-out-0",
+                        "spring.cloud.stream.kafka.bindings.inventoryCommands-out-0.producer.sync=true",
+                        "spring.cloud.stream.kafka.bindings.inventoryCommands-out-0.producer.configuration.acks=all",
+                        "spring.cloud.stream.kafka.bindings.inventoryCommands-out-0.producer.configuration.delivery.timeout.ms=2000",
+                        "spring.cloud.stream.kafka.bindings.inventoryCommands-out-0.producer.configuration.request.timeout.ms=2000",
+                        "spring.cloud.stream.kafka.bindings.inventoryCommands-out-0.producer.configuration.max.block.ms=2000",
+                        "moduvera.messaging.kafka.relay-enabled=false")
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context.getBean(PublicationObserver.class))
+                            .isInstanceOf(MicrometerPublicationObserver.class);
+                    assertThat(context.getBean(SimpleMeterRegistry.class)
+                                    .find("moduvera.messaging.outbox.pending")
+                                    .gauge())
+                            .isNotNull();
                 });
     }
 

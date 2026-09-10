@@ -18,6 +18,11 @@ import io.github.ande1922.moduvera.message.MessageType;
 import io.github.ande1922.moduvera.message.SerializedMessage;
 import io.github.ande1922.moduvera.message.outbox.MessageTransport;
 import io.github.ande1922.moduvera.message.outbox.OutboxWorker;
+import io.github.ande1922.moduvera.message.outbox.PublicationObserver;
+import io.github.ande1922.moduvera.messaging.kafka.JdbcOutboxStore;
+import io.github.ande1922.moduvera.messaging.kafka.MicrometerPublicationObserver;
+import io.github.ande1922.moduvera.messaging.kafka.ModuveraMessagingKafkaProperties;
+import io.github.ande1922.moduvera.messaging.kafka.OutboxMaintenance;
 import io.github.ande1922.moduvera.messaging.kafka.migration.ModuveraMessagingMigrationConfiguration;
 import io.github.ande1922.moduvera.migration.MigrationDefinition;
 import io.github.ande1922.moduvera.migration.autoconfigure.ModuveraDatabaseMigrationAutoConfiguration;
@@ -44,6 +49,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.sql.Connection;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -55,6 +61,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import javax.sql.DataSource;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -128,6 +135,7 @@ class OrderApplicationIT {
         properties.add("moduvera.reference.clients.identity.service-id", () -> "order-service");
         properties.add("moduvera.reference.clients.identity.service-secret", () -> "order-secret");
         properties.add("moduvera.messaging.kafka.relay-enabled", () -> false);
+        properties.add("moduvera.messaging.kafka.maintenance-interval", () -> "1h");
         properties.add("spring.cloud.stream.kafka.binder.brokers", KAFKA::getBootstrapServers);
         properties.add("spring.cloud.stream.bindings.reserveInventory-out-0.destination", () -> RESERVE_TOPIC);
         properties.add("spring.cloud.stream.bindings.inventoryResult-in-0.destination", () -> RESULT_TOPIC);
@@ -195,6 +203,27 @@ class OrderApplicationIT {
 
     @Autowired
     private MessageTransport transport;
+
+    @Autowired
+    private JdbcOutboxStore outboxStore;
+
+    @Autowired
+    private OutboxMaintenance outboxMaintenance;
+
+    @Autowired
+    private PublicationObserver publicationObserver;
+
+    @Autowired
+    private MeterRegistry meterRegistry;
+
+    @Autowired
+    private ModuveraMessagingKafkaProperties messagingProperties;
+
+    @Autowired
+    private DataSource dataSource;
+
+    @Autowired
+    private Clock clock;
 
     @Autowired
     private ApplicationContext applicationContext;
@@ -390,6 +419,175 @@ class OrderApplicationIT {
                 .isEqualTo(new PersistedOrder("CONFIRMED", 1, "alice", "inventory-service"));
         assertThat(count("moduvera_message_inbox")).isEqualTo(2);
     }
+
+    @Test
+    void updatesAllOutboxMetricFamiliesThroughTheActualAppRegistryAndDatabase() throws Exception {
+        assertThat(publicationObserver).isInstanceOf(MicrometerPublicationObserver.class);
+        outboxMaintenance.runOnce();
+        var baseline = metricBaseline();
+
+        String publishedOrder = createOrder("corr-metrics-published");
+        String publishedMessage = "reserve-order-" + publishedOrder;
+        jdbc.update(
+                "UPDATE moduvera_message_outbox SET occurred_at = CURRENT_TIMESTAMP - INTERVAL '10 seconds' WHERE message_id = ?",
+                publishedMessage);
+        outboxMaintenance.runOnce();
+        assertThat(gauge("moduvera.messaging.outbox.pending")).isEqualTo(1);
+        assertThat(gauge("moduvera.messaging.outbox.pending.oldest.seconds")).isGreaterThanOrEqualTo(9);
+        assertThat(outboxWorker.publishBatch(1).published()).isEqualTo(1);
+        jdbc.update(
+                "UPDATE moduvera_message_outbox SET published_at = CURRENT_TIMESTAMP - INTERVAL '8 days' WHERE message_id = ?",
+                publishedMessage);
+
+        String retryOrder = createOrder("corr-metrics-retry");
+        var retryReport = worker(message -> {
+                    throw new IllegalStateException("controlled retryable transport failure");
+                })
+                .publishBatch(1);
+        assertThat(retryReport.failed()).isEqualTo(1);
+        assertThat(outboxState("reserve-order-" + retryOrder))
+                .isEqualTo(new OutboxState("PENDING", 1));
+        assertThat(outboxWorker.publishBatch(1).published()).isEqualTo(1);
+
+        String terminalOrder = createOrder("corr-metrics-terminal");
+        String terminalMessage = "reserve-order-" + terminalOrder;
+        jdbc.update(
+                "UPDATE moduvera_message_outbox SET destination = 'unmapped.metrics-proof' WHERE message_id = ?",
+                terminalMessage);
+        assertThat(outboxWorker.publishBatch(1).failed()).isEqualTo(1);
+        assertThat(outboxState(terminalMessage)).isEqualTo(new OutboxState("TERMINAL", 1));
+
+        String staleOrder = createOrder("corr-metrics-stale");
+        String staleMessage = "reserve-order-" + staleOrder;
+        var staleReport = worker(message -> {
+                    transport.send(message);
+                    jdbc.update(
+                            "UPDATE moduvera_message_outbox SET claim_token = 'superseded-test-claim' WHERE message_id = ?",
+                            message.descriptor().id().value());
+                })
+                .publishBatch(1);
+        assertThat(staleReport.staleUpdates()).isEqualTo(1);
+        assertThat(outboxState(staleMessage)).isEqualTo(new OutboxState("PENDING", 0));
+
+        String conflictOrder = createOrder("corr-metrics-conflict");
+        String conflictMessage = "reserve-order-" + conflictOrder;
+        try (Connection connection = dataSource.getConnection()) {
+            connection.setAutoCommit(false);
+            try (var statement = connection.prepareStatement(
+                    "SELECT message_id FROM moduvera_message_outbox WHERE message_id = ? FOR UPDATE")) {
+                statement.setString(1, conflictMessage);
+                try (var result = statement.executeQuery()) {
+                    assertThat(result.next()).isTrue();
+                    assertThat(outboxWorker.publishBatch(1).claimed()).isZero();
+                }
+            } finally {
+                connection.rollback();
+            }
+        }
+
+        assertThat(outboxMaintenance.runOnce()).isEqualTo(1);
+        assertThat(gauge("moduvera.messaging.outbox.pending")).isEqualTo(2);
+        assertThat(gauge("moduvera.messaging.outbox.terminal")).isEqualTo(1);
+        assertThat(counter("moduvera.messaging.outbox.claimed") - baseline.claimed()).isEqualTo(5);
+        assertThat(counter("moduvera.messaging.outbox.claim.conflicts") - baseline.claimConflicts())
+                .isEqualTo(1);
+        assertThat(counter("moduvera.messaging.outbox.cleanup.deleted") - baseline.cleanup())
+                .isEqualTo(1);
+        assertThat(publicationResultCount("published") - baseline.published()).isEqualTo(3);
+        assertThat(publicationResultCount("retry") - baseline.retry()).isEqualTo(1);
+        assertThat(publicationResultCount("terminal") - baseline.terminal()).isEqualTo(1);
+        assertThat(brokerTimerCount("published") - baseline.publishedTimers())
+                .isEqualTo(3);
+        assertThat(brokerTimerCount("retry") - baseline.retryTimers()).isEqualTo(1);
+        assertThat(brokerTimerCount("terminal") - baseline.terminalTimers())
+                .isEqualTo(1);
+        assertThat(stalePublishedCount() - baseline.stalePublished())
+                .isEqualTo(1);
+    }
+
+    private OutboxWorker worker(MessageTransport selectedTransport) {
+        return new OutboxWorker(
+                outboxStore,
+                selectedTransport,
+                clock,
+                System::nanoTime,
+                messagingProperties.getClaimLease(),
+                messagingProperties.getLeaseSafetyMargin(),
+                Duration.ZERO,
+                messagingProperties.getRelayMaxAttempts(),
+                publicationObserver);
+    }
+
+    private MetricBaseline metricBaseline() {
+        return new MetricBaseline(
+                counter("moduvera.messaging.outbox.claimed"),
+                counter("moduvera.messaging.outbox.claim.conflicts"),
+                counter("moduvera.messaging.outbox.cleanup.deleted"),
+                publicationResultCount("published"),
+                publicationResultCount("retry"),
+                publicationResultCount("terminal"),
+                brokerTimerCount("published"),
+                brokerTimerCount("retry"),
+                brokerTimerCount("terminal"),
+                stalePublishedCount());
+    }
+
+    private double counter(String name) {
+        return meterRegistry.get(name).counter().count();
+    }
+
+    private double publicationResultCount(String result) {
+        return meterRegistry.find("moduvera.messaging.outbox.publish")
+                .tag("result", result)
+                .counters()
+                .stream()
+                .mapToDouble(io.micrometer.core.instrument.Counter::count)
+                .sum();
+    }
+
+    private long brokerTimerCount(String result) {
+        return meterRegistry.find("moduvera.messaging.outbox.broker.ack")
+                .tag("result", result)
+                .timers()
+                .stream()
+                .mapToLong(io.micrometer.core.instrument.Timer::count)
+                .sum();
+    }
+
+    private double stalePublishedCount() {
+        return meterRegistry.find("moduvera.messaging.outbox.stale.token")
+                .tag("operation", "published")
+                .counters()
+                .stream()
+                .mapToDouble(io.micrometer.core.instrument.Counter::count)
+                .sum();
+    }
+
+    private double gauge(String name) {
+        return meterRegistry.get(name).gauge().value();
+    }
+
+    private OutboxState outboxState(String messageId) {
+        return jdbc.queryForObject(
+                "SELECT status, attempt_count FROM moduvera_message_outbox WHERE message_id = ?",
+                (result, rowNumber) ->
+                        new OutboxState(result.getString("status"), result.getInt("attempt_count")),
+                messageId);
+    }
+
+    private record MetricBaseline(
+            double claimed,
+            double claimConflicts,
+            double cleanup,
+            double published,
+            double retry,
+            double terminal,
+            long publishedTimers,
+            long retryTimers,
+            long terminalTimers,
+            double stalePublished) {}
+
+    private record OutboxState(String status, int attempts) {}
 
     private PersistedOrder persistedOrder(String orderId) {
         return jdbc.queryForObject(

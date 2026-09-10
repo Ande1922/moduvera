@@ -134,6 +134,11 @@
       </dependency>
       <dependency>
         <groupId>${project.groupId}</groupId>
+        <artifactId>moduvera-logging-spring-boot-starter</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>${project.groupId}</groupId>
         <artifactId>moduvera-scheduler-spring-boot-starter</artifactId>
         <version>${project.version}</version>
       </dependency>

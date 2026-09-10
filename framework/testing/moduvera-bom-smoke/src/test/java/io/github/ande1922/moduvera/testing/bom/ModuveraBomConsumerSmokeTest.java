@@ -10,6 +10,7 @@ import io.github.ande1922.moduvera.error.ErrorCode;
 import io.github.ande1922.moduvera.identifier.IdentifierGenerator;
 import io.github.ande1922.moduvera.lock.LockKey;
 import io.github.ande1922.moduvera.lock.local.LocalLockProvider;
+import io.github.ande1922.moduvera.logging.LoggingContextSnapshot;
 import io.github.ande1922.moduvera.message.MessageType;
 import io.github.ande1922.moduvera.migration.autoconfigure.ModuveraDatabaseMigrationMode;
 import io.github.ande1922.moduvera.scheduler.JobDefinition;
@@ -33,6 +34,7 @@ class ModuveraBomConsumerSmokeTest {
                     "moduvera-data-mybatis-plus-spring-boot-starter",
                     "moduvera-database-migration-spring-boot-starter",
                     "moduvera-messaging-kafka-spring-boot-starter",
+                    "moduvera-logging-spring-boot-starter",
                     "moduvera-scheduler-spring-boot-starter",
                     "moduvera-test-support",
                     "moduvera-architecture-testkit",
@@ -52,7 +54,9 @@ class ModuveraBomConsumerSmokeTest {
         var tenantId = new TenantId("tenant-a");
         var errorCode = new ErrorCode("notes.not-found");
         IdentifierGenerator identifiers = () -> 42L;
-        Class<?>[] frozenCapabilityTypes = {LockKey.class, LocalLockProvider.class, JobDefinition.class};
+        Class<?>[] frozenCapabilityTypes = {
+            LockKey.class, LocalLockProvider.class, LoggingContextSnapshot.class, JobDefinition.class
+        };
 
         assertThat(page.size()).isEqualTo(20);
         assertThat(messageType.value()).isEqualTo("inventory.reserved.v1");

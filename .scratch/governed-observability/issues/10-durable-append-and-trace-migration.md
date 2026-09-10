@@ -1,5 +1,5 @@
 Type: issue
-Status: blocked
+Status: ready-for-agent
 Blocked by: 02, 07
 
 # 10 — Durable 原子追加与双库迁移
@@ -53,3 +53,5 @@ Durable 追加将原消息、creation、初始 publication 与业务状态原子
 ## Comments
 
 - 2026-09-06：维护者确认 17 票粒度、依赖关系与落票。当前仅创建实施票；未开始实现、运行功能验证或取得交付通过证据。
+
+- 2026-09-06：前置 02 已经独立双轴评审并快进集成，直接前置均已交付，本票解除阻塞；不在第二批 02/14 的实施范围内，未认领或开始。

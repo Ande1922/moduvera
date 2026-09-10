@@ -1,5 +1,5 @@
 Type: issue
-Status: blocked
+Status: ready-for-agent
 Blocked by: 02
 
 # 04 — Servlet 请求诊断完整生命周期
@@ -55,3 +55,5 @@ Web、Resource Server、Identity 等现有 Servlet 入口和异常处理器复�
 
 - 2026-09-06：维护者确认 17 票粒度、依赖关系与落票。当前仅创建实施票；未开始实现、运行功能验证或取得交付通过证据。
 - 2026-09-06：当前实施基线已包含 ExecutionContext 交付；旧 FilterTest 已由 HandlerInterceptorTest/HttpExecutionBoundaryIT 接缝替代，校正活测试链接，不改变已确认入口生命周期验收。
+
+- 2026-09-06：前置 02 已经独立双轴评审并快进集成，直接前置均已交付，本票解除阻塞；不在第二批 02/14 的实施范围内，未认领或开始。

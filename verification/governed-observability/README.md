@@ -110,3 +110,18 @@ exactly-once claim.
 `MODUVERA_OBSERVABILITY_SKIP_BUILD=1` reuses current reactor artifacts.
 `MODUVERA_OBSERVABILITY_SKIP_IMAGE=1` omits image build and image Agent/JaCoCo
 proof; neither option is suitable for full ticket qualification.
+
+The logging qualification is a smaller, ticket-scoped runtime check. It runs a
+real Spring Boot process with the same pinned external Agent and extension,
+parses every stdout line with duplicate-key rejection, and checks sampled,
+unsampled, and absent contexts. It also verifies trusted ExecutionContext
+identity, stable scalar types, safe final-error cause output, and that logging
+plus short scope installation creates no additional Span. Build the fixture
+and extension first, then provide a dedicated evidence directory:
+
+```bash
+./mvnw -pl verification/governed-observability/logging-fixture,verification/governed-observability/agent-extension -am package
+MODUVERA_OTEL_JAVAAGENT=/path/to/opentelemetry-javaagent-2.31.1.jar \
+MODUVERA_LOGGING_EVIDENCE_DIR=/private/tmp/moduvera-logging-evidence \
+verification/governed-observability/verify-logging-fixture.sh
+```

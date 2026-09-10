@@ -9,25 +9,25 @@
 
 ## Tickets and direct dependencies
 
-以下为当前执行状态，后续以各票 metadata 为准。原拆票批准历史保留于 Comments；本批授权新增 01 → 07 的执行依赖，01、07 已完成并集成；02/14 已解除阻塞，其余票按未完成前置阻塞。
+以下为当前执行状态，后续以各票 metadata 为准。原拆票批准历史保留于 Comments；首批新增 01 → 07 的执行依赖，01、07 已完成并集成；第二批 02、14 均已评审并集成；02 的后继票仅解除阻塞，其余票按未完成前置阻塞。
 
 | 票 | Blocked by | 发布状态 |
 | --- | --- | --- |
 | [01 — 固定 Agent 装载与真实 Trace 导出](issues/01-pinned-agent-runtime.md) | None | resolved |
-| [02 — ECS 输出与可信上下文投影](issues/02-ecs-logging-and-context-projection.md) | 01 | ready-for-agent |
-| [03 — 进程内任务与线程切换隔离](issues/03-in-process-task-context.md) | 02 | blocked |
-| [04 — Servlet 请求诊断完整生命周期](issues/04-servlet-request-lifecycle.md) | 02 | blocked |
-| [05 — Gateway 响应式请求诊断](issues/05-gateway-reactor-lifecycle.md) | 02 | blocked |
-| [06 — HTTP 出站传播与尝试结果](issues/06-http-outbound-diagnostics.md) | 02 | blocked |
+| [02 — ECS 输出与可信上下文投影](issues/02-ecs-logging-and-context-projection.md) | 01 | resolved |
+| [03 — 进程内任务与线程切换隔离](issues/03-in-process-task-context.md) | 02 | ready-for-agent |
+| [04 — Servlet 请求诊断完整生命周期](issues/04-servlet-request-lifecycle.md) | 02 | ready-for-agent |
+| [05 — Gateway 响应式请求诊断](issues/05-gateway-reactor-lifecycle.md) | 02 | ready-for-agent |
+| [06 — HTTP 出站传播与尝试结果](issues/06-http-outbound-diagnostics.md) | 02 | ready-for-agent |
 | [07 — 消息读取端兼容 creation 扩展](issues/07-creation-envelope-reader-compatibility.md) | 01 | resolved |
-| [08 — 逐条消费保留本次投递因果](issues/08-inbound-transport-causality.md) | 02, 07 | blocked |
-| [09 — Immediate 一次 ACK 发布诊断](issues/09-immediate-ack-diagnostics.md) | 02, 07 | blocked |
-| [10 — Durable 原子追加与双库迁移](issues/10-durable-append-and-trace-migration.md) | 02, 07 | blocked |
+| [08 — 逐条消费保留本次投递因果](issues/08-inbound-transport-causality.md) | 02, 07 | ready-for-agent |
+| [09 — Immediate 一次 ACK 发布诊断](issues/09-immediate-ack-diagnostics.md) | 02, 07 | ready-for-agent |
+| [10 — Durable 原子追加与双库迁移](issues/10-durable-append-and-trace-migration.md) | 02, 07 | ready-for-agent |
 | [11 — 历史 publication 先存后发](issues/11-claim-owned-publication-repair.md) | 10 | blocked |
 | [12 — Relay 同代续投与故障恢复](issues/12-relay-generation-recovery.md) | 11 | blocked |
 | [13 — 人工 redrive 原子接受新代](issues/13-atomic-redrive-generation.md) | 12, 08 | blocked |
-| [14 — 九项 Micrometer 指标运行接入](issues/14-micrometer-runtime-baseline.md) | 01 | ready-for-agent |
-| [15 — 已有业务事实的记录责任与提交时机](issues/15-business-fact-logging.md) | 02 | blocked |
+| [14 — 九项 Micrometer 指标运行接入](issues/14-micrometer-runtime-baseline.md) | 01 | resolved |
+| [15 — 已有业务事实的记录责任与提交时机](issues/15-business-fact-logging.md) | 02 | ready-for-agent |
 | [16 — 独立 Notes 消费者接入证明](issues/16-independent-notes-qualification.md) | 04, 08, 09, 13, 14 | blocked |
 | [17 — 双拓扑整链与接入说明收口](issues/17-dual-topology-observability-closure.md) | 03, 05, 06, 15, 16 | blocked |
 
@@ -35,11 +35,12 @@
 
 ## Current frontier
 
-- 当前批次：**01 → 07**；两票均已评审并集成，07 使用 01 验证锁定的 Agent/API 组合。批次最终结果由固定提交的聚合评审/门禁/Scenario 证据给出。
-- 01、07 已完成；剩余可执行前沿为 **02、14**，二者保持 ready-for-agent，按本批授权边界停止，等待后续指令。02 完成可释放 03、04、05、06、15，并在 07 也完成后释放 08、09、10。
+- 当前第二批：**02 → 14**。维护者再次调用 implement-frontier 继续实施；02、14 已分别完成双轴评审并无冲突快进集成；当前进入本批最终聚合验证。该顺序用于共享验证资产的单写者和快进集成，不新增行为依赖。
+- 当前实际 base：`70e9a2711c56835ea28347fa2683618514b3bd08`，包含首批已验收并合入的 01/07。第二批最终验收后停止；下一就绪前沿为 03、04、05、06、08、09、10、15，本批不启动。
 - 持久发布主链：10 → 11 → 12 → 13；13 同时要求 08。
-- 独立消费者：04、08、09、13、14 → 16；双拓扑收口：03、05、06、15、16 → 17。
-- 没有新产品/架构问题或外部 blocker。标准传播器/API 版本存在共享先写者，新增 01 → 07 执行边并获维护者批准。Agent/API 版本、最小 Formatter 和精确 artifact 落点为 Spec 已确认边界内的实施选择，须提供证据；依赖运行失败不允许静默改变设计。
+- 独立消费者：04、08、09、13、14 → 16；整链收口：03、05、06、15、16 → 17。
+- 本批采用当前 ADR 0038 的默认微服务运行验收范围，保留单体编译；本批不重新宣称单体运行资格。具体工作区、角色、验证与后续证据见 [执行台账](execution-ledger.md#第二批--02-和-14)。
+- Agent/API 版本、最小 Formatter 和精确 artifact 落点为 Spec 已确认边界内的实施选择，须提供证据；依赖运行失败不允许静默改变设计。
 
 ## Slice boundaries
 
@@ -104,3 +105,9 @@
 - 2026-09-06：01 的[完成记录](issues/01-pinned-agent-runtime.md#answer)包含固定提交、全量运行及双轴评审证据，已无冲突快进集成；07 按原授权接续，02/14 不启动。
 
 - 2026-09-06：07 的[完成记录](issues/07-creation-envelope-reader-compatibility.md#answer)包含固定提交、真实 schema/模块验证与独立双轴评审；已无冲突快进集成。01→07 代码前沿已交付，02/14 未启动，批次最终聚合验证另存。
+
+- 2026-09-06：维护者要求继续实施，第二批从当前提交隔离推进 02、14；仅认领 02，保留原依赖图和首批历史记录。
+
+- 2026-09-06：第二批 02 已按完成记录交付并快进集成，14 接续认领；03、04、05、06、08、09、10、15 仅 ready-for-agent，未启动。本批最终聚合门禁仍待 14 完成后进行。
+
+- 2026-09-06：第二批 14 已按完成记录评审并集成，累计 01、02、07、14 四票 resolved；03、04、05、06、08、09、10、15 仍仅 ready-for-agent，11、12、13、16、17 仍 blocked。最终聚合评审、Gate 和适用运行验收的结果将在本次冻结提交的外部索引记录，不在此预填 PASS。
