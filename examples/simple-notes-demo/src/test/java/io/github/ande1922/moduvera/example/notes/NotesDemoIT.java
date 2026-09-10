@@ -220,7 +220,7 @@ class NotesDemoIT {
 
         HttpResponse<String> created = send("POST", "/api/v1/notes", "tenant-a-writer", "{\"content\":\"first note\"}", "corr-create");
         assertThat(created.statusCode()).isEqualTo(201);
-        assertThat(created.headers().firstValue("X-Correlation-Id")).contains("corr-create");
+        assertPublicCorrelation(created, "corr-create");
         assertThat(created.body()).doesNotContain("\"data\"").contains("\"content\":\"first note\"");
         String id = objectMapper.readTree(created.body()).get("id").asText();
 
@@ -338,18 +338,19 @@ class NotesDemoIT {
 
         HttpResponse<String> forbidden = send("POST", "/api/v1/notes", "tenant-a-reader", "{\"content\":\"blocked\"}", "corr-forbidden");
         assertThat(forbidden.statusCode()).isEqualTo(403);
-        assertThat(forbidden.headers().firstValue("X-Correlation-Id")).contains("corr-forbidden");
+        String forbiddenCorrelation = assertPublicCorrelation(forbidden, "corr-forbidden");
         assertThat(forbidden.body())
                 .contains("\"code\":\"security.permission-denied\"")
-                .contains("\"correlationId\":\"corr-forbidden\"");
+                .contains("\"correlationId\":\"" + forbiddenCorrelation + "\"");
 
         HttpResponse<String> invalid = send("POST", "/api/v1/notes", "tenant-a-writer", "{\"content\":\"\"}", "corr-invalid");
         assertThat(invalid.statusCode()).isEqualTo(400);
+        String invalidCorrelation = assertPublicCorrelation(invalid, "corr-invalid");
         assertThat(invalid.headers().firstValue("Content-Type").orElse(""))
                 .startsWith("application/problem+json");
         assertThat(invalid.body())
                 .contains("\"code\":\"request.validation-failed\"")
-                .contains("\"correlationId\":\"corr-invalid\"");
+                .contains("\"correlationId\":\"" + invalidCorrelation + "\"");
 
         HttpResponse<String> anonymous = send("GET", "/api/v1/notes/" + id, null, null, "corr-anonymous");
         assertThat(anonymous.statusCode()).isEqualTo(401);
@@ -758,6 +759,13 @@ class NotesDemoIT {
                         new Initiator(ActorType.USER, "tenant-a-writer"),
                         "tenant-a:" + noteId),
                 "{\"noteId\":\"" + noteId + "\",\"content\":\"ambiguity\"}");
+    }
+
+    private static String assertPublicCorrelation(HttpResponse<String> response, String supplied) {
+        String correlation = response.headers().firstValue("X-Correlation-Id").orElseThrow();
+        assertThat(UUID.fromString(correlation).version()).isEqualTo(4);
+        assertThat(correlation).isNotEqualTo(supplied);
+        return correlation;
     }
 
     private HttpResponse<String> send(
