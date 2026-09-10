@@ -32,7 +32,7 @@ Blocked by: 02
 ## Verification
 
 - [OrderApplicationServiceTest](../../../services/order/order-service/src/test/java/io/github/ande1922/moduvera/reference/order/application/OrderApplicationServiceTest.java)
-- [InventoryApplicationServiceTest](../../../services/inventory/inventory-service/src/test/java/io/github/ande1922/moduvera/reference/inventory/application/InventoryApplicationServiceTest.java)
+- [InventoryReservationHandlerTest](../../../services/inventory/inventory-service/src/test/java/io/github/ande1922/moduvera/reference/inventory/application/InventoryReservationHandlerTest.java)
 - Application 单测只证明责任编排；提交、外层回滚和 commit 失败必须用生产 TransactionBoundary/持久 Adapter 与真实数据库。结合 01/02 实际 stdout/Span，在事实成立与事务结束之后断言记录次数。
 - 先运行受影响用例与真实事务测试，再 `./mvnw -pl services/order/order-service,services/inventory/inventory-service -am verify`。此票使用现有事务/发布接缝，不依赖 10 的新增 Trace 存储；最终拼接在 17。
 
