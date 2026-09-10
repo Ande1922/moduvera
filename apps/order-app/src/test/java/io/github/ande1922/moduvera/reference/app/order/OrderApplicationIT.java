@@ -280,7 +280,7 @@ class OrderApplicationIT {
 
         HttpResponse<String> found = get(orderId, "order-user", "tenant-a", "corr-get");
         assertThat(found.statusCode()).isEqualTo(200);
-        assertThat(found.headers().firstValue("X-Correlation-Id")).contains("corr-get");
+        assertPublicCorrelation(found, "corr-get");
         assertThat(get(orderId, "other-tenant", "tenant-b", "corr-cross").statusCode())
                 .isEqualTo(404);
         assertThat(get(orderId, null, "tenant-a", "corr-none").statusCode()).isEqualTo(401);
@@ -342,6 +342,9 @@ class OrderApplicationIT {
 
         assertThat(first.statusCode()).isEqualTo(201);
         assertThat(second.statusCode()).isEqualTo(201);
+        String firstCorrelation = assertPublicCorrelation(first, "corr-reuse-one");
+        String secondCorrelation = assertPublicCorrelation(second, "corr-reuse-two");
+        assertThat(firstCorrelation).isNotEqualTo(secondCorrelation);
         assertThat(SERVICE_TOKEN_REQUESTS).hasValue(tokenRequestsBefore + 1);
         assertThat(SERVICE_TOKEN_BODIES)
                 .singleElement()
@@ -357,9 +360,9 @@ class OrderApplicationIT {
                         CatalogRequest::correlationId)
                 .containsExactly(
                         org.assertj.core.groups.Tuple.tuple(
-                                "Bearer catalog-service-token", "tenant-a", "corr-reuse-one"),
+                                "Bearer catalog-service-token", "tenant-a", firstCorrelation),
                         org.assertj.core.groups.Tuple.tuple(
-                                "Bearer catalog-service-token", "tenant-a", "corr-reuse-two"));
+                                "Bearer catalog-service-token", "tenant-a", secondCorrelation));
     }
 
     @Test
@@ -603,6 +606,13 @@ class OrderApplicationIT {
                         result.getString("created_by"),
                         result.getString("updated_by")),
                 Long.parseLong(orderId));
+    }
+
+    private static String assertPublicCorrelation(HttpResponse<String> response, String supplied) {
+        String correlation = response.headers().firstValue("X-Correlation-Id").orElseThrow();
+        assertThat(UUID.fromString(correlation).version()).isEqualTo(4);
+        assertThat(correlation).isNotEqualTo(supplied);
+        return correlation;
     }
 
     private String createOrder(String correlationId) throws Exception {

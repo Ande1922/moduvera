@@ -207,7 +207,7 @@ class CatalogApplicationIT {
     void exposesATenantSafeAuthenticatedCatalogContract() throws Exception {
         HttpResponse<String> found = get(100, "catalog-reader", "tenant-a", "corr-found");
         assertThat(found.statusCode()).isEqualTo(200);
-        assertThat(found.headers().firstValue("X-Correlation-Id")).contains("corr-found");
+        assertPublicCorrelation(found, "corr-found");
         assertThat(found.body())
                 .contains("\"productId\":100")
                 .contains("\"name\":\"Keyboard\"")
@@ -223,9 +223,10 @@ class CatalogApplicationIT {
 
         HttpResponse<String> invalid = get(0, "catalog-reader", "tenant-a", "corr-invalid");
         assertThat(invalid.statusCode()).isEqualTo(400);
+        String invalidCorrelation = assertPublicCorrelation(invalid, "corr-invalid");
         assertThat(invalid.body())
                 .contains("\"code\":\"request.validation-failed\"")
-                .contains("\"correlationId\":\"corr-invalid\"");
+                .contains("\"correlationId\":\"" + invalidCorrelation + "\"");
 
         assertThat(jdbc.queryForObject(
                         "SELECT COUNT(*) FROM flyway_history_catalog WHERE success", Integer.class))
@@ -252,10 +253,13 @@ class CatalogApplicationIT {
                 probe("catalog-virtual-bob", "tenant-a", "corr-virtual-bob");
 
         assertThat(alice.statusCode()).isEqualTo(200);
+        String aliceCorrelation = assertPublicCorrelation(alice, "corr-virtual-alice");
+        String bobCorrelation = assertPublicCorrelation(bob, "corr-virtual-bob");
+        assertThat(aliceCorrelation).isNotEqualTo(bobCorrelation);
         assertThat(alice.body())
-                .isEqualTo("TENANT:tenant-a:SERVICE:catalog-client-a:USER:alice:corr-virtual-alice:true");
+                .isEqualTo("TENANT:tenant-a:SERVICE:catalog-client-a:USER:alice:" + aliceCorrelation + ":true");
         assertThat(bob.body())
-                .isEqualTo("TENANT:tenant-a:SERVICE:catalog-client-b:USER:bob:corr-virtual-bob:true");
+                .isEqualTo("TENANT:tenant-a:SERVICE:catalog-client-b:USER:bob:" + bobCorrelation + ":true");
         assertThat(virtualDispatchEvidence.awaitCompletions(Duration.ofSeconds(2)))
                 .as("both Servlet dispatches completed on their request threads")
                 .isTrue();
@@ -332,6 +336,13 @@ class CatalogApplicationIT {
                 .isInstanceOf(MissingExecutionContextException.class);
         assertThatThrownBy(() -> products.save(product))
                 .isInstanceOf(MissingExecutionContextException.class);
+    }
+
+    private static String assertPublicCorrelation(HttpResponse<String> response, String supplied) {
+        String correlation = response.headers().firstValue("X-Correlation-Id").orElseThrow();
+        assertThat(java.util.UUID.fromString(correlation).version()).isEqualTo(4);
+        assertThat(correlation).isNotEqualTo(supplied);
+        return correlation;
     }
 
     private HttpResponse<String> get(long productId, String token, String tenantId, String correlationId)
