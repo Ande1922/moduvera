@@ -254,11 +254,11 @@ class ServletRequestDiagnosticsIT {
     @org.springframework.web.bind.annotation.RestController
     static class MvcFixture {
         @org.springframework.web.bind.annotation.GetMapping("/mvc/error")
-        String error() { throw new IllegalStateException("token=advice-secret"); }
+        String error() { throw new IllegalStateException("request detail: advice-secret"); }
 
         @org.springframework.web.bind.annotation.GetMapping("/mvc/async-error")
         java.util.concurrent.Callable<String> asyncError() {
-            return () -> { throw new IllegalStateException("token=advice-secret"); };
+            return () -> { throw new IllegalStateException("request detail: advice-secret"); };
         }
 
         @org.springframework.web.bind.annotation.GetMapping("/mvc/status")
@@ -293,7 +293,7 @@ class ServletRequestDiagnosticsIT {
             var registration = new ServletRegistrationBean<HttpServlet>(new HttpServlet() {
                 @Override protected void doGet(HttpServletRequest request, HttpServletResponse response) throws IOException, jakarta.servlet.ServletException {
                     switch (request.getRequestURI()) {
-                        case "/fixture/error" -> throw new IllegalStateException("token=exception-secret");
+                        case "/fixture/error" -> throw new IllegalStateException("request detail: exception-secret");
                         case "/fixture/application-io" -> throw new IOException("application file read failed");
                         case "/fixture/wrapped-application-io" ->
                                 throw new jakarta.servlet.ServletException(new IOException("application dependency read failed"));
