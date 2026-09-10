@@ -9,6 +9,7 @@ import io.github.ande1922.moduvera.message.outbox.PublicationObserver;
 import io.github.ande1922.moduvera.message.publication.DurablePublication;
 import io.github.ande1922.moduvera.message.publication.ImmediatePublication;
 import io.github.ande1922.moduvera.messaging.kafka.JdbcDurablePublication;
+import io.github.ande1922.moduvera.messaging.kafka.InboundFailureDiagnostics;
 import io.github.ande1922.moduvera.messaging.kafka.JdbcInboxRepository;
 import io.github.ande1922.moduvera.messaging.kafka.JdbcMessagingDialect;
 import io.github.ande1922.moduvera.messaging.kafka.JdbcOutboxStore;
@@ -43,6 +44,11 @@ import org.springframework.transaction.support.TransactionTemplate;
 @AutoConfiguration(after = ModuveraDataMybatisPlusAutoConfiguration.class)
 @EnableConfigurationProperties(ModuveraMessagingKafkaProperties.class)
 public class ModuveraMessagingKafkaAutoConfiguration {
+
+    @Bean
+    static InboundFailureDiagnostics moduveraInboundFailureDiagnostics() {
+        return new InboundFailureDiagnostics();
+    }
 
     @Bean
     @ConditionalOnMissingBean

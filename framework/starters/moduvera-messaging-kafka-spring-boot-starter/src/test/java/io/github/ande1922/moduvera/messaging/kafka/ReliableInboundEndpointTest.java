@@ -2,6 +2,7 @@ package io.github.ande1922.moduvera.messaging.kafka;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 import io.github.ande1922.moduvera.context.Actor;
 import io.github.ande1922.moduvera.context.ActorType;
@@ -21,6 +22,16 @@ import io.github.ande1922.moduvera.message.SerializedMessage;
 import io.github.ande1922.moduvera.message.handler.ApplicationMessageHandler;
 import io.github.ande1922.moduvera.message.inbox.InboxRepository;
 import io.github.ande1922.moduvera.message.inbox.InboxTemplate;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import io.opentelemetry.context.Context;
+import io.opentelemetry.context.ContextKey;
+import java.util.List;
+import java.util.Map;
+import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import java.net.URI;
 import java.time.Clock;
 import java.time.Duration;
@@ -33,6 +44,11 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
 import org.springframework.messaging.Message;
+import org.springframework.messaging.MessageHandler;
+import org.springframework.messaging.support.ErrorMessage;
+import org.springframework.integration.handler.LoggingHandler;
+import org.springframework.integration.context.IntegrationContextUtils;
+import org.springframework.integration.config.IntegrationConfigUtils;
 
 class ReliableInboundEndpointTest {
 
@@ -167,6 +183,139 @@ class ReliableInboundEndpointTest {
         assertThat(ExecutionContextHolder.current()).isEmpty();
     }
 
+    @Test
+    void attemptsProjectIdentityAndRestoreCompleteContextOnRecoveryFailureAndInterruption() {
+        Logger logger = (Logger) LoggerFactory.getLogger("mq.consume");
+        var events = new ListAppender<ILoggingEvent>();
+        events.start();
+        logger.addAppender(events);
+        var previous = ExecutionContext.initiatedBy(
+                new TenantId("prior"), new Actor(ActorType.SERVICE, "worker"), "corr-prior");
+        ContextKey<String> extra = ContextKey.named("inbound-test-extra");
+        Context parent = Context.current().with(extra, "transport");
+        MDC.put("correlation_id", "prior-mdc");
+        MDC.put("unowned", "keep");
+        Map<String, String> before = MDC.getCopyOfContextMap();
+        try (var execution = ExecutionContextHolder.open(previous); var telemetry = parent.makeCurrent()) {
+            for (String outcome : List.of("recovery", "terminal", "exhausted", "error", "interrupted")) {
+                var attempts = new AtomicInteger();
+                var consumer = new ReliableMessageConsumerFactory(mapper, 2,
+                                outcome.equals("interrupted") ? Duration.ofSeconds(1) : Duration.ZERO,
+                                Duration.ofSeconds(1))
+                        .forContract(contract(), ignored -> {
+                            assertThat(Context.current().get(extra)).isEqualTo("transport");
+                            assertThat(MDC.get("correlation_id")).isEqualTo("corr-message");
+                            assertThat(MDC.get("tenant_id")).isEqualTo("tenant-a");
+                            assertThat(MDC.get("actor_id")).isEqualTo("notes-service");
+                            assertThat(MDC.get("initiator_id")).isEqualTo("alice");
+                            assertThat(ExecutionContextHolder.require().actor().permissions())
+                                    .containsExactly("notes:consume");
+                            int attempt = attempts.incrementAndGet();
+                            switch (outcome) {
+                                case "terminal" -> throw new NonRetryableMessageException("private payload");
+                                case "error" -> throw new AssertionError("private payload");
+                                case "interrupted" -> Thread.currentThread().interrupt();
+                                default -> { }
+                            }
+                            if (!outcome.equals("recovery") || attempt == 1) {
+                                throw new IllegalStateException("private payload");
+                            }
+                        });
+                Runnable consume = () -> consumer.accept(mapper.toSpringMessage(message(outcome, "notes.events")));
+                if (outcome.equals("recovery")) {
+                    consume.run();
+                } else {
+                    assertThatThrownBy(consume::run).isInstanceOf(
+                            outcome.equals("error") ? AssertionError.class : NonRetryableMessageException.class);
+                }
+                assertThat(ExecutionContextHolder.require()).isSameAs(previous);
+                assertThat(Context.current()).isSameAs(parent);
+                assertThat(MDC.getCopyOfContextMap()).isEqualTo(before);
+                if (outcome.equals("interrupted")) {
+                    assertThat(Thread.interrupted()).isTrue();
+                }
+            }
+            assertThat(events.list.stream().filter(event -> event.getLevel() == Level.INFO)).hasSize(7);
+            assertThat(events.list.stream().filter(event -> event.getLevel() == Level.WARN)).hasSize(3);
+            assertThat(events.list).allSatisfy(event -> {
+                assertThat(event.getThrowableProxy()).isNull();
+                assertThat(event.getFormattedMessage()).doesNotContain("private payload");
+                assertThat(event.getKeyValuePairs()).noneSatisfy(pair ->
+                        assertThat(String.valueOf(pair.value)).contains("private payload"));
+            });
+        } finally {
+            Thread.interrupted();
+            logger.detachAppender(events);
+            events.stop();
+            MDC.clear();
+        }
+    }
+
+    @Test
+    void finalLoggerRestoresEachFailureEvenWhenTheApplicationReusesOneException() {
+        var original = new NonRetryableMessageException("private payload");
+        var consumer = new ReliableMessageConsumerFactory(mapper).forContract(contract(), ignored -> {
+            throw original;
+        });
+        Throwable first = catchThrowable(() -> consumer.accept(
+                mapper.toSpringMessage(message("first", "notes.events", "corr-first"))));
+        Throwable second = catchThrowable(() -> consumer.accept(
+                mapper.toSpringMessage(message("second", "notes.events", "corr-second"))));
+        assertThat(first).isNotSameAs(second).hasCause(original);
+        assertThat(second).hasCause(original);
+        assertThat(original.getSuppressed()).isEmpty();
+        var interruptedConsumer = new ReliableMessageConsumerFactory(mapper, 2,
+                Duration.ofMillis(1), Duration.ofMillis(1)).forContract(contract(), ignored -> {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("private payload");
+                });
+        Throwable interrupted = catchThrowable(() -> interruptedConsumer.accept(
+                mapper.toSpringMessage(message("interrupted", "notes.events", "corr-interrupted"))));
+        assertThat(Thread.interrupted()).isTrue();
+        assertThat(interrupted).isInstanceOf(NonRetryableMessageException.class)
+                .hasMessage("message retry interrupted");
+        var processor = new InboundFailureDiagnostics();
+        var originalLogger = new LoggingHandler(LoggingHandler.Level.ERROR);
+        assertThat(processor.postProcessAfterInitialization(originalLogger, "customLogger")).isSameAs(originalLogger);
+        MessageHandler handler = (MessageHandler) processor.postProcessAfterInitialization(originalLogger,
+                IntegrationContextUtils.ERROR_LOGGER_BEAN_NAME + IntegrationConfigUtils.HANDLER_ALIAS_SUFFIX);
+        Logger logger = (Logger) LoggerFactory.getLogger("mq.consume.failure");
+        var events = new ListAppender<ILoggingEvent>() {
+            @Override
+            protected void append(ILoggingEvent event) {
+                event.prepareForDeferredProcessing();
+                super.append(event);
+            }
+        };
+        events.start();
+        logger.addAppender(events);
+        var previous = ExecutionContext.initiatedBy(new TenantId("prior"),
+                new Actor(ActorType.SERVICE, "worker"), "corr-prior");
+        MDC.put("correlation_id", "prior-mdc");
+        try (var ignored = ExecutionContextHolder.open(previous)) {
+            // Deliberately handle the older failure after the newer one was created.
+            handler.handleMessage(new ErrorMessage(first));
+            handler.handleMessage(new ErrorMessage(second));
+            handler.handleMessage(new ErrorMessage(interrupted));
+            assertThat(ExecutionContextHolder.require()).isSameAs(previous);
+            assertThat(MDC.get("correlation_id")).isEqualTo("prior-mdc");
+            assertThat(events.list).hasSize(3);
+            assertThat(events.list).extracting(event -> event.getMDCPropertyMap().get("correlation_id"))
+                    .containsExactly("corr-first", "corr-second", "corr-interrupted");
+            assertThat(events.list).allSatisfy(event -> {
+                assertThat(event.getLevel()).isEqualTo(Level.ERROR);
+                assertThat(event.getMDCPropertyMap()).containsEntry("actor_id", "notes-service");
+                assertThat(event.getFormattedMessage()).isEqualTo("消息处理最终失败");
+                assertThat(event.getKeyValuePairs()).noneSatisfy(pair ->
+                        assertThat(pair.key).isIn("event.outcome", "duration_ms", "retry.attempt"));
+            });
+        } finally {
+            logger.detachAppender(events);
+            events.stop();
+            MDC.clear();
+        }
+    }
+
     private static InboundMessageContract contract() {
         return new InboundMessageContract(
                 MessageKind.EVENT,
@@ -177,6 +326,10 @@ class ReliableInboundEndpointTest {
     }
 
     private static SerializedMessage message(String messageId, String destination) {
+        return message(messageId, destination, "corr-message");
+    }
+
+    private static SerializedMessage message(String messageId, String destination, String correlation) {
         return SerializedMessage.json(
                 new MessageDescriptor(
                         new MessageId(messageId),
@@ -187,7 +340,7 @@ class ReliableInboundEndpointTest {
                         Instant.parse("2026-08-30T00:00:00Z"),
                         new TenantId("tenant-a"),
                         new Actor(ActorType.SERVICE, "wire-producer", Set.of("wire:permission")),
-                        "corr-message",
+                        correlation,
                         null,
                         new Initiator(ActorType.USER, "alice"),
                         "tenant-a:1"),

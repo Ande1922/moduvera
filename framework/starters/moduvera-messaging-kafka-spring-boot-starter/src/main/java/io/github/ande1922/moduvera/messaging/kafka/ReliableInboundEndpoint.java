@@ -55,16 +55,12 @@ final class ReliableInboundEndpoint implements Consumer<Message<byte[]>> {
         Duration backoff = initialBackoff;
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
-                ExecutionContextHolder.run(context, () -> inboundAdapter.accept(serialized));
+                executeAttempt(context, serialized, message.getPayload().length, attempt);
                 return;
             } catch (NonRetryableMessageException terminal) {
                 throw terminal;
             } catch (RuntimeException retryable) {
-                if (attempt == maxAttempts) {
-                    throw new NonRetryableMessageException(
-                            "message handling exhausted " + maxAttempts + " attempts", retryable);
-                }
-                pause(backoff);
+                pause(backoff, context);
                 backoff = backoff.multipliedBy(2);
                 if (backoff.compareTo(maxBackoff) > 0) {
                     backoff = maxBackoff;
@@ -74,7 +70,35 @@ final class ReliableInboundEndpoint implements Consumer<Message<byte[]>> {
         throw new IllegalStateException("unreachable retry state");
     }
 
-    private static void pause(Duration backoff) {
+    private void executeAttempt(
+            ExecutionContext context, SerializedMessage serialized, int bodySize, int attempt) {
+        try (var executionScope = ExecutionContextHolder.open(context);
+                var observation = new InboundAttemptObservation(serialized, bodySize, attempt, maxAttempts)) {
+            try {
+                inboundAdapter.accept(serialized);
+                observation.succeeded();
+            } catch (NonRetryableMessageException terminal) {
+                observation.failed(terminal, false);
+                var owned = new NonRetryableMessageException(terminal.getMessage(), terminal);
+                InboundFailureDiagnostics.retain(owned);
+                throw owned;
+            } catch (RuntimeException retryable) {
+                observation.failed(retryable, attempt < maxAttempts);
+                if (attempt == maxAttempts) {
+                    var exhausted = new NonRetryableMessageException(
+                            "message handling exhausted " + maxAttempts + " attempts", retryable);
+                    InboundFailureDiagnostics.retain(exhausted);
+                    throw exhausted;
+                }
+                throw retryable;
+            } catch (Error failure) {
+                observation.failed(failure, false);
+                throw failure;
+            }
+        }
+    }
+
+    private static void pause(Duration backoff, ExecutionContext context) {
         if (backoff.isZero()) {
             return;
         }
@@ -82,7 +106,11 @@ final class ReliableInboundEndpoint implements Consumer<Message<byte[]>> {
             Thread.sleep(backoff);
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
-            throw new NonRetryableMessageException("message retry interrupted", interrupted);
+            var failure = new NonRetryableMessageException("message retry interrupted", interrupted);
+            try (var ignored = ExecutionContextHolder.open(context)) {
+                InboundFailureDiagnostics.retain(failure);
+            }
+            throw failure;
         }
     }
 }
