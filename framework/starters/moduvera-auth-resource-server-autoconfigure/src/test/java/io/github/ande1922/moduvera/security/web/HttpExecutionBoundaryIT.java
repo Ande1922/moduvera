@@ -65,11 +65,22 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
         webEnvironment = WebEnvironment.RANDOM_PORT,
         properties = {
             "spring.threads.virtual.enabled=false",
+            "moduvera.web.internal-ingress=true",
             "spring.security.oauth2.resourceserver.jwt.issuer-uri=https://identity.example.test",
             "spring.security.oauth2.resourceserver.jwt.audiences=boundary-test"
         })
 class HttpExecutionBoundaryIT {
 
+    private static final List<tools.jackson.databind.JsonNode> DIAGNOSTICS = new CopyOnWriteArrayList<>();
+    private final ch.qos.logback.core.AppenderBase<ch.qos.logback.classic.spi.ILoggingEvent> diagnosticAppender =
+            new ch.qos.logback.core.AppenderBase<>() {
+                private final io.github.ande1922.moduvera.logging.ModuveraEcsStructuredLogFormatter formatter =
+                        new io.github.ande1922.moduvera.logging.ModuveraEcsStructuredLogFormatter(new org.springframework.mock.env.MockEnvironment());
+                private final tools.jackson.databind.ObjectMapper mapper = new tools.jackson.databind.ObjectMapper();
+                @Override protected void append(ch.qos.logback.classic.spi.ILoggingEvent event) {
+                    DIAGNOSTICS.add(mapper.readTree(formatter.format(event)));
+                }
+            };
     private static final HttpClient HTTP = HttpClient.newHttpClient();
     private static final RSAKey SIGNING_KEY = signingKey();
     private static final RSAKey WRONG_KEY = signingKey();
@@ -85,6 +96,54 @@ class HttpExecutionBoundaryIT {
     @BeforeEach
     void resetEvidence() {
         evidence.reset();
+        DIAGNOSTICS.clear();
+        diagnosticAppender.start();
+        ((ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME)).addAppender(diagnosticAppender);
+    }
+
+    @org.junit.jupiter.api.AfterEach
+    void detachDiagnosticOutput() {
+        ((ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME)).detachAppender(diagnosticAppender);
+        diagnosticAppender.stop();
+    }
+
+    @Test
+    void repairsInternalCorrelationOnceAndCapturesTrustedIdentityAfterScopeCloses() throws Exception {
+        String user = token(ENCODER, "diagnostic-user", "tenant-a", List.of("tenant:read"));
+        for (String candidate : new String[] {null, "invalid value", "valid-C.42"}) {
+            DIAGNOSTICS.clear();
+            var response = get("/managed/tenant", user, "tenant-a", candidate);
+            assertThat(response.statusCode()).isEqualTo(200);
+            String correlation = response.headers().firstValue("X-Correlation-Id").orElseThrow();
+            if ("valid-C.42".equals(candidate)) {
+                assertThat(correlation).isEqualTo(candidate);
+            } else {
+                assertThat(java.util.UUID.fromString(correlation).version()).isEqualTo(4);
+            }
+            var event = diagnosticEvent(correlation);
+            assertThat(event.path("actor_id").asString()).isEqualTo("diagnostic-user");
+            assertThat(event.path("tenant_id").asString()).isEqualTo("tenant-a");
+            assertThat(event.path("user_id").asString()).isEqualTo("diagnostic-user");
+            assertThat(evidence.contextAfterDispatch()).containsOnly(false);
+            var recovery = DIAGNOSTICS.stream().filter(line -> "WARN".equals(line.path("log").path("level").asString())
+                    && line.path("log").path("logger").asString().endsWith("ServletRequestDiagnostics")).toList();
+            assertThat(recovery).hasSize("valid-C.42".equals(candidate) ? 0 : 1);
+            assertThat(DIAGNOSTICS.toString()).doesNotContain("invalid value");
+        }
+    }
+
+    private static tools.jackson.databind.JsonNode diagnosticEvent(String correlation) throws InterruptedException {
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+        while (System.nanoTime() < deadline) {
+            var matches = DIAGNOSTICS.stream().filter(event -> "http.request".equals(event.path("log").path("logger").asString())
+                    && correlation.equals(event.path("correlation_id").asString())).toList();
+            if (!matches.isEmpty()) {
+                assertThat(matches).hasSize(1);
+                return matches.getFirst();
+            }
+            Thread.sleep(10);
+        }
+        throw new AssertionError("missing request completion");
     }
 
     @Test
@@ -100,6 +159,9 @@ class HttpExecutionBoundaryIT {
         HttpResponse<String> tenantDenied =
                 get("/managed/tenant", platformUser, null, "corr-tenant-denied");
         assertProblem(tenantDenied, 403, "security.forbidden", "corr-tenant-denied");
+        var deniedDiagnostic = diagnosticEvent("corr-tenant-denied");
+        assertThat(deniedDiagnostic.path("actor_id").asString()).isEqualTo("platform-user");
+        assertThat(deniedDiagnostic.has("tenant_id")).isFalse();
         assertThat(evidence.businessInvocations()).isEqualTo(1);
 
         String tenantUser = token(ENCODER, "tenant-user", "tenant-a", List.of("tenant:read"));
@@ -279,8 +341,15 @@ class HttpExecutionBoundaryIT {
     }
 
     private static void assertProblem(
-            HttpResponse<String> response, int status, String code, String correlationId) {
+            HttpResponse<String> response, int status, String code, String correlationId) throws InterruptedException {
         assertThat(response.statusCode()).isEqualTo(status);
+        assertThat(response.headers().firstValue("X-Correlation-Id")).contains(correlationId);
+        var event = diagnosticEvent(correlationId);
+        assertThat(event.path("event").path("outcome").asString()).isEqualTo("failure");
+        assertThat(event.path("http").path("response").path("status_code").asInt()).isEqualTo(status);
+        if (status == 401) {
+            assertThat(event.has("actor_id")).isFalse();
+        }
         assertThat(response.headers().firstValue("Content-Type").orElse(""))
                 .startsWith("application/problem+json");
         assertThat(response.body())

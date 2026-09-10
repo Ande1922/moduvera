@@ -1,8 +1,7 @@
 package io.github.ande1922.moduvera.security.web;
 
-import io.github.ande1922.moduvera.context.ExecutionContext;
+import io.github.ande1922.moduvera.web.ServletRequestDiagnostics;
 import jakarta.servlet.http.HttpServletRequest;
-import java.util.UUID;
 
 public final class DefaultRequestCorrelationIdResolver implements RequestCorrelationIdResolver {
 
@@ -11,15 +10,6 @@ public final class DefaultRequestCorrelationIdResolver implements RequestCorrela
 
     @Override
     public String resolve(HttpServletRequest request) {
-        Object established = request.getAttribute(REQUEST_ATTRIBUTE);
-        if (established != null) {
-            return established.toString();
-        }
-        String candidate = request.getHeader(HEADER);
-        String resolved = ExecutionContext.isValidCorrelationId(candidate)
-                ? candidate
-                : UUID.randomUUID().toString();
-        request.setAttribute(REQUEST_ATTRIBUTE, resolved);
-        return resolved;
+        return ServletRequestDiagnostics.establish(request, false).correlationId();
     }
 }

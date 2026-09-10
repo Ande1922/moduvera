@@ -1,6 +1,7 @@
 package io.github.ande1922.moduvera.security.web;
 
 import io.github.ande1922.moduvera.context.ActorType;
+import io.github.ande1922.moduvera.web.ServletRequestDiagnostics;
 import io.github.ande1922.moduvera.context.ExecutionContext;
 import io.github.ande1922.moduvera.context.ExecutionContextHolder;
 import io.github.ande1922.moduvera.context.ExecutionScope;
@@ -55,6 +56,8 @@ public final class ExecutionContextHandlerInterceptor implements AsyncHandlerInt
         }
 
         TrustedJwtPrincipal principal = token.trustedPrincipal();
+        ServletRequestDiagnostics.establish(request, false)
+                .authenticated(principal.actor(), principal.initiator(), principal.assertedTenant());
         ExecutionScope executionScope = switch (mode(handlerMethod)) {
             case PLATFORM -> ExecutionScope.platform();
             case TENANT -> ExecutionScope.tenant(resolveTenant(request, principal));
@@ -64,6 +67,7 @@ public final class ExecutionContextHandlerInterceptor implements AsyncHandlerInt
                 principal.actor(),
                 principal.initiator(),
                 correlationIds.resolve(request));
+        ServletRequestDiagnostics.establish(request, false).authenticated(context);
         request.setAttribute(SCOPE_ATTRIBUTE, ExecutionContextHolder.open(context));
         return true;
     }

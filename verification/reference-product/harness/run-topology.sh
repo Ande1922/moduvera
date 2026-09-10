@@ -160,7 +160,14 @@ start_app() {
     debug_port="$(reference_debug_port "$app")"
     java_tool_options="$java_tool_options -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=127.0.0.1:$debug_port"
   fi
-  env "JAVA_TOOL_OPTIONS=$java_tool_options" "$@" \
+  local ingress_options=()
+  case "$app" in
+    catalog|catalog-app|order|order-app|inventory|inventory-app)
+      # Only the local reference service tier trusts upstream correlation.
+      ingress_options=("SERVER_ADDRESS=127.0.0.1" "MODUVERA_WEB_INTERNAL_INGRESS=true")
+      ;;
+  esac
+  env "JAVA_TOOL_OPTIONS=$java_tool_options" "${ingress_options[@]}" "$@" \
     "$JAVA_BIN" -jar "$PROJECT_ROOT/$jar" >"$RUN_DIR/$app.log" 2>&1 &
   echo $! >"$RUN_DIR/$app.pid"
 }

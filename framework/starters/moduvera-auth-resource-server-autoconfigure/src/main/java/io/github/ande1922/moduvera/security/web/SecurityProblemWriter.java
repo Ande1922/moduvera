@@ -42,6 +42,9 @@ public final class SecurityProblemWriter implements AuthenticationEntryPoint, Ac
 
     private void write(HttpServletRequest request, HttpServletResponse response, int status, String code, String detail)
             throws IOException {
+        if (response.isCommitted()) {
+            return;
+        }
         response.setStatus(status);
         response.setContentType(MediaType.APPLICATION_PROBLEM_JSON_VALUE);
         Map<String, Object> problem = new LinkedHashMap<>();

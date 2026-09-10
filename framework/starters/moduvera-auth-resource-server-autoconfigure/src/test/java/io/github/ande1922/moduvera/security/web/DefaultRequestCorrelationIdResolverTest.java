@@ -13,19 +13,21 @@ class DefaultRequestCorrelationIdResolverTest {
     @Test
     void reusesCorrelationIdEstablishedByTheWebStarter() {
         var request = new MockHttpServletRequest();
-        request.setAttribute(DefaultRequestCorrelationIdResolver.REQUEST_ATTRIBUTE, "corr-42");
+        request.addHeader(DefaultRequestCorrelationIdResolver.HEADER, "corr-42");
+        io.github.ande1922.moduvera.web.ServletRequestDiagnostics.establish(request, true);
 
         assertThat(resolver.resolve(request)).isEqualTo("corr-42");
     }
 
     @Test
-    void establishesAnAcceptedHeaderForLaterRequestPhases() {
+    void ignoresPublicCorrelationAndReusesTheRequestState() {
         var request = new MockHttpServletRequest();
         request.addHeader(DefaultRequestCorrelationIdResolver.HEADER, "corr-header");
 
-        assertThat(resolver.resolve(request)).isEqualTo("corr-header");
-        assertThat(request.getAttribute(DefaultRequestCorrelationIdResolver.REQUEST_ATTRIBUTE))
-                .isEqualTo("corr-header");
+        String generated = resolver.resolve(request);
+        assertThat(generated).isNotEqualTo("corr-header");
+        assertThat(java.util.UUID.fromString(generated).version()).isEqualTo(4);
+        assertThat(resolver.resolve(request)).isEqualTo(generated);
     }
 
     @Test

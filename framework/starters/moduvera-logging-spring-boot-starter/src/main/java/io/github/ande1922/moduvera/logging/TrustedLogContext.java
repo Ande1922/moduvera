@@ -1,9 +1,11 @@
 package io.github.ande1922.moduvera.logging;
 
+import io.github.ande1922.moduvera.context.Actor;
 import io.github.ande1922.moduvera.context.ActorType;
 import io.github.ande1922.moduvera.context.ExecutionContext;
 import io.github.ande1922.moduvera.context.ExecutionContextHolder;
 import io.github.ande1922.moduvera.context.ExecutionScope;
+import io.github.ande1922.moduvera.context.Initiator;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanContext;
 import java.util.LinkedHashMap;
@@ -26,6 +28,10 @@ final class TrustedLogContext {
     private TrustedLogContext() {}
 
     static Map<String, String> currentFields() {
+        Map<String, String> diagnostic = DiagnosticLogSnapshot.currentFields();
+        if (diagnostic != null) {
+            return diagnostic;
+        }
         Map<String, String> fields = new LinkedHashMap<>();
         SpanContext spanContext = Span.current().getSpanContext();
         if (spanContext.isValid()) {
@@ -36,17 +42,21 @@ final class TrustedLogContext {
         return fields;
     }
 
-    private static void addExecutionContext(Map<String, String> fields, ExecutionContext context) {
+    static void addExecutionContext(Map<String, String> fields, ExecutionContext context) {
         fields.put("correlation_id", context.correlationId());
         if (context.scope() instanceof ExecutionScope.Tenant tenant) {
             fields.put("tenant_id", tenant.tenantId().value());
         }
-        fields.put("actor_type", context.actor().type().name());
-        fields.put("actor_id", context.actor().subjectId());
-        fields.put("initiator_type", context.initiator().type().name());
-        fields.put("initiator_id", context.initiator().subjectId());
-        if (context.actor().type() == ActorType.USER) {
-            fields.put("user_id", context.actor().subjectId());
+        addIdentity(fields, context.actor(), context.initiator());
+    }
+
+    static void addIdentity(Map<String, String> fields, Actor actor, Initiator initiator) {
+        fields.put("actor_type", actor.type().name());
+        fields.put("actor_id", actor.subjectId());
+        fields.put("initiator_type", initiator.type().name());
+        fields.put("initiator_id", initiator.subjectId());
+        if (actor.type() == ActorType.USER) {
+            fields.put("user_id", actor.subjectId());
         }
     }
 }

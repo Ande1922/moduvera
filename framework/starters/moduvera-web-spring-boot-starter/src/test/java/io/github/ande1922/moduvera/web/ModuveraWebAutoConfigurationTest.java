@@ -27,7 +27,8 @@ import org.springframework.web.bind.annotation.RestController;
 class ModuveraWebAutoConfigurationTest {
 
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
-            .withConfiguration(AutoConfigurations.of(ModuveraWebAutoConfiguration.class));
+            .withConfiguration(AutoConfigurations.of(ModuveraWebAutoConfiguration.class))
+            .withPropertyValues("moduvera.web.internal-ingress=true");
 
     @Test
     void suppliesTheOpinionatedWebBoundaryBeans() {

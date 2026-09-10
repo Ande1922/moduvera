@@ -23,7 +23,7 @@ class ApiExceptionHandlerTest {
     void setUp() {
         mockMvc = MockMvcBuilders.standaloneSetup(new FailingController())
                 .setControllerAdvice(new ApiExceptionHandler(exception -> HttpStatus.UNPROCESSABLE_CONTENT))
-                .addFilters(new CorrelationIdFilter())
+                .addFilters(new CorrelationIdFilter(true))
                 .build();
     }
 

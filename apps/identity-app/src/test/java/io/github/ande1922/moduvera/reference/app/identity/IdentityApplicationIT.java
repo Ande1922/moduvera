@@ -422,6 +422,9 @@ class IdentityApplicationIT {
     private static void assertProblem(
             HttpResponse<String> response, int expectedStatus, String expectedCode) throws Exception {
         assertThat(response.statusCode()).isEqualTo(expectedStatus);
+        String correlation = response.headers().firstValue("X-Correlation-Id").orElseThrow();
+        assertThat(java.util.UUID.fromString(correlation).version()).isEqualTo(4);
+        assertThat(JSON.readTree(response.body()).path("correlationId").asString()).isEqualTo(correlation);
         assertThat(JSON.readTree(response.body()).get("code").asString()).isEqualTo(expectedCode);
     }
 

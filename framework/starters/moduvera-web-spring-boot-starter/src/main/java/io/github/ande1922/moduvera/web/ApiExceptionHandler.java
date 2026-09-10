@@ -85,9 +85,6 @@ public final class ApiExceptionHandler {
     }
 
     private static void addCorrelation(ProblemDetail problem, HttpServletRequest request) {
-        Object correlationId = request.getAttribute(CorrelationIdFilter.REQUEST_ATTRIBUTE);
-        if (correlationId != null) {
-            problem.setProperty("correlationId", correlationId.toString());
-        }
+        problem.setProperty("correlationId", ServletRequestDiagnostics.establish(request, false).correlationId());
     }
 }
