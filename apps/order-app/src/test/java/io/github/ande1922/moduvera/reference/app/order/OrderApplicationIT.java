@@ -107,6 +107,7 @@ class OrderApplicationIT {
 
     private static final HttpClient HTTP = HttpClient.newHttpClient();
     private static final ObjectMapper JSON = new ObjectMapper();
+    private static final String CATALOG_SERVICE_TOKEN = UUID.randomUUID().toString();
     private static final HttpServer CATALOG = catalogServer();
     private static final AtomicInteger SERVICE_TOKEN_REQUESTS = new AtomicInteger();
     private static final ConcurrentLinkedQueue<String> SERVICE_TOKEN_BODIES =
@@ -360,9 +361,9 @@ class OrderApplicationIT {
                         CatalogRequest::correlationId)
                 .containsExactly(
                         org.assertj.core.groups.Tuple.tuple(
-                                "Bearer catalog-service-token", "tenant-a", firstCorrelation),
+                                "Bearer " + CATALOG_SERVICE_TOKEN, "tenant-a", firstCorrelation),
                         org.assertj.core.groups.Tuple.tuple(
-                                "Bearer catalog-service-token", "tenant-a", secondCorrelation));
+                                "Bearer " + CATALOG_SERVICE_TOKEN, "tenant-a", secondCorrelation));
     }
 
     @Test
@@ -740,7 +741,7 @@ class OrderApplicationIT {
         String tenantId = exchange.getRequestHeaders().getFirst("Tenant-Id");
         String correlationId = exchange.getRequestHeaders().getFirst("X-Correlation-Id");
         CATALOG_REQUESTS.add(new CatalogRequest(authorization, tenantId, correlationId));
-        boolean trusted = "Bearer catalog-service-token".equals(authorization)
+        boolean trusted = ("Bearer " + CATALOG_SERVICE_TOKEN).equals(authorization)
                 && "tenant-a".equals(tenantId)
                 && correlationId != null;
         if (!trusted || "999".equals(productId)) {
@@ -767,7 +768,7 @@ class OrderApplicationIT {
                         || body.contains("\"initiatorId\":\"reuse-user\""));
         respond(exchange, trusted ? 200 : 401,
                 trusted
-                        ? "{\"accessToken\":\"catalog-service-token\",\"expiresAt\":\""
+                        ? "{\"accessToken\":\"" + CATALOG_SERVICE_TOKEN + "\",\"expiresAt\":\""
                                 + Instant.now().plusSeconds(300) + "\"}"
                         : "{\"status\":401}");
     }
