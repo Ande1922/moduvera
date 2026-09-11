@@ -152,6 +152,85 @@ public final class JdbcOutboxStore implements OutboxStore, OutboxAdministration 
                 : Optional.of(new ClaimedOutboxBatch(claimToken, messages));
     }
 
+    @Override
+    public Optional<ClaimedOutboxMessage> preparePublication(
+            ClaimedOutboxMessage claimed, String claimToken) {
+        java.util.Objects.requireNonNull(claimed, "claimed");
+        if (claimToken == null || claimToken.isBlank()) {
+            return Optional.empty();
+        }
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            throw new IllegalStateException("outbox preparation requires its own committed transaction");
+        }
+        try (var preparation = new OutboxPublicationPreparation()) {
+            try {
+                var result = transactions.execute(status -> {
+                    if (!status.isNewTransaction()
+                            || !TransactionSynchronizationManager.isActualTransactionActive()
+                            || !TransactionSynchronizationManager.isSynchronizationActive()
+                            || TransactionSynchronizationManager.isCurrentTransactionReadOnly()) {
+                        throw new IllegalStateException("outbox preparation requires a new writable transaction");
+                    }
+                    TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                        @Override
+                        public void afterCompletion(int status) {
+                            if (status == STATUS_COMMITTED) {
+                                preparation.committed();
+                            }
+                        }
+                    });
+                    return prepareClaimedPublication(claimed.message().descriptor().id(), claimToken, preparation);
+                });
+                // A locally rollback-only TransactionTemplate may return its callback result normally.
+                preparation.requireCommitted();
+                preparation.recordRecovery();
+                return java.util.Objects.requireNonNull(result, "preparation result");
+            } catch (RuntimeException | Error failure) {
+                preparation.failed(failure);
+                throw failure;
+            }
+        }
+    }
+
+    private Optional<ClaimedOutboxMessage> prepareClaimedPublication(
+            MessageId id, String claimToken, OutboxPublicationPreparation preparation) {
+        Map<String, Object> parameters = new HashMap<>();
+        parameters.put("messageId", id.value());
+        parameters.put("claimToken", claimToken);
+        parameters.put("pending", PENDING);
+        String owned = "message_id = :messageId AND status = :pending AND claim_token = :claimToken"
+                + " AND claim_expires_at > " + claimPreparationTimestamp();
+        var rows = jdbc.query("SELECT * FROM moduvera_message_outbox WHERE " + owned + " FOR UPDATE",
+                parameters, (resultSet, rowNumber) -> claimedMessage(resultSet));
+        if (rows.isEmpty()) {
+            return Optional.empty();
+        }
+        var current = rows.getFirst();
+        var replacement = preparation.replacement(current);
+        if (replacement == null) {
+            return Optional.of(current);
+        }
+        parameters.put("publicationParent", replacement.traceParent());
+        parameters.put("publicationState", replacement.traceState());
+        int updated = jdbc.update("""
+                UPDATE moduvera_message_outbox
+                   SET publication_traceparent = :publicationParent,
+                       publication_tracestate = :publicationState
+                 WHERE %s
+                """.formatted(owned), parameters);
+        if (updated != 1) {
+            return Optional.empty();
+        }
+        preparation.stored(current);
+        // Return the persisted metadata, never a temporary SDK Context or the caller's stale snapshot.
+        return jdbc.query("SELECT * FROM moduvera_message_outbox WHERE message_id = :messageId",
+                parameters, (resultSet, rowNumber) -> claimedMessage(resultSet)).stream().findFirst();
+    }
+
+    private String claimPreparationTimestamp() {
+        return dialect == JdbcMessagingDialect.MYSQL ? "CURRENT_TIMESTAMP(6)" : "clock_timestamp()";
+    }
+
     private List<ClaimedOutboxMessage> claimPostgresql(
             int limit, Duration lease, String claimToken) {
         return jdbc.query(

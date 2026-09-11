@@ -194,3 +194,48 @@ fixture retains and counts these native MySQL CLIENT spans separately from
 append spans, including driver error statuses during metadata/transaction work.
 The analyzer scans all exports for unsafe query/exception content; it does not
 interpret native driver span counts as append attempts or committed outcomes.
+
+## Claim-owned publication preparation
+
+The JDBC worker path calls `OutboxStore.preparePublication` before transport.
+The adapter rereads the current pending row under its claim token and unexpired
+lease, locks it, and uses the standard W3C propagator to assess publication
+validity. A valid parent is reused; invalid tracestate is discarded by standard
+extraction and does not make an otherwise valid traceparent a different trace.
+The pure stored value remains available to the execution adapter.
+
+Missing/invalid parents receive a short `outbox.prepare` INTERNAL root from the
+existing governed SDK, linking valid immutable creation. The token/lease-fenced
+update changes only the publication pair. Generation, creation, original C and
+all message/business fields remain unchanged. PostgreSQL uses current clock time
+at the update, so a lease that expires during preparation cannot admit a write.
+The returned values are reread from the database. The preparation transaction
+must report committed completion before admission; a rollback-only callback
+return is not sufficient. Caller-owned transactions are rejected because their
+future commit cannot be established before send. As with the existing JDBC
+claim path, JDBC operations and transaction operations must use the same
+DataSource. No preparation wake or Broker-success fact is added.
+
+After an accepted repair commits, `outbox.recovery` emits one safe WARN that
+explicitly records broken trace continuity, under original per-message C/tenant/
+Actor/Initiator diagnostic fields. It does not install business authorization
+or copy the management identity. The short scope restores the caller on normal
+and exceptional exits. Rejected, stale and rolled-back candidates emit no
+committed recovery fact. Ordinary library runs without a valid SDK retain
+missing metadata without invented IDs; they do not qualify governed tracing.
+
+The worker defers failed claim admission, rechecks its monotonic send-start
+budget after preparation, and retains its existing retry/terminal/interruption
+decisions. Preparation-only failures do not create broker timing samples; the
+existing actual-send-plus-state-write Observer duration remains unchanged.
+
+`PublicationPreparationIT` uses real PostgreSQL/MySQL transactions, independent
+connections, concurrent claim owners, a real database constraint failure and
+deterministic rollback/lease fault windows. Its transport callback is a
+committed-state admission probe, not evidence of Broker delivery. Run the
+locked-Agent fixture with `verification/governed-observability/verify-preparation-fixture.sh`
+and reconcile it with `analyze_preparation_fixture.py`; reuse the existing
+locked Agent/extension and OTLP receiver configuration. All native Connector/J
+spans are separately counted and safety-checked as in the append fixture.
+Publication execution Context restoration, Kafka ACK/writeback recovery and
+independent process restarts remain separate Relay lifecycle qualification.

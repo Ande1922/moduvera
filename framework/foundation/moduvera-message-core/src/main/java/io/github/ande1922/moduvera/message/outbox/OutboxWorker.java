@@ -91,17 +91,31 @@ public final class OutboxWorker {
         int staleUpdates = 0;
         for (int index = 0; index < claimed.messages().size(); index++) {
             if (elapsedSince(claimStarted) >= sendStartBudgetNanos) {
-                deferred = claimed.messages().size() - index;
+                deferred += claimed.messages().size() - index;
                 break;
             }
             ClaimedOutboxMessage entry = claimed.messages().get(index);
-            long sendStarted = monotonicNanos.getAsLong();
+            long sendStarted = 0;
+            boolean sendAttempted = false;
             try {
+                var prepared = store.preparePublication(entry, claimed.claimToken());
+                if (prepared.isEmpty()) {
+                    deferred++;
+                    continue;
+                }
+                entry = prepared.orElseThrow();
+                if (elapsedSince(claimStarted) >= sendStartBudgetNanos) {
+                    deferred += claimed.messages().size() - index;
+                    break;
+                }
+                // Keep the existing observer's send-plus-writeback duration, excluding preparation.
+                sendStarted = monotonicNanos.getAsLong();
+                sendAttempted = true;
                 transport.send(entry.message());
             } catch (RuntimeException failure) {
                 if (wasInterrupted(failure)) {
                     Thread.currentThread().interrupt();
-                    deferred = claimed.messages().size() - index;
+                    deferred += claimed.messages().size() - index;
                     break;
                 }
                 PublicationObserver.Result result;
@@ -126,7 +140,9 @@ public final class OutboxWorker {
                     staleUpdates++;
                     observer.staleToken(result.name().toLowerCase(java.util.Locale.ROOT));
                 }
-                observer.completed(entry.message(), result, elapsedDuration(sendStarted));
+                if (sendAttempted) {
+                    observer.completed(entry.message(), result, elapsedDuration(sendStarted));
+                }
                 failed++;
                 continue;
             }

@@ -18,7 +18,9 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.ArrayList;
 import java.util.Optional;
+import java.util.function.Function;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -28,6 +30,145 @@ class OutboxWorkerTest {
 
     private static final Clock WALL_CLOCK =
             Clock.fixed(Instant.parse("2026-08-30T00:00:00Z"), ZoneOffset.UTC);
+
+    @Test
+    void preparesBeforeTransportWithoutAddingPreparationTimeToTheExistingObserverDuration() {
+        var ticker = new AtomicLong();
+        var order = new ArrayList<String>();
+        var store = new PreparationStore(List.of(new ClaimedOutboxMessage(message("prepared", "prepared"), 0)));
+        store.prepare = entry -> {
+            order.add("prepared");
+            ticker.set(1_000_000);
+            return Optional.of(entry);
+        };
+        store.onPublished = () -> {
+            order.add("marked");
+            ticker.set(4_000_000);
+        };
+        var duration = new AtomicReference<Duration>();
+        var observer = new PublicationObserver() {
+            @Override
+            public void completed(SerializedMessage message, Result result, Duration elapsed) {
+                duration.set(elapsed);
+            }
+        };
+        var worker = preparationWorker(store, ignored -> {
+            order.add("sent");
+            ticker.set(3_000_000);
+        }, ticker, observer, 3);
+
+        assertThat(worker.publishBatch(1)).isEqualTo(new OutboxPublishReport(1, 1, 0, 0, 0));
+        assertThat(order).containsExactly("prepared", "sent", "marked");
+        assertThat(duration).hasValue(Duration.ofMillis(3));
+    }
+
+    @Test
+    void defersLostClaimsAndRechecksTheLeaseAfterSlowPreparation() {
+        var ticker = new AtomicLong();
+        var store = new PreparationStore(List.of(
+                new ClaimedOutboxMessage(message("stale", "stale"), 0),
+                new ClaimedOutboxMessage(message("slow", "slow"), 0)));
+        store.prepare = entry -> {
+            if (entry.message().descriptor().id().value().equals("stale")) {
+                return Optional.empty();
+            }
+            ticker.set(Duration.ofSeconds(8).toNanos());
+            return Optional.of(entry);
+        };
+        var worker = preparationWorker(store, ignored -> {
+            throw new AssertionError("a rejected or late preparation cannot send");
+        }, ticker, PublicationObserver.noop(), 3);
+
+        assertThat(worker.publishBatch(2)).isEqualTo(new OutboxPublishReport(2, 0, 0, 2, 0));
+        assertThat(store.failures).isZero();
+        assertThat(store.terminals).isZero();
+    }
+
+    @Test
+    void preparationFailureRetainsRetryAndTerminalPolicyWithoutInventingAnAckSample() {
+        for (int maximum : List.of(1, 2)) {
+            var store = new PreparationStore(List.of(new ClaimedOutboxMessage(message("failed", "failed"), 0)));
+            store.prepare = entry -> { throw new IllegalStateException("preparation failed"); };
+            var observer = new PublicationObserver() {
+                @Override
+                public void completed(SerializedMessage message, Result result, Duration elapsed) {
+                    throw new AssertionError("no transport attempt took place");
+                }
+            };
+            var worker = preparationWorker(store, ignored -> {
+                throw new AssertionError("failed preparation cannot send");
+            }, new AtomicLong(), observer, maximum);
+
+            assertThat(worker.publishBatch(1)).isEqualTo(new OutboxPublishReport(1, 0, 1, 0, 0));
+            assertThat(store.terminals).isEqualTo(maximum == 1 ? 1 : 0);
+            assertThat(store.failures).isEqualTo(maximum == 1 ? 0 : 1);
+        }
+    }
+
+    @Test
+    void interruptedPreparationDefersWithoutIncrementingTheFailureCount() {
+        var store = new PreparationStore(List.of(new ClaimedOutboxMessage(message("interrupted", "interrupted"), 0)));
+        store.prepare = entry -> { throw new IllegalStateException(new InterruptedException("cancelled")); };
+        var worker = preparationWorker(store, ignored -> {
+            throw new AssertionError("cancelled preparation cannot send");
+        }, new AtomicLong(), PublicationObserver.noop(), 3);
+        try {
+            assertThat(worker.publishBatch(1)).isEqualTo(new OutboxPublishReport(1, 0, 0, 1, 0));
+            assertThat(Thread.currentThread().isInterrupted()).isTrue();
+            assertThat(store.failures).isZero();
+            assertThat(store.terminals).isZero();
+        } finally {
+            Thread.interrupted();
+        }
+    }
+
+    private static OutboxWorker preparationWorker(PreparationStore store, MessageTransport transport,
+            AtomicLong ticker, PublicationObserver observer, int maximum) {
+        return new OutboxWorker(store, transport, WALL_CLOCK, ticker::get, Duration.ofSeconds(10),
+                Duration.ofSeconds(2), Duration.ZERO, maximum, observer);
+    }
+
+    /** Orchestration probe only; database atomicity is verified by the production JDBC fixture. */
+    private static final class PreparationStore implements OutboxStore {
+        private final List<ClaimedOutboxMessage> entries;
+        private Function<ClaimedOutboxMessage, Optional<ClaimedOutboxMessage>> prepare = Optional::of;
+        private Runnable onPublished = () -> {};
+        private int failures;
+        private int terminals;
+
+        private PreparationStore(List<ClaimedOutboxMessage> entries) {
+            this.entries = entries;
+        }
+
+        @Override
+        public Optional<ClaimedOutboxBatch> claim(int limit, Duration lease) {
+            return Optional.of(new ClaimedOutboxBatch("claim-token", entries));
+        }
+
+        @Override
+        public Optional<ClaimedOutboxMessage> preparePublication(ClaimedOutboxMessage claimed, String token) {
+            assertThat(token).isEqualTo("claim-token");
+            return prepare.apply(claimed);
+        }
+
+        @Override
+        public boolean markPublished(MessageId id, String token, Instant at) {
+            onPublished.run();
+            return true;
+        }
+
+        @Override
+        public boolean markFailed(MessageId id, String token, Duration delay, String failure) {
+            failures++;
+            return true;
+        }
+
+        @Override
+        public boolean markTerminal(MessageId id, String token, Instant at, String failure) {
+            terminals++;
+            return true;
+        }
+    }
 
     @Test
     void defersSendsThatWouldStartInsideTheConservativeLeaseMargin() {
