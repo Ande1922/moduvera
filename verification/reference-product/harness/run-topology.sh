@@ -155,6 +155,12 @@ cleanup() {
     echo "Reference cleanup failure: unable to remove temporary directory $RUN_DIR" >&2
     cleanup_status=70
   fi
+  if [[ -n "${REFERENCE_CLEANUP_STATUS_FILE:-}" ]]; then
+    if ! printf '%s\n' "$cleanup_status" > "$REFERENCE_CLEANUP_STATUS_FILE"; then
+      echo "Reference cleanup failure: unable to record cleanup status" >&2
+      cleanup_status=70
+    fi
+  fi
   if [[ $primary_status -ne 0 ]]; then
     exit "$primary_status"
   fi
