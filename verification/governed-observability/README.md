@@ -178,3 +178,63 @@ matrices remain in the dedicated fixtures; Notes does not establish MySQL or
 additional product support. Ordinary `NotesObservabilityIT` runs without the
 Agent retain HTTP/database/Kafka/registry assertions and do not claim exported
 Trace evidence.
+
+## Microservice qualification and retained evidence
+
+The complete launcher follows [ADR 0038](../../docs/adr/0038-retain-monolith-as-on-demand-assembly.md):
+it runs the five-service public contract and qualifies the five public images.
+The full reactor retains monolith compilation and shared architecture checks;
+monolith runtime and image qualification require a separate explicit opt-in.
+Use a fresh evidence directory for each run. Keep both skip flags unset for
+qualification and preserve the launch command's actual exit code outside that
+directory. The fixture credential continues to enter only the login children.
+
+Governed reference startup aligns Spring's application name with the Agent's
+service name. Each newly allocated reference run retains all process generations
+in its per-service stdout file, so the Kafka outage/restart phase cannot erase
+the earlier sampled operation. `stdout/` copies the bounded analysis snapshot;
+`harness-stdout/` also preserves final shutdown or failed-run output. Kept-running
+single-topology dispatch retains the resource owner PID so termination reaches
+the application/Compose/lock cleanup.
+`inputs.json` binds the current commit, explicit dirty status when applicable,
+all source hashes, six packaged assemblies and the external extension; the
+launcher rechecks those inputs before analysis. A dirty development run is not
+an immutable review or final gate result.
+
+`traffic.json` retains only selected response C/Trace/status and public business
+identifiers. Public C must be a new UUIDv4, independent from the caller's C;
+the actual value must match protected Order/Catalog/Identity outbound calls.
+Authentication-before-rejection results carry no invented identity. Gateway
+Problem responses retain their own C, while transparent Identity rejection
+bodies are matched to the downstream request's C without rewriting them.
+Sampled HTTP records join their actual server spans; valid unsampled requests
+retain response and log identities while exporting no spans for that trace.
+
+`sampled-database.json`, Kafka records and actual OTLP exports join two complete
+message legs: HTTP → append creation → persisted generation-zero publication →
+native producer → native consumer → application `mq.process`. The Inventory
+result's append is a child of that actual processing span. Publication and
+processing each Link creation; consume canonical IDs bind each message to its
+actual processing span. Three committed success facts join the corresponding
+HTTP or message execution. The transport carrier identifies the native
+producer, independently from the envelope's immutable creation carrier.
+Assertions require individual edges and owners, not merely a shared trace ID.
+The database projection excludes payload bytes and credentials. Controlled
+normal and receiver-outage outcomes do not establish a general exactly-once
+guarantee; process-loss, CAS and redrive remain the dedicated Relay fixture's
+responsibility.
+
+Potential SDK metrics/log endpoints are routed to the same test receiver, with
+a 500 ms metric interval, while the governed policy keeps both exporters off.
+The receiver's finite observation spans the actual public contract and recovery
+traffic. Nine-meter meaning remains the registry contract and Notes/Order
+assembly evidence; no metrics management endpoint is added for this probe.
+
+Use the [coverage and evidence map](qualification-evidence.md) to distinguish
+the current whole-chain run from retained focused evidence. Missing old files
+or changed fixture inputs require replacement evidence or an explicit gap.
+Native Servlet container error governance beyond Advice, custom asynchronous
+appenders, and the recorded early native Reactor cancellation race are not
+silently covered by the public happy-path result. Task support remains the
+existing in-process seams; independent/persistent jobs, scheduler/lock Candidate
+promotion, device, AI and long-connection platforms are outside this work.

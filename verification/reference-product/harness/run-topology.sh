@@ -113,11 +113,26 @@ stop_apps() {
   for pid in "${pids[@]}"; do wait "$pid" 2>/dev/null || true; done
 }
 
+retain_stdout() {
+  [[ -n "${REFERENCE_STDOUT_EVIDENCE_DIR:-}" ]] || return 0
+  mkdir -p "$REFERENCE_STDOUT_EVIDENCE_DIR" || return 1
+  local app
+  for app in gateway identity catalog order inventory monolith; do
+    if [[ -f "$RUN_DIR/$app.log" ]]; then
+      cp "$RUN_DIR/$app.log" "$REFERENCE_STDOUT_EVIDENCE_DIR/$app.log" || return 1
+    fi
+  done
+}
+
 cleanup() {
   local primary_status=$? cleanup_status=0 compose_status=0
   trap - EXIT INT TERM
   set +e
   stop_apps gateway monolith inventory order catalog identity
+  if ! retain_stdout; then
+    echo "Reference cleanup failure: unable to retain requested application stdout" >&2
+    cleanup_status=70
+  fi
   if [[ $FAILED -ne 0 && $primary_status -ne 0 && $COMPOSE_STARTED -eq 1 ]]; then diagnostics; fi
   if [[ $COMPOSE_STARTED -eq 1 ]]; then
     compose_down >/dev/null 2>"$RUN_DIR/compose-down-cleanup.err"
@@ -155,20 +170,20 @@ start_app() {
   if [[ "$REFERENCE_GOVERNED_OBSERVABILITY" == "1" ]]; then
     java_tool_options="$java_tool_options $(governed_agent_java_options \
       "$app" "${REFERENCE_OTEL_JAVAAGENT:-}" "${REFERENCE_OTEL_AGENT_EXTENSION:-}")"
+    java_tool_options="$java_tool_options -Dspring.application.name=$app"
   fi
   if [[ "$REFERENCE_DEBUG" == "1" ]]; then
     debug_port="$(reference_debug_port "$app")"
     java_tool_options="$java_tool_options -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=127.0.0.1:$debug_port"
   fi
-  local ingress_options=()
   case "$app" in
     catalog|catalog-app|order|order-app|inventory|inventory-app)
       # Only the local reference service tier trusts upstream correlation.
-      ingress_options=("SERVER_ADDRESS=127.0.0.1" "MODUVERA_WEB_INTERNAL_INGRESS=true")
+      set -- "SERVER_ADDRESS=127.0.0.1" "MODUVERA_WEB_INTERNAL_INGRESS=true" "$@"
       ;;
   esac
-  env "JAVA_TOOL_OPTIONS=$java_tool_options" "${ingress_options[@]}" "$@" \
-    "$JAVA_BIN" -jar "$PROJECT_ROOT/$jar" >"$RUN_DIR/$app.log" 2>&1 &
+  env "JAVA_TOOL_OPTIONS=$java_tool_options" "$@" \
+    "$JAVA_BIN" -jar "$PROJECT_ROOT/$jar" >>"$RUN_DIR/$app.log" 2>&1 &
   echo $! >"$RUN_DIR/$app.pid"
 }
 

@@ -13,6 +13,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from typing import Any
 
 
@@ -86,9 +87,26 @@ def login(base: str) -> str:
     return session
 
 
-def create_order(base: str, token: str, traceparent: str) -> tuple[str, float]:
+def response_receipt(headers: dict[str, str], status: int, expected_trace: str | None) -> dict[str, Any]:
+    normalized = {key.lower(): value for key, value in headers.items()}
+    correlation = normalized.get("x-correlation-id", "")
+    try:
+        parsed = uuid.UUID(correlation)
+    except ValueError:
+        raise AssertionError("public response has no UUID correlation") from None
+    if parsed.version != 4 or str(parsed) != correlation:
+        raise AssertionError("public response correlation is not canonical UUIDv4")
+    trace = normalized.get("x-trace-id", "")
+    if not re.fullmatch(r"[0-9a-f]{32}", trace) or trace == "0" * 32:
+        raise AssertionError("public response has no valid Trace ID")
+    if expected_trace is not None and trace != expected_trace:
+        raise AssertionError("public response did not preserve the valid incoming Trace")
+    return {"correlationId": correlation, "traceId": trace, "httpStatus": status}
+
+
+def create_order(base: str, token: str, traceparent: str) -> tuple[str, float, dict[str, Any]]:
     started = time.monotonic()
-    status, _, body = request(
+    status, response_headers, body = request(
         base,
         "POST",
         "/api/order/v1/orders",
@@ -97,6 +115,8 @@ def create_order(base: str, token: str, traceparent: str) -> tuple[str, float]:
             "Authorization": "Bearer " + token,
             "X-Correlation-Id": "governed-agent-" + traceparent[3:11],
             "traceparent": traceparent,
+            "X-Tenant-Id": "untrusted-tenant",
+            "X-Actor-Id": "untrusted-actor",
         },
     )
     duration = time.monotonic() - started
@@ -105,7 +125,7 @@ def create_order(base: str, token: str, traceparent: str) -> tuple[str, float]:
     order_id = body.get("orderId", "")
     if not isinstance(order_id, str) or not order_id.isdigit():
         raise AssertionError("create order returned an invalid identifier")
-    return order_id, duration
+    return order_id, duration, response_receipt(response_headers, status, traceparent[3:35])
 
 
 def await_terminal(base: str, token: str, order_id: str) -> str:
@@ -132,7 +152,7 @@ def read_records(path: Path) -> list[dict[str, Any]]:
 def exactly_one(spans: list[dict[str, Any]], label: str, predicate: Any) -> dict[str, Any]:
     matches = [span for span in spans if predicate(span)]
     if len(matches) != 1:
-        raise AssertionError(f"{label}: expected exactly one span, got {len(matches)}")
+        raise AssertionError(f"{label}: expected exactly one record, got {len(matches)}")
     return matches[0]
 
 
@@ -186,16 +206,117 @@ def select_valid_upstream_http_spans(
     return selected
 
 
-def kafka_records(path: Path) -> list[dict[str, str]]:
-    records: list[dict[str, str]] = []
+def kafka_records(path: Path) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
     for line in path.read_text(encoding="utf-8").splitlines():
         parts = line.split("\t", 2)
-        if len(parts) < 2:
+        if len(parts) != 3:
             continue
         header_text, key = parts[0], parts[1]
         traceparent = re.search(r"traceparent:([^,\t]+)", header_text)
-        records.append({"key": key, "traceparent": traceparent.group(1) if traceparent else ""})
+        envelope = json.loads(parts[2])
+        records.append({"key": key, "traceparent": traceparent.group(1) if traceparent else "", "envelope": envelope})
     return records
+
+
+def carrier(value: str) -> dict[str, str]:
+    match = TRACEPARENT.fullmatch(value or "")
+    if not match or match.group(1) == "0" * 32 or match.group(2) == "0" * 16:
+        raise AssertionError("invalid persisted or wire trace carrier")
+    return {"traceId": match.group(1), "spanId": match.group(2)}
+
+
+def require_parent(child: dict[str, Any], parent: dict[str, Any], label: str) -> None:
+    if (child.get("traceId"), child.get("parentSpanId")) != (parent["traceId"], parent["spanId"]):
+        raise AssertionError(f"{label}: exact parent edge is missing")
+
+
+def durable_chain(
+    spans: list[dict[str, Any]], record: dict[str, Any], row: dict[str, Any],
+    creator: dict[str, Any], publisher: str, consumer: str, correlation: str,
+) -> list[dict[str, Any]]:
+    envelope = record["envelope"]
+    if (envelope.get("id"), envelope.get("correlationid"), envelope.get("tenantid")) != (
+        row["message_id"], correlation, "tenant-a"
+    ):
+        raise AssertionError("wire message identity/correlation disagrees with the committed operation")
+    mapping = {"correlationid": "correlation_id", "tenantid": "tenant_id", "actortype": "actor_type",
+               "actorsubject": "actor_subject", "initiatortype": "initiator_type",
+               "initiatorsubject": "initiator_subject", "partitionkey": "partition_key"}
+    if any(envelope.get(wire) != row[column] for wire, column in mapping.items()):
+        raise AssertionError("wire and immutable Outbox metadata disagree")
+    if row["status"] != "PUBLISHED" or row["attempt_count"] != 0 or row["publication_generation"] != 0:
+        raise AssertionError("controlled sampled message did not publish successfully in generation zero")
+    creation = carrier(row["creation_traceparent"])
+    if envelope.get("traceparent") != row["creation_traceparent"] or row["publication_traceparent"] != row["creation_traceparent"]:
+        raise AssertionError("initial persisted creation/publication and envelope creation disagree")
+    if envelope.get("tracestate") != row["creation_tracestate"] or row["publication_tracestate"] != row["creation_tracestate"]:
+        raise AssertionError("creation/publication tracestate changed")
+    append = exactly_one(spans, "persisted creation span", lambda item: (
+        item.get("traceId"), item.get("spanId")) == (creation["traceId"], creation["spanId"]))
+    if append["name"] != "outbox.append":
+        raise AssertionError("persisted creation is not the actual append span")
+    require_parent(append, creator, "append creator")
+    publish = exactly_one(spans, "message publication", lambda item: item.get("name") == "outbox.publish"
+                          and item.get("attributes", {}).get("messaging.message.id") == row["message_id"])
+    require_parent(publish, append, "publication generation")
+    if publish.get("links") != [creation] or (
+        publish["attributes"].get("outbox.transport.result"), publish["attributes"].get("outbox.write.result")
+    ) != ("success", "published"):
+        raise AssertionError("publication lacks creation Link or separate successful ACK/writeback results")
+    transport = carrier(record["traceparent"])
+    producer = exactly_one(spans, "wire producer", lambda item: (
+        item.get("traceId"), item.get("spanId")) == (transport["traceId"], transport["spanId"]))
+    require_parent(producer, publish, "native producer")
+    if producer.get("kind") != "PRODUCER" or producer["resource"]["service.name"] != publisher:
+        raise AssertionError("wire carrier has the wrong producer owner")
+    native = exactly_one(spans, "native consumer", lambda item: item.get("kind") == "CONSUMER"
+                         and item.get("resource", {}).get("service.name") == consumer
+                         and item.get("traceId") == producer["traceId"] and item.get("parentSpanId") == producer["spanId"])
+    process = exactly_one(spans, "application consumption", lambda item: item.get("name") == "mq.process"
+                          and item.get("resource", {}).get("service.name") == consumer
+                          and item.get("traceId") == native["traceId"]
+                          and item.get("parentSpanId") == native["spanId"])
+    require_parent(process, native, "application transport parent")
+    if process.get("links") != [creation]:
+        raise AssertionError("application consumption did not Link original creation")
+    for item in (append, publish, process):
+        if item.get("scope", {}).get("name") != "io.github.ande1922.moduvera.messaging":
+            raise AssertionError("framework message span has the wrong instrumentation owner")
+    for item in (producer, native):
+        if not item.get("scope", {}).get("name", "").startswith("io.opentelemetry."):
+            raise AssertionError("native message span has the wrong Agent owner")
+    return [append, publish, producer, native, process]
+
+
+def no_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise AssertionError(f"stdout JSON contains duplicate key: {key}")
+        result[key] = value
+    return result
+
+
+def topology_stdout(directory: Path, sentinels: Path) -> list[dict[str, Any]]:
+    forbidden = list(json.loads(sentinels.read_text()).values()) + ["untrusted-tenant", "untrusted-actor"]
+    events = []
+    for service in ("gateway", "identity", "catalog", "order", "inventory"):
+        raw = (directory / f"{service}.log").read_text()
+        if any(value in raw for value in forbidden):
+            raise AssertionError(f"{service} stdout leaked a sensitive/forged-identity sentinel")
+        parsed = []
+        for line in raw.splitlines():
+            if line.startswith("{"):
+                event = json.loads(line, object_pairs_hook=no_duplicate_keys)
+                if "log" in event:
+                    if event.get("service", {}).get("name") != service:
+                        raise AssertionError(f"{service} stdout does not use the governed service name")
+                    parsed.append(event)
+        if not parsed:
+            raise AssertionError(f"{service} has no retained structured stdout")
+        events.extend(parsed)
+    return events
 
 
 def observed_after(path: Path, count: int, expected_path: str) -> dict[str, Any]:
@@ -230,7 +351,7 @@ def wrong_login(
     before = len(read_records(identity_headers))
     body = {"username": "nobody", "tenantId": "tenant-a"}
     body["password"] = secrets.token_urlsafe(24)
-    headers: dict[str, str] = {}
+    headers: dict[str, str] = {"X-Correlation-Id": "untrusted-public-correlation"}
     path = "/api/identity/v1/session/login"
     if traceparent is not None:
         headers["traceparent"] = traceparent
@@ -238,11 +359,17 @@ def wrong_login(
         body["username"] = sentinels["payload"]
         body["password"] = sentinels["credential"]
         headers["X-Governed-Sensitive"] = sentinels["header"]
-        headers["User-Agent"] = sentinels["header"]
+        headers["User-Agent"] = "moduvera-observability-probe"
         path += "?probe=" + urllib.parse.quote(sentinels["query"])
-    status, _, _ = request(base, "POST", path, body, headers)
+    status, response_headers, problem = request(base, "POST", path, body, headers)
     require_status(status, 401, "wrong login")
-    return observed_after(identity_headers, before, "/v1/session/login")
+    observed = observed_after(identity_headers, before, "/v1/session/login")
+    incoming = TRACEPARENT.fullmatch(traceparent or "")
+    receipt = response_receipt(response_headers, status, incoming.group(1) if incoming else None)
+    receipt["problemCorrelationId"] = problem.get("correlationId")
+    if observed.get("correlationId") != receipt["correlationId"]:
+        raise AssertionError("Gateway did not propagate its generated correlation to Identity")
+    return {**observed, "response": receipt}
 
 
 def traffic(args: argparse.Namespace) -> None:
@@ -274,7 +401,7 @@ def traffic(args: argparse.Namespace) -> None:
     before_order = len(read_records(args.order_headers))
     before_identity = len(read_records(args.identity_headers))
     before_catalog = len(read_records(args.catalog_headers))
-    sampled_order, sampled_duration = create_order(
+    sampled_order, sampled_duration, sampled_response = create_order(
         base,
         token,
         f"00-{ORDER_TRACE_ID}-{ORDER_PARENT_ID}-01",
@@ -296,13 +423,14 @@ def traffic(args: argparse.Namespace) -> None:
         )
     validate_outbound(first_token_calls[0], ORDER_TRACE_ID, "01")
     validate_outbound(first_catalog_calls[0], ORDER_TRACE_ID, "01")
-    if first_catalog_calls[0].get("correlationId") != "governed-agent-55555555":
-        raise AssertionError("first Catalog call did not preserve its correlation ID")
+    if any(record.get("correlationId") != sampled_response["correlationId"]
+           for record in [sampled_header, first_catalog_calls[0], first_token_calls[0]]):
+        raise AssertionError("cold-cache internal calls did not inherit the generated public correlation")
 
     before_order = len(read_records(args.order_headers))
     before_identity = len(read_records(args.identity_headers))
     before_catalog = len(read_records(args.catalog_headers))
-    cache_order, cache_duration = create_order(
+    cache_order, cache_duration, cache_response = create_order(
         base,
         token,
         f"00-{CACHE_TRACE_ID}-{CACHE_PARENT_ID}-01",
@@ -323,11 +451,12 @@ def traffic(args: argparse.Namespace) -> None:
             f"cache hit token/catalog calls were not exactly 0/1: {len(cache_token_calls)}/{len(cache_catalog_calls)}"
         )
     validate_outbound(cache_catalog_calls[0], CACHE_TRACE_ID, "01")
-    if cache_catalog_calls[0].get("correlationId") != "governed-agent-99999999":
+    if any(record.get("correlationId") != cache_response["correlationId"]
+           for record in [cache_header, cache_catalog_calls[0]]):
         raise AssertionError("cache-hit Catalog call did not preserve its independent correlation ID")
 
     before_order = len(read_records(args.order_headers))
-    unsampled_order, unsampled_duration = create_order(
+    unsampled_order, unsampled_duration, unsampled_response = create_order(
         base,
         token,
         f"00-{UNSAMPLED_TRACE_ID}-{UNSAMPLED_PARENT_ID}-00",
@@ -336,8 +465,23 @@ def traffic(args: argparse.Namespace) -> None:
     validate_outbound(unsampled_header, UNSAMPLED_TRACE_ID, "00")
     unsampled_status = await_terminal(base, token, unsampled_order)
 
+    if unsampled_header.get("correlationId") != unsampled_response["correlationId"]:
+        raise AssertionError("unsampled internal request lost the generated correlation")
+    rejections = []
+    for path, expected in (("/api/order/v1/orders", 401), ("/no-governed-route", 404)):
+        rejected_status, rejected_headers, problem = request(
+            base, "GET", path, headers={"X-Correlation-Id": "untrusted-public-correlation"}
+        )
+        require_status(rejected_status, expected, "pre-route rejection")
+        receipt = response_receipt(rejected_headers, rejected_status, None)
+        if problem.get("correlationId") != receipt["correlationId"]:
+            raise AssertionError("Gateway-owned Problem lost its response correlation")
+        rejections.append({**receipt, "path": path})
+
     result = {
         "validSampledOutbound": valid,
+        "loginRejections": [record["response"] for record in (valid_record, invalid_record, missing_record)],
+        "gatewayRejections": rejections,
         "invalidUpstreamOutbound": invalid,
         "missingUpstreamOutbound": missing,
         "queryBearingGatewayClient": {
@@ -346,27 +490,29 @@ def traffic(args: argparse.Namespace) -> None:
             "outboundTraceparent": missing,
         },
         "sampledOrder": {
+            **sampled_response,
             "id": sampled_order,
             "status": sampled_status,
             "httpSeconds": sampled_duration,
             "outboundTraceparent": sampled_header["traceparent"],
         },
         "cacheHitOrder": {
+            **cache_response,
             "id": cache_order,
             "status": cache_status,
             "httpSeconds": cache_duration,
-            "correlationId": "governed-agent-99999999",
             "outboundTraceparent": cache_header["traceparent"],
             "identityTokenNetworkCalls": 0,
             "catalogNetworkCalls": 1,
         },
         "coldCacheOrder": {
             "id": sampled_order,
-            "correlationId": "governed-agent-55555555",
+            "correlationId": sampled_response["correlationId"],
             "identityTokenNetworkCalls": 1,
             "catalogNetworkCalls": 1,
         },
         "unsampledOrder": {
+            **unsampled_response,
             "id": unsampled_order,
             "status": unsampled_status,
             "httpSeconds": unsampled_duration,
@@ -379,7 +525,7 @@ def traffic(args: argparse.Namespace) -> None:
 def outage(args: argparse.Namespace) -> None:
     base = args.base.rstrip("/")
     token = login(base)
-    order_id, duration = create_order(
+    order_id, duration, response = create_order(
         base,
         token,
         f"00-{OUTAGE_TRACE_ID}-{OUTAGE_PARENT_ID}-01",
@@ -387,7 +533,7 @@ def outage(args: argparse.Namespace) -> None:
     status = await_terminal(base, token, order_id)
     if duration >= 5:
         raise AssertionError(f"business HTTP waited {duration:.3f}s for the unavailable telemetry receiver")
-    result = {"orderId": order_id, "status": status, "createHttpSeconds": duration}
+    result = {**response, "orderId": order_id, "status": status, "createHttpSeconds": duration}
     args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
@@ -401,6 +547,8 @@ def analyze(args: argparse.Namespace) -> None:
         raise AssertionError("receiver did not decode the exported OTLP spans")
     if "application/x-protobuf" not in status["contentTypes"]:
         raise AssertionError(f"trace exporter did not use OTLP protobuf: {status['contentTypes']}")
+    if status["postRequestsBySignal"]["metrics"] or status["postRequestsBySignal"]["logs"]:
+        raise AssertionError("governed applications exported a second SDK signal")
     if status["sensitiveMatches"]:
         raise AssertionError(f"automatic telemetry leaked sensitive sentinel classes: {status['sensitiveMatches']}")
 
@@ -509,54 +657,99 @@ def analyze(args: argparse.Namespace) -> None:
         if not causally_follows(child, parent):
             raise AssertionError(f"{label} span is not causally connected to the sampled operation")
 
-    reserve_producer = exactly_one(
-        spans,
-        "sampled reserve producer",
-        lambda span: span.get("kind") == "PRODUCER"
-        and span.get("resource", {}).get("service.name") == "order"
-        and span.get("attributes", {}).get("messaging.kafka.message.key") == sampled_order_id,
-    )
-    inventory_consumers = [
-        span for span in spans
-        if span.get("kind") == "CONSUMER"
-        and span.get("resource", {}).get("service.name") == "inventory"
-        and causally_follows(span, reserve_producer)
-    ]
-    if len(inventory_consumers) != 1:
-        raise AssertionError(f"sampled reserve consumer count is {len(inventory_consumers)}, expected 1")
-    inventory_consumer = inventory_consumers[0]
-    result_producer = exactly_one(
-        spans,
-        "sampled inventory result producer",
-        lambda span: span.get("kind") == "PRODUCER"
-        and span.get("resource", {}).get("service.name") == "inventory"
-        and span.get("attributes", {}).get("messaging.kafka.message.key") == f"tenant-a:{sampled_order_id}",
-    )
-    if not causally_follows(result_producer, inventory_consumer):
-        raise AssertionError("sampled result producer is not causally connected to the reserve consumer")
-    order_consumers = [
-        span for span in spans
-        if span.get("kind") == "CONSUMER"
-        and span.get("resource", {}).get("service.name") == "order"
-        and causally_follows(span, result_producer)
-    ]
-    if len(order_consumers) != 1:
-        raise AssertionError(f"sampled result consumer count is {len(order_consumers)}, expected 1")
-    operation_spans = [
-        gateway_server,
-        gateway_client,
-        order_server,
-        identity_client,
-        identity_server,
-        catalog_client,
-        catalog_server,
-        reserve_producer,
-        inventory_consumer,
-        result_producer,
-        order_consumers[0],
-    ]
+    records = kafka_records(args.kafka_records)
+    sampled_reserve_records = [record for record in records if record["key"] == sampled_order_id]
+    sampled_result_records = [record for record in records if record["key"] == f"tenant-a:{sampled_order_id}"]
+    if len(sampled_reserve_records) != 1 or len(sampled_result_records) != 1:
+        raise AssertionError("sampled operation Kafka keys were not observed exactly once")
+    database = json.loads(args.sampled_database.read_text())
+    correlation = traffic_result["sampledOrder"]["correlationId"]
+    reserve_chain = durable_chain(spans, sampled_reserve_records[0], database["order"], order_server,
+                                  "order", "inventory", correlation)
+    result_chain = durable_chain(spans, sampled_result_records[0], database["inventory"], reserve_chain[-1],
+                                 "inventory", "order", correlation)
+    operation_spans = [gateway_server, gateway_client, order_server, identity_client, identity_server,
+                       catalog_client, catalog_server, reserve_chain[2], reserve_chain[3],
+                       result_chain[2], result_chain[3]]
     if any(not span.get("scope", {}).get("name", "").startswith("io.opentelemetry.") for span in operation_spans):
         raise AssertionError("sampled operation includes a span without an Agent instrumentation owner")
+
+    events = topology_stdout(args.stdout, args.sentinels)
+    canonical = [event for event in events if event["log"]["logger"] == "http.request"]
+    for receipt in [traffic_result[key] for key in ("sampledOrder", "cacheHitOrder", "unsampledOrder")]:
+        for service in ("gateway", "order"):
+            event = exactly_one(canonical, f"{service} public response log", lambda row:
+                                row.get("service", {}).get("name") == service
+                                and row.get("correlation_id") == receipt["correlationId"])
+            if (event.get("trace_id"), event["http"]["response"]["status_code"], event["log"]["level"]) != (
+                receipt["traceId"], 201, "INFO"
+            ) or event.get("duration_ms", -1) < 0:
+                raise AssertionError("HTTP stdout disagrees with public response identity/status")
+            if service == "gateway":
+                # This adapter forwards an opaque exchanged JWT; it does not authenticate its claims locally.
+                if any(key in event for key in ("tenant_id", "actor_type", "actor_id", "initiator_type", "initiator_id", "user_id")):
+                    raise AssertionError("Gateway fabricated identity from an opaque credential or untrusted headers")
+            else:
+                if event.get("tenant_id") != "tenant-a" or event.get("actor_type") != "USER" or not event.get("user_id"):
+                    raise AssertionError("Order stdout lacks authenticated trusted user identity")
+                if event["actor_id"] != event["user_id"] or event.get("initiator_type") != "USER" or event.get("initiator_id") != event["user_id"]:
+                    raise AssertionError("HTTP user/initiator identity disagrees")
+            if receipt["traceId"] == UNSAMPLED_TRACE_ID:
+                if event.get("trace_flags") != "00":
+                    raise AssertionError("unsampled HTTP log lost flags00")
+            else:
+                server = exactly_one(spans, "canonical server identity", lambda item:
+                                     item.get("spanId") == event.get("span_id") and item.get("traceId") == event.get("trace_id"))
+                if server.get("kind") != "SERVER" or server["resource"]["service.name"] != service:
+                    raise AssertionError("HTTP canonical log does not join its actual server span")
+    for receipt in traffic_result["gatewayRejections"] + traffic_result["loginRejections"]:
+        event = exactly_one(canonical, "unauthenticated Gateway result", lambda row:
+                            row.get("service", {}).get("name") == "gateway"
+                            and row.get("correlation_id") == receipt["correlationId"])
+        if any(key in event for key in ("tenant_id", "actor_type", "actor_id", "initiator_type", "initiator_id", "user_id")):
+            raise AssertionError("authentication-before-rejection identity was fabricated")
+        if event.get("trace_id") != receipt["traceId"] or event["http"]["response"]["status_code"] != receipt["httpStatus"]:
+            raise AssertionError("rejection result lost public response identity")
+        if "problemCorrelationId" in receipt:
+            downstream = exactly_one(canonical, "transparent Identity rejection", lambda row:
+                                     row.get("service", {}).get("name") == "identity"
+                                     and row.get("trace_id") == receipt["traceId"])
+            if downstream.get("correlation_id") != receipt["problemCorrelationId"]:
+                raise AssertionError("Gateway rewrote the downstream Problem correlation")
+    # These Actor subjects come from the consumers' local InboundMessageContract policies.
+    for chain, record, service, actor in ((reserve_chain, sampled_reserve_records[0], "inventory", "order-service"),
+                                          (result_chain, sampled_result_records[0], "order", "inventory-service")):
+        event = exactly_one(events, "application consume result", lambda row: row["log"]["logger"] == "mq.consume"
+                            and row.get("message_id") == record["envelope"]["id"]
+                            and row.get("service", {}).get("name") == service)
+        if (event.get("trace_id"), event.get("span_id")) != (chain[-1]["traceId"], chain[-1]["spanId"]):
+            raise AssertionError("consume canonical lost its actual application process span")
+        if event.get("correlation_id") != correlation or event.get("tenant_id") != "tenant-a" or event.get("actor_type") != "SERVICE" or "user_id" in event:
+            raise AssertionError("consumer inherited untrusted user Actor or lost message correlation")
+        if event.get("actor_id") != actor or event.get("initiator_type") != "USER" or event.get("initiator_id") != record["envelope"]["initiatorsubject"]:
+            raise AssertionError("consumer did not retain local Actor and original Initiator")
+        if event["log"]["level"] != "INFO" or event["event"]["outcome"] != "success":
+            raise AssertionError("consume canonical is not a successful completed result")
+
+    if traffic_result["sampledOrder"]["status"] != "CONFIRMED":
+        raise AssertionError("controlled in-stock sampled order did not confirm")
+    initiator = sampled_reserve_records[0]["envelope"]["initiatorsubject"]
+    for action, service, parent, actor_type, actor in (
+        ("order_created", "order", order_server, "USER", initiator),
+        ("inventory_reserved", "inventory", reserve_chain[-1], "SERVICE", "order-service"),
+        ("order_confirmed", "order", result_chain[-1], "SERVICE", "inventory-service"),
+    ):
+        event = exactly_one(events, action + " committed fact", lambda row:
+                            row.get("service", {}).get("name") == service
+                            and row.get("event", {}).get("action") == action
+                            and str(row.get("order_id")) == sampled_order_id)
+        expected = {"trace_id": parent["traceId"], "span_id": parent["spanId"],
+                    "correlation_id": correlation, "tenant_id": "tenant-a", "actor_type": actor_type,
+                    "actor_id": actor, "initiator_type": "USER", "initiator_id": initiator}
+        if any(event.get(key) != value for key, value in expected.items()) or event["log"]["level"] != "INFO":
+            raise AssertionError("committed business fact lost its execution identity")
+        if event.get("user_id") != (actor if actor_type == "USER" else None):
+            raise AssertionError("business fact user projection does not follow the current Actor")
 
     cache_spans = [span for span in spans if span.get("traceId") == CACHE_TRACE_ID]
     exactly_one(
@@ -601,11 +794,6 @@ def analyze(args: argparse.Namespace) -> None:
     if query_bearing_urls:
         raise AssertionError("automatic telemetry emitted a URL containing a query")
 
-    records = kafka_records(args.kafka_records)
-    sampled_reserve_records = [record for record in records if record["key"] == sampled_order_id]
-    sampled_result_records = [record for record in records if record["key"] == f"tenant-a:{sampled_order_id}"]
-    if len(sampled_reserve_records) != 1 or len(sampled_result_records) != 1:
-        raise AssertionError("sampled operation Kafka keys were not observed exactly once")
     for record in sampled_reserve_records + sampled_result_records:
         match = TRACEPARENT.fullmatch(record["traceparent"])
         if not match or match.group(1) != ORDER_TRACE_ID:
@@ -635,6 +823,10 @@ def analyze(args: argparse.Namespace) -> None:
         "instrumentationOwners": dict(sorted(owners.items())),
         "validUpstreamHttpAgentSpanCount": len(valid_upstream_http_spans),
         "sampledOperationAgentSpanCount": len(operation_spans),
+        "frameworkMessageSpanCount": 6,
+        "committedBusinessFactCount": 3,
+        "retainedStructuredStdout": len(events),
+        "sdkSignalRequests": status["postRequestsBySignal"],
         "sampledOperationKafkaRecords": len(sampled_reserve_records) + len(sampled_result_records),
         "kinds": sorted(kind for kind in kinds if kind),
         "otlpRequests": status["requests"],
@@ -675,6 +867,9 @@ def parser() -> argparse.ArgumentParser:
     analyze_command.add_argument("--kafka-records", type=Path, required=True)
     analyze_command.add_argument("--outage-order-database", type=Path, required=True)
     analyze_command.add_argument("--outage-inventory-database", type=Path, required=True)
+    analyze_command.add_argument("--sampled-database", type=Path, required=True)
+    analyze_command.add_argument("--stdout", type=Path, required=True)
+    analyze_command.add_argument("--sentinels", type=Path, required=True)
     analyze_command.add_argument("--output", type=Path, required=True)
     analyze_command.set_defaults(run=analyze)
     return root

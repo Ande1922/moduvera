@@ -11,6 +11,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import uuid
 
 
 BASE = os.environ.get(
@@ -63,9 +64,21 @@ def header(response: Response, name: str) -> str | None:
     )
 
 
-def expect_correlation(response: Response, correlation: str, label: str) -> None:
-    if header(response, "X-Correlation-Id") != correlation:
-        raise AssertionError(f"{label}: correlation id was not preserved")
+def require_uuid4(value: str | None, label: str) -> str:
+    try:
+        parsed = uuid.UUID(value) if value else None
+    except (ValueError, AttributeError):
+        parsed = None
+    if parsed is None or parsed.version != 4 or str(parsed) != value:
+        raise AssertionError(f"{label}: expected a canonical UUIDv4 correlation id")
+    return value
+
+
+def expect_public_correlation(response: Response, caller_correlation: str, label: str) -> str:
+    generated = require_uuid4(header(response, "X-Correlation-Id"), label)
+    if generated == caller_correlation:
+        raise AssertionError(f"{label}: public ingress reused the caller correlation id")
+    return generated
 
 
 def expect_native_json(response: Response, label: str) -> dict:
@@ -84,6 +97,7 @@ def expect_problem(
     code: str,
     label: str,
     correlation: str | None = None,
+    transparent_problem: bool = False,
 ) -> dict:
     expect(response, status, label)
     content_type = (header(response, "Content-Type") or "").split(";", 1)[0]
@@ -104,10 +118,13 @@ def expect_problem(
     if problem["type"] != "urn:problem:" + code:
         raise AssertionError(f"{label}: problem type does not identify {code}")
     if correlation is not None:
-        expect_correlation(response, correlation, label)
-        body_correlation = problem.get("correlationId")
-        if body_correlation is not None and body_correlation != correlation:
-            raise AssertionError(f"{label}: problem correlation does not match the response")
+        generated = expect_public_correlation(response, correlation, label)
+        body_correlation = require_uuid4(problem.get("correlationId"), label + " Problem")
+        if transparent_problem:
+            if body_correlation == generated:
+                raise AssertionError(f"{label}: downstream public Problem lost its independent correlation")
+        elif body_correlation != generated:
+            raise AssertionError(f"{label}: owned problem correlation does not match the response")
     return problem
 
 
@@ -132,7 +149,7 @@ def login(username: str, password: str, tenant: str) -> str:
         "login " + username,
     )
     value = expect_native_json(response, "login " + username)
-    expect_correlation(response, correlation, "login " + username)
+    expect_public_correlation(response, correlation, "login " + username)
     token = value.get("token", "")
     if len(token) != 43 or "." in token:
         raise AssertionError("login returned an invalid opaque session")
@@ -157,7 +174,7 @@ def create(session: str, product: int, quantity: int, correlation: str) -> tuple
         raise AssertionError("create order returned an invalid string identifier")
     if value.get("status") != "PENDING_STOCK":
         raise AssertionError("create order did not return its initial business status")
-    expect_correlation(response, correlation, "create order " + correlation)
+    expect_public_correlation(response, correlation, "create order " + correlation)
     expect_order_location(response, order_id, "create order " + correlation)
     return order_id, response
 
@@ -184,7 +201,7 @@ def eventually_status(
         response = get_order(session, order_id, "reference-poll-" + order_id)
         if response.status == 200:
             value = expect_native_json(response, "poll order " + order_id)
-            expect_correlation(response, "reference-poll-" + order_id, "poll order " + order_id)
+            expect_public_correlation(response, "reference-poll-" + order_id, "poll order " + order_id)
             last = value.get("status", "missing")
             if last in expected_statuses:
                 return value
@@ -209,6 +226,7 @@ def acceptance() -> None:
         "identity.invalid-credentials",
         "wrong credentials",
         correlation="reference-wrong-credentials",
+        transparent_problem=True,
     )
     expect_problem(
         request(
@@ -346,7 +364,7 @@ def create_pending(output: pathlib.Path) -> None:
         "query during Kafka outage",
     )
     expect_native_json(queried, "query during Kafka outage")
-    expect_correlation(queried, "reference-outage-query", "query during Kafka outage")
+    expect_public_correlation(queried, "reference-outage-query", "query during Kafka outage")
     output.write_text(order_id, encoding="utf-8")
     output.chmod(0o600)
     print("reference recovery phase 1: PASS (business row and outbox committed while Kafka unavailable)")

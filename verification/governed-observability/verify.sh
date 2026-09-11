@@ -23,6 +23,17 @@ ORDER_PROXY_PID=""
 CATALOG_PROXY_PID=""
 HARNESS_PID=""
 
+collect_topology_stdout() {
+  [[ -s "$EVIDENCE_DIR/reference-manifest.json" ]] || return 0
+  local run_directory
+  run_directory="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["resources"]["tempDirectory"])' \
+    "$EVIDENCE_DIR/reference-manifest.json")"
+  mkdir -p "$EVIDENCE_DIR/stdout"
+  for service in gateway identity catalog order inventory; do
+    [[ ! -f "$run_directory/$service.log" ]] || cp "$run_directory/$service.log" "$EVIDENCE_DIR/stdout/$service.log"
+  done
+}
+
 [[ -n "$EVIDENCE_DIR" && -n "$MAVEN_REPO" ]] || {
   echo "MODUVERA_OBSERVABILITY_EVIDENCE_DIR and MODUVERA_OBSERVABILITY_MAVEN_REPO are required" >&2
   exit 64
@@ -42,6 +53,7 @@ cleanup() {
   local primary_status=$?
   trap - EXIT INT TERM
   set +e
+  collect_topology_stdout
   stop_process "$HARNESS_PID"
   stop_process "$ORDER_PROXY_PID"
   stop_process "$CATALOG_PROXY_PID"
@@ -82,6 +94,8 @@ if [[ "${MODUVERA_OBSERVABILITY_SKIP_IMAGE:-0}" != "1" ]]; then
   "$PROJECT_ROOT/verification/application-image/build-images.sh"
   python3 "$PROJECT_ROOT/verification/application-image/inspect_images.py"
 fi
+
+python3 "$SCRIPT_DIR/qualification_inputs.py" capture "$PROJECT_ROOT" "$EVIDENCE_DIR/inputs.json"
 
 python3 -c 'import json,secrets,sys; labels=("command","header","query","sql","payload","credential"); json.dump({label:"moduvera-"+label+"-"+secrets.token_hex(16) for label in labels},open(sys.argv[1],"w"),sort_keys=True)' \
   "$EVIDENCE_DIR/sentinels.json"
@@ -156,6 +170,8 @@ ORDER_PROXY_PORT="$(<"$EVIDENCE_DIR/order-proxy.port")"
 CATALOG_PROXY_PORT="$(<"$EVIDENCE_DIR/catalog-proxy.port")"
 
 RUN_SLOT="$RUN_SLOT" REFERENCE_SKIP_BUILD=1 REFERENCE_KEEP_RUNNING=1 \
+  REFERENCE_STDOUT_EVIDENCE_DIR="$EVIDENCE_DIR/harness-stdout" \
+  REFERENCE_JAVA_TOOL_OPTIONS="${REFERENCE_JAVA_TOOL_OPTIONS:--Xms64m -Xmx256m} -Dotel.exporter.otlp.metrics.protocol=http/protobuf -Dotel.exporter.otlp.metrics.endpoint=http://127.0.0.1:$OTLP_PORT/v1/metrics -Dotel.exporter.otlp.logs.protocol=http/protobuf -Dotel.exporter.otlp.logs.endpoint=http://127.0.0.1:$OTLP_PORT/v1/logs -Dotel.metric.export.interval=500" \
   REFERENCE_GOVERNED_OBSERVABILITY=1 REFERENCE_OTEL_JAVAAGENT="$AGENT" \
   REFERENCE_OTEL_AGENT_EXTENSION="$EXTENSION" \
   REFERENCE_OTLP_TRACES_ENDPOINT="http://127.0.0.1:$OTLP_PORT/v1/traces" \
@@ -196,6 +212,22 @@ run_login_probe python3 "$SCRIPT_DIR/probe.py" traffic --base "http://127.0.0.1:
   --order-headers "$EVIDENCE_DIR/order-headers.jsonl" \
   --catalog-headers "$EVIDENCE_DIR/catalog-headers.jsonl" \
   --sentinels "$EVIDENCE_DIR/sentinels.json" --output "$EVIDENCE_DIR/traffic.json"
+SAMPLED_ORDER_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sampledOrder"]["id"])' "$EVIDENCE_DIR/traffic.json")"
+for database in orders inventory; do
+  message_id="reserve-order-$SAMPLED_ORDER_ID"
+  [[ "$database" != inventory ]] || message_id="inventory-result:$message_id"
+  docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE" exec -T postgres \
+    psql -At -U postgres -d "$database" -c \
+    "SELECT row_to_json(evidence) FROM (SELECT message_id,correlation_id,tenant_id,actor_type,actor_subject,initiator_type,initiator_subject,partition_key,creation_traceparent,creation_tracestate,publication_traceparent,publication_tracestate,publication_generation,status,attempt_count FROM moduvera_message_outbox WHERE message_id = '$message_id') evidence;" \
+    > "$EVIDENCE_DIR/sampled-$database.json"
+done
+python3 - "$EVIDENCE_DIR" <<'PY'
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+value = {key: json.loads((root / f"sampled-{database}.json").read_text())
+         for key, database in (("order", "orders"), ("inventory", "inventory"))}
+(root / "sampled-database.json").write_text(json.dumps(value, indent=2) + "\n")
+PY
 : > "$EVIDENCE_DIR/probe-release"
 
 deadline=$((SECONDS + 600))
@@ -237,12 +269,16 @@ for topic in "$RESERVE_TOPIC" "$RESULT_TOPIC"; do
     >> "$EVIDENCE_DIR/kafka-records.txt" 2>> "$EVIDENCE_DIR/kafka-records.err" || true
 done
 
+collect_topology_stdout
+python3 "$SCRIPT_DIR/qualification_inputs.py" check "$PROJECT_ROOT" "$EVIDENCE_DIR/inputs.json"
 python3 "$SCRIPT_DIR/probe.py" analyze \
   --receiver-status "$EVIDENCE_DIR/receiver-status.json" --spans "$EVIDENCE_DIR/spans.jsonl" \
   --traffic "$EVIDENCE_DIR/traffic.json" --outage "$EVIDENCE_DIR/outage.json" \
   --kafka-records "$EVIDENCE_DIR/kafka-records.txt" \
   --outage-order-database "$EVIDENCE_DIR/outage-order-database.txt" \
   --outage-inventory-database "$EVIDENCE_DIR/outage-inventory-database.txt" \
+  --sampled-database "$EVIDENCE_DIR/sampled-database.json" \
+  --stdout "$EVIDENCE_DIR/stdout" --sentinels "$EVIDENCE_DIR/sentinels.json" \
   --output "$EVIDENCE_DIR/qualification.json"
 
 stop_process "$HARNESS_PID"

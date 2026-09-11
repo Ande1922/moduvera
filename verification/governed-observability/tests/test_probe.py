@@ -5,6 +5,7 @@ import importlib.util
 import json
 from pathlib import Path
 import secrets
+import uuid
 import threading
 import unittest
 from unittest import mock
@@ -109,7 +110,7 @@ class ValidUpstreamHttpSpansTest(unittest.TestCase):
         spans = self.valid_spans()
         duplicate = {**spans[1], "spanId": "duplicate-client"}
 
-        with self.assertRaisesRegex(AssertionError, "expected exactly one span, got 2"):
+        with self.assertRaisesRegex(AssertionError, "expected exactly one record, got 2"):
             PROBE.select_valid_upstream_http_spans([*spans, duplicate])
 
     def test_rejects_non_agent_owner(self) -> None:
@@ -188,6 +189,33 @@ class LoginFixtureTest(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "tenant-a"):
                     PROBE.login("http://127.0.0.1")
         request.assert_not_called()
+
+
+class PublicResponseReceiptTest(unittest.TestCase):
+    def test_order_retains_generated_response_correlation_and_trace(self) -> None:
+        correlation = str(uuid.uuid4())
+        headers = {"X-Correlation-Id": correlation, "X-Trace-Id": PROBE.ORDER_TRACE_ID}
+        with mock.patch.object(PROBE, "request", return_value=(201, headers, {"orderId": "123"})):
+            order_id, _, receipt = PROBE.create_order(
+                "http://fixture", "opaque-fixture", f"00-{PROBE.ORDER_TRACE_ID}-{PROBE.ORDER_PARENT_ID}-01"
+            )
+        self.assertEqual("123", order_id)
+        self.assertEqual(correlation, receipt["correlationId"])
+        self.assertEqual(PROBE.ORDER_TRACE_ID, receipt["traceId"])
+
+    def test_rejects_missing_reused_or_mismatched_response_identity(self) -> None:
+        traceparent = f"00-{PROBE.ORDER_TRACE_ID}-{PROBE.ORDER_PARENT_ID}-01"
+        cases = [
+            {},
+            {"X-Correlation-Id": "governed-agent-55555555", "X-Trace-Id": PROBE.ORDER_TRACE_ID},
+            {"X-Correlation-Id": str(uuid.uuid4()), "X-Trace-Id": PROBE.CACHE_TRACE_ID},
+        ]
+        for headers in cases:
+            with self.subTest(headers=headers):
+                with mock.patch.object(PROBE, "request", return_value=(201, headers, {"orderId": "123"})):
+                    with self.assertRaises(AssertionError):
+                        PROBE.create_order("http://fixture", "opaque-fixture", traceparent)
+
 
 
 if __name__ == "__main__":

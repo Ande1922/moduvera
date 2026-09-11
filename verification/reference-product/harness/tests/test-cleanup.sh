@@ -122,6 +122,7 @@ run_case() {
     REFERENCE_PREFLIGHT_ONLY=0 REFERENCE_KEEP_RUNNING=0 \
     REFERENCE_APP_STOP_TIMEOUT_SECONDS=1 REFERENCE_DIAGNOSTICS_TIMEOUT_SECONDS=1 \
     REFERENCE_COMPOSE_DOWN_TIMEOUT_SECONDS=2 \
+    REFERENCE_STDOUT_EVIDENCE_DIR="$case_dir/stdout" \
     REFERENCE_LOCK_ROOT="$case_dir/locks" REFERENCE_PORT_MANIFEST="$case_dir/manifest.json" \
     "$HARNESS_DIR/run-topology.sh" microservices >"$case_dir/out" 2>"$case_dir/err"
   status=$?
@@ -136,6 +137,10 @@ run_case success "" 0
   || fail "successful cleanup left run locks"
 [[ -f "$TEST_DIR/success/state/preflight-mocked" ]] \
   || fail "cleanup fixture did not use its isolated preflight mock"
+for app in gateway identity catalog order inventory; do
+  [[ -f "$TEST_DIR/success/stdout/$app.log" ]] \
+    || fail "cleanup removed $app stdout before retaining requested evidence"
+done
 
 run_case compose-failure compose-failure 0
 [[ "$(<"$TEST_DIR/compose-failure/status")" == "70" ]] \

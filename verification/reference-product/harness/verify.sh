@@ -18,7 +18,7 @@ esac
 run_harness_self_test() {
   env -u REFERENCE_GOVERNED_OBSERVABILITY \
     -u REFERENCE_GOVERNED_PROBE_READY -u REFERENCE_GOVERNED_PROBE_RELEASE \
-    -u REFERENCE_PORT_MANIFEST "$1"
+    -u REFERENCE_PORT_MANIFEST -u REFERENCE_STDOUT_EVIDENCE_DIR "$1"
 }
 
 run_harness_self_test "$HARNESS_DIR/tests/test-port-plan.sh"
@@ -36,6 +36,11 @@ if [[ "${REFERENCE_SKIP_BUILD:-0}" != "1" ]]; then
   # These topology-specific tests inject duplicate deliveries below the public seam. Exposing a
   # production test endpoint merely for duplicate injection would weaken the black-box boundary.
   echo "Focused duplicate-delivery evidence: PASS ($duplicate_tests)"
+fi
+
+if [[ "$TOPOLOGY" != "all" && "${REFERENCE_KEEP_RUNNING:-0}" == "1" ]]; then
+  # The caller must signal the process that owns application cleanup and run locks.
+  exec "$HARNESS_DIR/run-topology.sh" "$TOPOLOGY"
 fi
 
 if [[ "$TOPOLOGY" == "all" ]]; then
