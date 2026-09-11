@@ -313,8 +313,8 @@ public class RelayProcessIT {
         var wakes = new AtomicInteger();
         var administration = new JdbcOutboxStore(new org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate(db.source),
                 JdbcMessagingDialect.POSTGRESQL, db.transactions, wakes::incrementAndGet);
-        String token = db.external.queryForObject("SELECT claim_token FROM moduvera_message_outbox", String.class);
-        assertThat(inManagement(id, () -> administration.redrive(new io.github.ande1922.moduvera.message.MessageId(id), token))).isTrue();
+        String recoveryClaim = db.external.queryForObject("SELECT claim_token FROM moduvera_message_outbox", String.class);
+        assertThat(inManagement(id, () -> administration.redrive(new io.github.ande1922.moduvera.message.MessageId(id), recoveryClaim))).isTrue();
         assertThat(wakes).hasValue(1);
         var thirdGeneration = db.row();
         assertThat(((Number) thirdGeneration.get("publication_generation")).intValue()).isEqualTo(2);

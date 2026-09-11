@@ -18,7 +18,7 @@ public final class RedriveFixtureChild {
         var db = new Database(System.getenv("RELAY_FIXTURE_JDBC_URL"), System.getenv("RELAY_FIXTURE_JDBC_USER"),
                 System.getenv("RELAY_FIXTURE_JDBC_PASSWORD"), JdbcMessagingDialect.POSTGRESQL);
         String id = db.jdbc.queryForObject("SELECT message_id FROM moduvera_message_outbox", String.class);
-        String token = db.jdbc.queryForObject("SELECT claim_token FROM moduvera_message_outbox", String.class);
+        String recoveryClaim = db.jdbc.queryForObject("SELECT claim_token FROM moduvera_message_outbox", String.class);
         var store = new JdbcOutboxStore(new NamedParameterJdbcTemplate(db.source), JdbcMessagingDialect.POSTGRESQL, db.transactions, () -> {
             var row = db.row();
             assertThat(row.get("status")).isEqualTo("PENDING");
@@ -36,7 +36,7 @@ public final class RedriveFixtureChild {
             }
         });
         try (var logs = new Logs(directory.resolve("redrive-logs.jsonl"))) {
-            inManagement(id, () -> store.redrive(new MessageId(id), token));
+            inManagement(id, () -> store.redrive(new MessageId(id), recoveryClaim));
         }
         throw new AssertionError("redrive fixture must stop at the committed wake callback");
     }
