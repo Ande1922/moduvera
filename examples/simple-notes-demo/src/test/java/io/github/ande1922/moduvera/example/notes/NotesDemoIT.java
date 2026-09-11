@@ -204,7 +204,7 @@ class NotesDemoIT {
         assertThat(jdbc.queryForList(
                         "SELECT version FROM flyway_history_messaging WHERE success ORDER BY installed_rank",
                         String.class))
-                .containsExactly("0", "1", "2");
+                .containsExactly("0", "1", "2", "3");
         assertThat(jdbc.queryForList(
                         "SELECT version FROM flyway_history_notes_demo WHERE success ORDER BY installed_rank",
                         String.class))
