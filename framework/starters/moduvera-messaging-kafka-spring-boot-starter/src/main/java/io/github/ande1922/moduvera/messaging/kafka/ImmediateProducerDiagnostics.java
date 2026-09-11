@@ -15,16 +15,20 @@ import org.springframework.cloud.stream.binder.kafka.config.ClientFactoryCustomi
 import org.springframework.kafka.core.ProducerFactory;
 import org.springframework.kafka.support.LoggingProducerListener;
 
-/** Adapts only the default producer-listener callback for an active ImmediatePublication call. */
+/** Adapts only the default producer-listener callback for an active synchronous publication. */
 public final class ImmediateProducerDiagnostics implements BeanPostProcessor, ClientFactoryCustomizer {
     private static final Logger LOGGER = LoggerFactory.getLogger("mq.produce.propagating");
     private static final ThreadLocal<Attempt> PUBLISHING = new ThreadLocal<>();
     private static final ThreadLocal<CallbackFailure> CALLBACK = new ThreadLocal<>();
 
     static Scope open() {
-        var scope = new Scope(PUBLISHING.get());
         var snapshot = ExecutionContextHolder.current()
                 .map(context -> DiagnosticLogSnapshot.capture(context.correlationId())).orElse(null);
+        return open(snapshot);
+    }
+
+    static Scope open(DiagnosticLogSnapshot snapshot) {
+        var scope = new Scope(PUBLISHING.get());
         PUBLISHING.set(new Attempt(snapshot));
         return scope;
     }

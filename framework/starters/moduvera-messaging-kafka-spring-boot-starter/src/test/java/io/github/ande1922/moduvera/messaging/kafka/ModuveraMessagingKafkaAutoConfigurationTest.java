@@ -3,6 +3,7 @@ package io.github.ande1922.moduvera.messaging.kafka;
 import static org.assertj.core.api.Assertions.assertThat;
 import io.github.ande1922.moduvera.data.TransactionBoundary;
 import io.github.ande1922.moduvera.message.outbox.PublicationObserver;
+import io.github.ande1922.moduvera.message.outbox.PublicationLifecycle;
 import io.github.ande1922.moduvera.message.publication.DurablePublication;
 import io.github.ande1922.moduvera.message.publication.ImmediatePublication;
 import io.github.ande1922.moduvera.migration.MigrationDefinition;
@@ -65,6 +66,8 @@ class ModuveraMessagingKafkaAutoConfigurationTest {
                     assertThat(context).hasSingleBean(StreamBridgeMessageTransport.class);
                     assertThat(context).hasSingleBean(LocalOutboxWakeSignal.class);
                     assertThat(context).hasSingleBean(PublicationObserver.class);
+                    assertThat(context).hasSingleBean(PublicationLifecycle.class);
+                    assertThat(context.getBean(PublicationLifecycle.class)).isInstanceOf(RelayPublicationLifecycle.class);
                     assertThat(context.getBean(PublicationObserver.class))
                             .isNotInstanceOf(MicrometerPublicationObserver.class);
                     assertThat(context).doesNotHaveBean(MigrationDefinition.class);
@@ -107,6 +110,21 @@ class ModuveraMessagingKafkaAutoConfigurationTest {
                         "moduvera.messaging.kafka.immediate-business-boundary-destinations[0]=unknown")
                 .run(context -> assertThat(context).hasFailed()
                         .getFailure().hasRootCauseMessage("Immediate business boundary destinations require configured logical routes"));
+    }
+
+    @Test
+    void rejectsAnUnconfiguredRelayBusinessBoundaryDestination() {
+        runner.withPropertyValues(
+                        "moduvera.messaging.kafka.routes[inventory.commands]=inventoryCommands-out-0",
+                        "spring.cloud.stream.kafka.bindings.inventoryCommands-out-0.producer.sync=true",
+                        "spring.cloud.stream.kafka.bindings.inventoryCommands-out-0.producer.configuration.acks=all",
+                        "spring.cloud.stream.kafka.bindings.inventoryCommands-out-0.producer.configuration.delivery.timeout.ms=2000",
+                        "spring.cloud.stream.kafka.bindings.inventoryCommands-out-0.producer.configuration.request.timeout.ms=2000",
+                        "spring.cloud.stream.kafka.bindings.inventoryCommands-out-0.producer.configuration.max.block.ms=2000",
+                        "moduvera.messaging.kafka.relay-enabled=false",
+                        "moduvera.messaging.kafka.relay-business-boundary-destinations[0]=unknown")
+                .run(context -> assertThat(context).hasFailed()
+                        .getFailure().hasRootCauseMessage("Relay business boundary destinations require configured logical routes"));
     }
 
     @Test

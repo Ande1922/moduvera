@@ -116,7 +116,7 @@ final class OutboxPublicationPreparation implements AutoCloseable {
         }
     }
 
-    private static Context extract(String parent, String state) {
+    static Context extract(String parent, String state) {
         Map<String, String> values = new HashMap<>();
         values.put("traceparent", parent);
         values.put("tracestate", state);

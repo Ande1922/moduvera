@@ -6,6 +6,8 @@ import io.github.ande1922.moduvera.message.outbox.MessageTransport;
 import io.github.ande1922.moduvera.message.outbox.OutboxStore;
 import io.github.ande1922.moduvera.message.outbox.OutboxWorker;
 import io.github.ande1922.moduvera.message.outbox.PublicationObserver;
+import io.github.ande1922.moduvera.message.outbox.PublicationLifecycle;
+import io.github.ande1922.moduvera.messaging.kafka.RelayPublicationLifecycle;
 import io.github.ande1922.moduvera.message.publication.DurablePublication;
 import io.github.ande1922.moduvera.message.publication.ImmediatePublication;
 import io.github.ande1922.moduvera.messaging.kafka.JdbcDurablePublication;
@@ -170,13 +172,24 @@ public class ModuveraMessagingKafkaAutoConfiguration {
     }
 
     @Bean
+    @ConditionalOnMissingBean(PublicationLifecycle.class)
+    RelayPublicationLifecycle moduveraRelayPublicationLifecycle(ModuveraMessagingKafkaProperties properties) {
+        var destinations = java.util.Set.copyOf(properties.getRelayBusinessBoundaryDestinations());
+        if (!properties.getRoutes().keySet().containsAll(destinations)) {
+            throw new IllegalStateException("Relay business boundary destinations require configured logical routes");
+        }
+        return new RelayPublicationLifecycle(destinations);
+    }
+
+    @Bean
     @ConditionalOnMissingBean
     OutboxWorker moduveraOutboxWorker(
             OutboxStore store,
             MessageTransport transport,
             Clock clock,
             ModuveraMessagingKafkaProperties properties,
-            PublicationObserver observer) {
+            PublicationObserver observer,
+            PublicationLifecycle lifecycle) {
         properties.validateRelayInvariant();
         return new OutboxWorker(
                 store,
@@ -187,7 +200,8 @@ public class ModuveraMessagingKafkaAutoConfiguration {
                 properties.getLeaseSafetyMargin(),
                 properties.getFailureBackoff(),
                 properties.getRelayMaxAttempts(),
-                observer);
+                observer,
+                lifecycle);
     }
 
     @Bean

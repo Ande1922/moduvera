@@ -239,3 +239,38 @@ locked Agent/extension and OTLP receiver configuration. All native Connector/J
 spans are separately counted and safety-checked as in the append fixture.
 Publication execution Context restoration, Kafka ACK/writeback recovery and
 independent process restarts remain separate Relay lifecycle qualification.
+
+### Relay publication attempts
+
+An admitted Relay send opens one INTERNAL `outbox.publish` Span under the
+publication context read from the database. Valid original creation is a Link.
+The scope covers the actual synchronous transport call and its completion
+write; claim waiting and preparation remain outside. Ended parents, historical
+backlogs, retries, claim takeover and process restart keep the stored generation
+and carrier pair. The Agent alone supplies the Kafka producer Span and headers.
+Original correlation and identity are diagnostic fields; Relay does not install
+message authorization or inherit poll/management telemetry Context values.
+
+Every actual attempt emits a `task.execute` canonical with `task_name=outbox.publish`.
+`transport_result` reports the synchronous send result, independently of
+`outbox_write_result` (`published`, `retry`, `terminal`, `stale`, `failed`, or
+`not_attempted`). Only an accepted published write makes the canonical successful.
+ACK followed by write failure remains a failed unit with a successful send.
+An accepted retry emits one recovery WARN; an accepted terminal write emits one
+final ERROR with `DEP_OUTBOX_PUBLICATION_FAILED`, without a will-retry WARN.
+Interruption retains the existing deferred result and failure count.
+
+`relay-business-boundary-destinations` explicitly classifies logical routes that
+require an additional `mq.produce` INFO per broker ACK/failure. Listed destinations
+must exist in `routes`; the default empty list keeps internal sends represented
+by their canonical/recovery/final records. The built-in producer listener leaves
+synchronous failure ownership with Worker; custom listeners are preserved.
+
+`outbox_failed_attempts` is the known persisted failure count after an accepted
+write (otherwise the count read at admission); `outbox_failure_limit` is the
+configured failure threshold. Neither is a total send ordinal. ACK/writeback
+failure, takeover and crash can repeat a send without incrementing this counter,
+so Relay omits unknowable `retry.attempt` rather than fabricating it or confusing
+it with generation. Existing PublicationObserver and Micrometer duration remains
+send-plus-writeback, excluding preparation and queue time; no diagnostic identity,
+generation or attempt values become meter tags.

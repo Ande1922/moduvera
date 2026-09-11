@@ -1,6 +1,7 @@
 package io.github.ande1922.moduvera.message.outbox;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.ande1922.moduvera.context.Actor;
 import io.github.ande1922.moduvera.context.ActorType;
@@ -120,6 +121,180 @@ class OutboxWorkerTest {
         } finally {
             Thread.interrupted();
         }
+    }
+
+    @Test
+    void admittedLifecycleCoversSendAndWriteButDoesNotChangeObserverDuration() {
+        var ticker = new AtomicLong();
+        var order = new ArrayList<String>();
+        var original = new ClaimedOutboxMessage(message("lifecycle", "lifecycle"), 0);
+        var prepared = new ClaimedOutboxMessage(original.message(), 2, 4, "stored-parent", "stored-state");
+        var store = new PreparationStore(List.of(original));
+        store.prepare = ignored -> {
+            ticker.set(100_000_000);
+            return Optional.of(prepared);
+        };
+        store.onPublished = () -> { order.add("write"); ticker.addAndGet(3_000_000); };
+        PublicationLifecycle lifecycle = (entry, limit) -> {
+            assertThat(entry).isSameAs(prepared);
+            assertThat(limit).isEqualTo(5);
+            order.add("open");
+            ticker.addAndGet(7_000_000);
+            return new PublicationLifecycle.Attempt() {
+                @Override
+                public void transportCompleted(Throwable failure) {
+                    assertThat(failure).isNull();
+                    order.add("ack");
+                }
+
+                @Override
+                public void stateCompleted(PublicationObserver.Result result, boolean updated) {
+                    assertThat(result).isEqualTo(PublicationObserver.Result.PUBLISHED);
+                    assertThat(updated).isTrue();
+                    order.add("state");
+                }
+
+                @Override
+                public void close() {
+                    order.add("close");
+                    ticker.addAndGet(9_000_000);
+                }
+            };
+        };
+        var duration = new AtomicReference<Duration>();
+        var observer = new PublicationObserver() {
+            @Override
+            public void completed(SerializedMessage message, Result result, Duration elapsed) {
+                order.add("observed");
+                duration.set(elapsed);
+            }
+        };
+        var worker = new OutboxWorker(store, ignored -> { order.add("send"); ticker.addAndGet(2_000_000); },
+                WALL_CLOCK, ticker::get, Duration.ofSeconds(10), Duration.ofSeconds(2), Duration.ZERO,
+                5, observer, lifecycle);
+        assertThat(worker.publishBatch(1)).isEqualTo(new OutboxPublishReport(1, 1, 0, 0, 0));
+        assertThat(order).containsExactly("open", "send", "ack", "write", "state", "observed", "close");
+        assertThat(duration).hasValue(Duration.ofMillis(5));
+    }
+
+    @Test
+    void successfulSendWithFailedWriteEscapesWithoutRetryCountingAndClosesScope() {
+        var store = new PreparationStore(List.of(new ClaimedOutboxMessage(message("write-fails", "write-fails"), 0)));
+        var writeFailure = new IllegalStateException("write failed");
+        store.onPublished = () -> { throw writeFailure; };
+        var order = new ArrayList<String>();
+        var worker = lifecycleWorker(store, ignored -> {}, new PublicationLifecycle.Attempt() {
+            @Override
+            public void transportCompleted(Throwable failure) {
+                assertThat(failure).isNull();
+                order.add("ack");
+            }
+
+            @Override
+            public void stateCompleted(PublicationObserver.Result result, boolean updated) {
+                throw new AssertionError("a failed write has no accepted disposition");
+            }
+
+            @Override
+            public void stopped(Throwable failure, boolean interrupted) {
+                assertThat(failure).isSameAs(writeFailure);
+                assertThat(interrupted).isFalse();
+                order.add("escaped");
+            }
+
+            @Override
+            public void close() { order.add("close"); }
+        }, 3);
+        assertThatThrownBy(() -> worker.publishBatch(1)).isSameAs(writeFailure);
+        assertThat(order).containsExactly("ack", "escaped", "close");
+        assertThat(store.failures).isZero();
+        assertThat(store.terminals).isZero();
+    }
+
+    @Test
+    void failedSendLifecycleReportsTheWorkersDispositionAndInterruptionWithoutChangingPolicy() {
+        for (int maximum : List.of(1, 2, 3)) {
+            var store = new PreparationStore(List.of(new ClaimedOutboxMessage(message("stop", "stop"), 0)));
+            var failure = maximum == 3 ? new IllegalStateException(new InterruptedException())
+                    : new IllegalStateException("send failed");
+            var order = new ArrayList<String>();
+            var worker = lifecycleWorker(store, ignored -> { throw failure; }, new PublicationLifecycle.Attempt() {
+                @Override
+                public void transportCompleted(Throwable actual) {
+                    assertThat(actual).isSameAs(failure);
+                    order.add("failed");
+                }
+
+                @Override
+                public void stateCompleted(PublicationObserver.Result result, boolean updated) {
+                    assertThat(updated).isTrue();
+                    order.add(result.name());
+                }
+
+                @Override
+                public void stopped(Throwable actual, boolean interrupted) {
+                    assertThat(actual).isSameAs(failure);
+                    assertThat(interrupted).isTrue();
+                    order.add("interrupted");
+                }
+
+                @Override
+                public void close() { order.add("close"); }
+            }, maximum);
+            try {
+                var report = worker.publishBatch(1);
+                assertThat(order).containsExactly("failed", maximum == 1 ? "TERMINAL"
+                        : maximum == 2 ? "RETRY" : "interrupted", "close");
+                assertThat(report.failed()).isEqualTo(maximum == 3 ? 0 : 1);
+                assertThat(report.deferred()).isEqualTo(maximum == 3 ? 1 : 0);
+                assertThat(store.failures + store.terminals).isEqualTo(maximum == 3 ? 0 : 1);
+                assertThat(Thread.currentThread().isInterrupted()).isEqualTo(maximum == 3);
+            } finally {
+                Thread.interrupted();
+            }
+        }
+    }
+
+    @Test
+    void diagnosticBackendFailureCannotCreateARetryOrPreventSuccessfulCompletion() {
+        for (boolean failOpening : List.of(false, true)) {
+            var store = new PreparationStore(List.of(new ClaimedOutboxMessage(message("diagnostic", "diagnostic"), 0)));
+            var sends = new AtomicInteger();
+            var closed = new AtomicInteger();
+            PublicationLifecycle lifecycle = (entry, limit) -> {
+                if (failOpening) { throw new IllegalStateException("diagnostic unavailable"); }
+                return new PublicationLifecycle.Attempt() {
+                    @Override public void transportCompleted(Throwable failure) { throw new IllegalStateException("diagnostic unavailable"); }
+                    @Override public void stateCompleted(PublicationObserver.Result result, boolean updated) { throw new IllegalStateException("diagnostic unavailable"); }
+                    @Override public void close() { closed.incrementAndGet(); throw new IllegalStateException("diagnostic unavailable"); }
+                };
+            };
+            var worker = new OutboxWorker(store, ignored -> sends.incrementAndGet(), WALL_CLOCK, new AtomicLong()::get,
+                    Duration.ofSeconds(10), Duration.ofSeconds(2), Duration.ZERO, 3, PublicationObserver.noop(), lifecycle);
+            assertThat(worker.publishBatch(1)).isEqualTo(new OutboxPublishReport(1, 1, 0, 0, 0));
+            assertThat(sends).hasValue(1);
+            assertThat(store.failures + store.terminals).isZero();
+            assertThat(closed).hasValue(failOpening ? 0 : 1);
+        }
+    }
+
+    @Test
+    void diagnosticFailureCannotReplaceTheOriginalWriteFailure() {
+        var store = new PreparationStore(List.of(new ClaimedOutboxMessage(message("write-diagnostic", "write-diagnostic"), 0)));
+        var original = new IllegalStateException("database write failed");
+        store.onPublished = () -> { throw original; };
+        var worker = lifecycleWorker(store, ignored -> {}, new PublicationLifecycle.Attempt() {
+            @Override public void stopped(Throwable failure, boolean interrupted) { throw new IllegalStateException("diagnostic unavailable"); }
+            @Override public void close() { throw new IllegalStateException("diagnostic unavailable"); }
+        }, 3);
+        assertThatThrownBy(() -> worker.publishBatch(1)).isSameAs(original);
+        assertThat(store.failures + store.terminals).isZero();
+    }
+
+    private static OutboxWorker lifecycleWorker(PreparationStore store, MessageTransport transport,
+            PublicationLifecycle.Attempt attempt, int maximum) {
+        return new OutboxWorker(store, transport, WALL_CLOCK, new AtomicLong()::get, Duration.ofSeconds(10),
+                Duration.ofSeconds(2), Duration.ZERO, maximum, PublicationObserver.noop(), (entry, limit) -> attempt);
     }
 
     private static OutboxWorker preparationWorker(PreparationStore store, MessageTransport transport,

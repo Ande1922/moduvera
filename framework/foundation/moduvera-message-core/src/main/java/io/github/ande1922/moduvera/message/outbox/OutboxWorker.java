@@ -16,6 +16,7 @@ public final class OutboxWorker {
     private final Duration failureBackoff;
     private final int maxAttempts;
     private final PublicationObserver observer;
+    private final PublicationLifecycle lifecycle;
 
     public OutboxWorker(
             OutboxStore store,
@@ -46,11 +47,27 @@ public final class OutboxWorker {
             Duration failureBackoff,
             int maxAttempts,
             PublicationObserver observer) {
+        this(store, transport, clock, monotonicNanos, claimLease, leaseSafetyMargin, failureBackoff,
+                maxAttempts, observer, PublicationLifecycle.noop());
+    }
+
+    public OutboxWorker(
+            OutboxStore store,
+            MessageTransport transport,
+            Clock clock,
+            LongSupplier monotonicNanos,
+            Duration claimLease,
+            Duration leaseSafetyMargin,
+            Duration failureBackoff,
+            int maxAttempts,
+            PublicationObserver observer,
+            PublicationLifecycle lifecycle) {
         if (store == null
                 || transport == null
                 || clock == null
                 || monotonicNanos == null
                 || observer == null
+                || lifecycle == null
                 || maxAttempts < 1
                 || claimLease == null
                 || claimLease.isZero()
@@ -71,8 +88,10 @@ public final class OutboxWorker {
         this.failureBackoff = failureBackoff;
         this.maxAttempts = maxAttempts;
         this.observer = observer;
+        this.lifecycle = lifecycle;
     }
 
+    @SuppressWarnings("PMD.CloseResource") // The resource-free placeholder is replaced once; the admitted attempt closes in finally.
     public OutboxPublishReport publishBatch(int limit) {
         long claimStarted = monotonicNanos.getAsLong();
         var batch = store.claim(limit, claimLease);
@@ -97,64 +116,84 @@ public final class OutboxWorker {
             ClaimedOutboxMessage entry = claimed.messages().get(index);
             long sendStarted = 0;
             boolean sendAttempted = false;
+            PublicationLifecycle.Attempt attempt = PublicationLifecycle.Attempt.noop();
             try {
-                var prepared = store.preparePublication(entry, claimed.claimToken());
-                if (prepared.isEmpty()) {
-                    deferred++;
+                try {
+                    var prepared = store.preparePublication(entry, claimed.claimToken());
+                    if (prepared.isEmpty()) {
+                        deferred++;
+                        continue;
+                    }
+                    entry = prepared.orElseThrow();
+                    if (elapsedSince(claimStarted) >= sendStartBudgetNanos) {
+                        deferred += claimed.messages().size() - index;
+                        break;
+                    }
+                    attempt = SafePublicationAttempt.open(lifecycle, entry, maxAttempts);
+                    // Keep the existing observer's send-plus-writeback duration, excluding preparation.
+                    sendStarted = monotonicNanos.getAsLong();
+                    sendAttempted = true;
+                    try {
+                        transport.send(entry.message());
+                    } catch (RuntimeException | Error failure) {
+                        attempt.transportCompleted(failure);
+                        throw failure;
+                    }
+                    attempt.transportCompleted(null);
+                } catch (RuntimeException failure) {
+                    if (wasInterrupted(failure)) {
+                        attempt.stopped(failure, true);
+                        Thread.currentThread().interrupt();
+                        deferred += claimed.messages().size() - index;
+                        break;
+                    }
+                    attempt.stateStarted();
+                    PublicationObserver.Result result;
+                    boolean updated;
+                    if (failure instanceof NonRetryableMessageException
+                            || entry.failedAttempts() + 1 >= maxAttempts) {
+                        result = PublicationObserver.Result.TERMINAL;
+                        updated = store.markTerminal(
+                                entry.message().descriptor().id(),
+                                claimed.claimToken(),
+                                clock.instant(),
+                                failure.getClass().getSimpleName());
+                    } else {
+                        result = PublicationObserver.Result.RETRY;
+                        updated = store.markFailed(
+                                entry.message().descriptor().id(),
+                                claimed.claimToken(),
+                                failureBackoff,
+                                failure.getClass().getSimpleName());
+                    }
+                    attempt.stateCompleted(result, updated);
+                    if (!updated) {
+                        staleUpdates++;
+                        observer.staleToken(result.name().toLowerCase(java.util.Locale.ROOT));
+                    }
+                    if (sendAttempted) {
+                        observer.completed(entry.message(), result, elapsedDuration(sendStarted));
+                    }
+                    failed++;
                     continue;
                 }
-                entry = prepared.orElseThrow();
-                if (elapsedSince(claimStarted) >= sendStartBudgetNanos) {
-                    deferred += claimed.messages().size() - index;
-                    break;
-                }
-                // Keep the existing observer's send-plus-writeback duration, excluding preparation.
-                sendStarted = monotonicNanos.getAsLong();
-                sendAttempted = true;
-                transport.send(entry.message());
-            } catch (RuntimeException failure) {
-                if (wasInterrupted(failure)) {
-                    Thread.currentThread().interrupt();
-                    deferred += claimed.messages().size() - index;
-                    break;
-                }
-                PublicationObserver.Result result;
-                boolean updated;
-                if (failure instanceof NonRetryableMessageException
-                        || entry.failedAttempts() + 1 >= maxAttempts) {
-                    result = PublicationObserver.Result.TERMINAL;
-                    updated = store.markTerminal(
-                            entry.message().descriptor().id(),
-                            claimed.claimToken(),
-                            clock.instant(),
-                            failure.getClass().getSimpleName());
-                } else {
-                    result = PublicationObserver.Result.RETRY;
-                    updated = store.markFailed(
-                            entry.message().descriptor().id(),
-                            claimed.claimToken(),
-                            failureBackoff,
-                            failure.getClass().getSimpleName());
-                }
+                attempt.stateStarted();
+                boolean updated = store.markPublished(
+                        entry.message().descriptor().id(), claimed.claimToken(), clock.instant());
+                attempt.stateCompleted(PublicationObserver.Result.PUBLISHED, updated);
                 if (!updated) {
                     staleUpdates++;
-                    observer.staleToken(result.name().toLowerCase(java.util.Locale.ROOT));
+                    observer.staleToken("published");
                 }
-                if (sendAttempted) {
-                    observer.completed(entry.message(), result, elapsedDuration(sendStarted));
-                }
-                failed++;
-                continue;
+                observer.completed(
+                        entry.message(), PublicationObserver.Result.PUBLISHED, elapsedDuration(sendStarted));
+                published++;
+            } catch (RuntimeException | Error failure) {
+                attempt.stopped(failure, false);
+                throw failure;
+            } finally {
+                attempt.close();
             }
-            boolean updated = store.markPublished(
-                    entry.message().descriptor().id(), claimed.claimToken(), clock.instant());
-            if (!updated) {
-                staleUpdates++;
-                observer.staleToken("published");
-            }
-            observer.completed(
-                    entry.message(), PublicationObserver.Result.PUBLISHED, elapsedDuration(sendStarted));
-            published++;
         }
         return new OutboxPublishReport(
                 claimed.messages().size(), published, failed, deferred, staleUpdates);
