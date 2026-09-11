@@ -43,7 +43,7 @@ public final class ImmediateProducerDiagnostics implements BeanPostProcessor, Cl
                     && invocation.getArguments()[0] == callback.record
                     && invocation.getArguments()[2] == callback.failure) {
                 try (var ignored = callback.attempt.snapshot == null ? null : callback.attempt.snapshot.openFieldsScope()) {
-                    LOGGER.atInfo().setCause(callback.failure).log("同步发布失败继续交给调用方");
+                    LOGGER.atDebug().setCause(callback.failure).log("同步发布失败继续交给调用方");
                 }
                 return null;
             }

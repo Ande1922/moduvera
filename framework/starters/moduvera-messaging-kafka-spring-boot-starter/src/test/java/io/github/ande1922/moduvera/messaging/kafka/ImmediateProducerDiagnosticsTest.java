@@ -54,6 +54,8 @@ class ImmediateProducerDiagnosticsTest {
             };
             events.start();
             Logger diagnosticLogger = (Logger) LoggerFactory.getLogger("mq.produce.propagating");
+            var previousLevel = diagnosticLogger.getLevel();
+            diagnosticLogger.setLevel(ch.qos.logback.classic.Level.DEBUG);
             Logger nativeLogger = (Logger) LoggerFactory.getLogger(LoggingProducerListener.class);
             diagnosticLogger.addAppender(events); nativeLogger.addAppender(events);
             var callbacks = new AtomicInteger();
@@ -83,12 +85,13 @@ class ImmediateProducerDiagnosticsTest {
                 for (int index = 0; index < 2; index++) {
                     String id = index == 0 ? "one" : "two";
                     assertThat(encoded.get(index)).contains("corr-" + id, "publisher-" + id, "tenant-" + id,
-                            "\"level\":\"INFO\"").doesNotContain("callback-private", "stack_trace");
+                            "\"level\":\"DEBUG\"").doesNotContain("callback-private", "stack_trace");
                 }
                 listener.onError(new ProducerRecord<>("unowned", new byte[0]), null, new TimeoutException("unowned"));
                 assertThat(encoded).hasSize(3);
                 assertThat(encoded.getLast()).contains("\"level\":\"ERROR\"").doesNotContain("corr-one", "corr-two");
             } finally {
+                diagnosticLogger.setLevel(previousLevel);
                 diagnosticLogger.detachAppender(events);
                 nativeLogger.detachAppender(events);
                 events.stop();

@@ -105,8 +105,8 @@ errors = [event for event in events if event["log"]["level"] == "ERROR"]
 assert len(errors) == 1 and errors[0]["log"]["logger"] == "immediate.fixture.final"
 assert errors[0]["error"]["code"] == "DEP_FIXTURE_BROKER"
 propagating = [event for event in events if event["log"]["logger"] == "mq.produce.propagating"]
-assert len(propagating) == 1 and propagating[0]["log"]["level"] == "INFO"
-for event in (errors[0], propagating[0]):
+assert not propagating, "default INFO runtime must omit process-only propagation diagnostics"
+for event in errors:
     assert event["correlation_id"] == "corr-broker-failure"
     assert event["trace_id"] == callers["broker-failure"]["trace"]
     assert event["span_id"] == callers["broker-failure"]["span"]
@@ -120,7 +120,7 @@ for sentinel in json.loads((root / "sentinels.json").read_text()).values():
     assert sentinel not in raw and sentinel not in (root / "spans.jsonl").read_text()
 print(json.dumps({"applicationCalls": 8, "producerApiSends": 6, "realAcknowledgedMessages": 5,
                   "rejectedDatabaseTransactions": 2, "resultInfo": 5, "boundarySuccessInfo": 4,
-                  "internalSuccessInfo": 0, "failureResultInfo": 1, "callerFinalError": 1,
+                  "internalSuccessInfo": 0, "failureResultInfo": 1, "propagationInfo": 0, "callerFinalError": 1,
                   "sampledProducerSpans": 5, "unsampledProducerAttempt": 1, "exportedSpans": len(spans),
                   "agentIntegrationRootWithoutCallerContext": 1, "creationAndTransportReconciled": True,
                   "failedBrokerOutcome": "unknown", "sensitiveMatches": []}, indent=2))

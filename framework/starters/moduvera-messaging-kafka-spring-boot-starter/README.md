@@ -132,7 +132,7 @@ retry count, message body or arbitrary headers are logged.
 A default-listener Bean adapter recognizes only the built-in
 `LoggingProducerListener` at its standard bean names. Within the original
 Immediate callback, identical ProducerRecord and Exception objects identify
-that propagating diagnostic; it becomes safe INFO, while the caller owns the
+that process-only diagnostic; it is safe DEBUG, while the caller owns the
 final ERROR. Custom listeners and unmatched records pass through. There is no
 new global Logback filter or logger-level change. The additive producer
 postprocessor preserves the original callback, future, record and exception.
