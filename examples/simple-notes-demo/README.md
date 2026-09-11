@@ -114,7 +114,11 @@ metrics endpoint and 500 ms period, confirms positive Trace reception, and keeps
 alive for at least two seconds while observing zero SDK metrics/log requests. This is a
 bounded fixture observation, not a production monitoring guarantee. The
 [shared launch policy](../../verification/governed-observability/agent-runtime.sh) supplies
-all Agent options and the required runtime handshake.
+all Agent options and the required runtime handshake. The Notes Failsafe configuration
+combines those options with late-resolved JaCoCo arguments. The same JVM verifies the
+locked JaCoCo digest, and the run retains fresh execution data plus a report showing
+covered Notes application/controller lines. Ordinary tests keep their existing JaCoCo
+instrumentation.
 
 Upgrade existing supported Messaging consumers before publishers so readers understand
 the creation/transport separation. Apply the appended Messaging schema migrations under

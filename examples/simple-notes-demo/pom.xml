@@ -17,6 +17,8 @@
 
   <properties>
     <java.version>26</java.version>
+    <argLine />
+    <notes.agent.options />
     <maven.compiler.release>${java.version}</maven.compiler.release>
     <moduvera.version>0.1.0-SNAPSHOT</moduvera.version>
     <maven-enforcer-plugin.version>3.6.2</maven-enforcer-plugin.version>
@@ -148,6 +150,7 @@
           </execution>
         </executions>
         <configuration>
+          <argLine>@{argLine} ${notes.agent.options}</argLine>
           <systemPropertyVariables>
             <postgresql.test.image>${postgresql.test.image}</postgresql.test.image>
             <kafka.test.image>${kafka.test.image}</kafka.test.image>

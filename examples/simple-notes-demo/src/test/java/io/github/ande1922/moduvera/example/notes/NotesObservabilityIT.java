@@ -120,6 +120,9 @@ class NotesObservabilityIT {
     @Test
     void qualifiesHttpPublicationRecoveryAndMetricsThroughPublicComponents() throws Exception {
         assertThat(observer).isInstanceOf(MicrometerPublicationObserver.class);
+        if (AGENT) {
+            assertGovernedCoverageAgent();
+        }
         maintenance.runOnce();
         var created = request("create", "POST", "/api/v1/notes", "tenant-a-writer", "{\"content\":\"notes-private-body-sentinel\"}", 201);
         String noteId = json.readTree(created.body()).get("id").asText();
@@ -228,6 +231,22 @@ class NotesObservabilityIT {
                     "creation", immutable.get("creation_traceparent"), "wire", wire, "metrics", metricEvidence,
                     "consumer_offset", consumed(), "infrastructure", Map.of("postgresql", POSTGRES.getDockerImageName(), "kafka", KAFKA.getDockerImageName()))));
         }
+    }
+
+    private void assertGovernedCoverageAgent() throws Exception {
+        var agentArguments = java.lang.management.ManagementFactory.getRuntimeMXBean().getInputArguments()
+                .stream().filter(argument -> argument.startsWith("-javaagent:")).toList();
+        var coverageArguments = agentArguments.stream()
+                .filter(argument -> argument.contains("org.jacoco.agent-0.8.15-runtime.jar")).toList();
+        assertThat(coverageArguments.size()).as("JaCoCo must coexist with OTel in the governed Notes JVM").isEqualTo(1);
+        Path coverageAgent = Path.of(coverageArguments.getFirst().substring("-javaagent:".length()).split("=", 2)[0]);
+        String digest = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                .digest(Files.readAllBytes(coverageAgent)));
+        assertThat(digest).isEqualTo(System.getProperty("notes.jacoco.sha256"));
+        assertThat(agentArguments.size()).isEqualTo(3); // JaCoCo, OTel and the extension launch guard
+        Files.writeString(Path.of(System.getenv("MODUVERA_OBSERVABILITY_EVIDENCE_DIR"), "notes-agent-coexistence.json"),
+                json.writeValueAsString(Map.of("jacoco_sha256", digest, "agent_count", agentArguments.size(),
+                        "process_id", ProcessHandle.current().pid())));
     }
 
     private String createIntent(String label) throws Exception {

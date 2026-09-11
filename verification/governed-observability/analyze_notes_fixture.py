@@ -124,6 +124,16 @@ assert receipt["metrics"] == {
     "claimed": 6, "published": 2, "retry": 1, "terminal_results": 2, "stale": 1,
     "conflicts": 1, "cleanup": 1, "pending": 2, "terminal_backlog": 1,
 }
+coexistence = json.loads((root / "notes-agent-coexistence.json").read_text())
+assert coexistence["agent_count"] == 3
+assert all(span["resource"]["process.pid"] == coexistence["process_id"] for span in spans)
+assert (root / "notes-jacoco.exec").stat().st_size > 0
+coverage = ET.parse(root / "notes-jacoco.xml").getroot()
+for class_name in ("NoteApplicationService", "NoteController"):
+    covered = only([node for node in coverage.findall(".//class") if node.attrib["name"].endswith("/" + class_name)])
+    lines = only([node for node in covered.findall("counter") if node.attrib["type"] == "LINE"])
+    assert int(lines.attrib["covered"]) > 0, class_name
+assert (root / "notes-coverage-report.exit").read_text().strip() == "0"
 namespace = {"m": "http://maven.apache.org/POM/4.0.0"}
 effective = ET.parse(root / "notes-effective-pom.xml").getroot()
 assert effective.find("m:parent/m:artifactId", namespace).text == "spring-boot-starter-parent"
@@ -147,5 +157,5 @@ for path, digest in binding["runtime_sha256"].items():
 print(json.dumps({"result": "PASS", "http": 10, "sampled_http": 9, "unsampled_http": 1,
                   "exported_spans": len(spans), "broker_acks": 4, "actual_application_consumptions": 4,
                   "durable_replay": "one committed Inbox precheck skip after offset advance",
-                  "metric_families": 9, "sdk_metrics_requests": 0, "sdk_logs_requests": 0,
+                  "metric_families": 9, "jacoco_coexistence": True, "sdk_metrics_requests": 0, "sdk_logs_requests": 0,
                   "minimal_consumers": 3, "scope": "independent Notes PostgreSQL/Kafka assembly"}, indent=2))
