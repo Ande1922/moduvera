@@ -156,7 +156,7 @@ cleanup() {
     cleanup_status=70
   fi
   if [[ -n "${REFERENCE_CLEANUP_STATUS_FILE:-}" ]]; then
-    if ! printf '%s\n' "$cleanup_status" > "$REFERENCE_CLEANUP_STATUS_FILE"; then
+    if ! printf '%s %s\n' "$$" "$cleanup_status" > "$REFERENCE_CLEANUP_STATUS_FILE"; then
       echo "Reference cleanup failure: unable to record cleanup status" >&2
       cleanup_status=70
     fi

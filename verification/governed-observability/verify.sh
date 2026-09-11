@@ -51,15 +51,15 @@ stop_process() {
 
 stop_harness() {
   [[ -n "$HARNESS_PID" ]] || return 0
-  local status=0 requested=0
+  local status=0 requested=0 owner="$HARNESS_PID"
   if kill -0 "$HARNESS_PID" 2>/dev/null; then
     if kill -TERM "$HARNESS_PID" 2>/dev/null; then requested=1; fi
   fi
   wait "$HARNESS_PID" 2>/dev/null || status=$?
   HARNESS_PID=""
   printf '%s\n' "$status" > "$EVIDENCE_DIR/harness-stop.exit" || return 70
-  if [[ ! -f "$EVIDENCE_DIR/harness-cleanup.exit" ]] \
-    || [[ "$(<"$EVIDENCE_DIR/harness-cleanup.exit")" != "0" ]] \
+  if [[ ! -f "$EVIDENCE_DIR/harness-cleanup.receipt" ]] \
+    || [[ "$(<"$EVIDENCE_DIR/harness-cleanup.receipt")" != "$owner 0" ]] \
     || { [[ "$status" != "0" ]] && [[ "$requested:$status" != "1:143" ]]; }; then
     echo "Governed cleanup failure: harness exit or cleanup receipt did not confirm success" >&2
     return 70
@@ -191,10 +191,10 @@ IDENTITY_PROXY_PORT="$(<"$EVIDENCE_DIR/identity-proxy.port")"
 ORDER_PROXY_PORT="$(<"$EVIDENCE_DIR/order-proxy.port")"
 CATALOG_PROXY_PORT="$(<"$EVIDENCE_DIR/catalog-proxy.port")"
 
-: > "$EVIDENCE_DIR/harness-cleanup.exit"
+: > "$EVIDENCE_DIR/harness-cleanup.receipt"
 RUN_SLOT="$RUN_SLOT" REFERENCE_SKIP_BUILD=1 REFERENCE_KEEP_RUNNING=1 \
   REFERENCE_STDOUT_EVIDENCE_DIR="$EVIDENCE_DIR/harness-stdout" \
-  REFERENCE_CLEANUP_STATUS_FILE="$EVIDENCE_DIR/harness-cleanup.exit" \
+  REFERENCE_CLEANUP_STATUS_FILE="$EVIDENCE_DIR/harness-cleanup.receipt" \
   REFERENCE_JAVA_TOOL_OPTIONS="${REFERENCE_JAVA_TOOL_OPTIONS:--Xms64m -Xmx256m} -Dotel.exporter.otlp.metrics.protocol=http/protobuf -Dotel.exporter.otlp.metrics.endpoint=http://127.0.0.1:$OTLP_PORT/v1/metrics -Dotel.exporter.otlp.logs.protocol=http/protobuf -Dotel.exporter.otlp.logs.endpoint=http://127.0.0.1:$OTLP_PORT/v1/logs -Dotel.metric.export.interval=500" \
   REFERENCE_GOVERNED_OBSERVABILITY=1 REFERENCE_OTEL_JAVAAGENT="$AGENT" \
   REFERENCE_OTEL_AGENT_EXTENSION="$EXTENSION" \

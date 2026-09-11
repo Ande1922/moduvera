@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[3]
 
 class QualificationCleanupTest(unittest.TestCase):
     def run_stop(self, retention_failure=False, primary_status=0, missing_receipt=False,
-                 fallback_failure=False):
+                 fallback_failure=False, stale_receipt=None):
         outer = (ROOT / "verification/governed-observability/verify.sh").read_text()
         inner = (ROOT / "verification/reference-product/harness/run-topology.sh").read_text()
         outer_functions = outer[outer.index("stop_process() {"):outer.index("trap cleanup EXIT")]
@@ -20,6 +20,8 @@ class QualificationCleanupTest(unittest.TestCase):
         completion = "stop_" + outer.rsplit("\nstop_", 1)[1]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            if stale_receipt:
+                (root / "harness-cleanup.receipt").write_text(stale_receipt)
             run = root / "run"
             run.mkdir()
             (run / "gateway.log").write_text("shutdown event\n")
@@ -49,7 +51,7 @@ until [[ -f "$EVIDENCE_DIR/ready" ]]; do sleep 0.01; done
             configured = dict(os.environ, EVIDENCE_DIR=directory, RUN_DIR=str(run), CHILD=str(child),
                               REFERENCE_STDOUT_EVIDENCE_DIR=str(destination),
                               TEST_COMPOSE_PROJECT="fixture" if fallback_failure else "",
-                              REFERENCE_CLEANUP_STATUS_FILE=str(root / "harness-cleanup.exit"))
+                              REFERENCE_CLEANUP_STATUS_FILE=str(root / "harness-cleanup.receipt"))
             result = subprocess.run(["bash", "-c", script], env=configured, capture_output=True,
                                     text=True, timeout=10)
             retained = (destination / "gateway.log").is_file()
@@ -73,6 +75,14 @@ until [[ -f "$EVIDENCE_DIR/ready" ]]; do sleep 0.01; done
         result, _, _ = self.run_stop(missing_receipt=True)
         self.assertEqual(70, result.returncode, result.stdout + result.stderr)
         self.assertNotIn("verification: PASS", result.stdout)
+
+    def test_stale_self_test_success_cannot_replace_actual_owner_cleanup(self):
+        for receipt in ("0\n", f"{os.getpid()} 0\n"):
+            with self.subTest(receipt=receipt):
+                result, retained, _ = self.run_stop(missing_receipt=True, stale_receipt=receipt)
+                self.assertEqual(70, result.returncode, result.stdout + result.stderr)
+                self.assertNotIn("verification: PASS", result.stdout)
+                self.assertFalse(retained)
 
     def test_cleanup_failure_preserves_original_run_failure(self):
         result, _, _ = self.run_stop(retention_failure=True, primary_status=23)

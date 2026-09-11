@@ -80,6 +80,7 @@ SH
 cat > "$STUB_BIN/uv" <<'SH'
 #!/usr/bin/env bash
 if [[ "${STUB_PRIMARY_FAILURE:-0}" == "1" ]]; then
+  "$REAL_PYTHON" -c 'import time; print(time.monotonic_ns())' > "$STUB_STATE_DIR/cleanup-start"
   echo "injected public-contract failure" >&2
   exit 23
 fi
@@ -104,6 +105,9 @@ if [[ "${1:-}" == *"/preflight_ports.py" ]]; then
   exit 0
 fi
 if [[ "${1:-}" == *"/blackbox.py" ]]; then
+  if [[ "${2:-}" == "resume" ]]; then
+    "$REAL_PYTHON" -c 'import time; print(time.monotonic_ns())' > "$STUB_STATE_DIR/cleanup-start"
+  fi
   exit 0
 fi
 exec "$REAL_PYTHON" "$@"
@@ -129,6 +133,15 @@ run_case() {
   set -e
   printf '%s\n' "$status" > "$case_dir/status"
   printf '%s\n' "$((SECONDS - start_seconds))" > "$case_dir/elapsed"
+  # The final stub operation marks entry into teardown; startup/lock acquisition is not cleanup.
+  "$REAL_PYTHON" - "$case_dir/state/cleanup-start" > "$case_dir/cleanup-elapsed-ms" <<'PY'
+import pathlib
+import sys
+import time
+
+started = int(pathlib.Path(sys.argv[1]).read_text())
+print((time.monotonic_ns() - started) // 1_000_000)
+PY
 }
 
 run_case success "" 0
@@ -152,7 +165,7 @@ grep -F "Reference cleanup failure: docker compose down failed" \
 run_case compose-hang compose-hang 0
 [[ "$(<"$TEST_DIR/compose-hang/status")" == "70" ]] \
   || fail "hung compose cleanup returned $(<"$TEST_DIR/compose-hang/status") instead of 70"
-(( $(<"$TEST_DIR/compose-hang/elapsed") < 6 )) \
+(( $(<"$TEST_DIR/compose-hang/cleanup-elapsed-ms") < 6000 )) \
   || fail "hung compose cleanup exceeded its bounded wall-clock deadline"
 grep -F "Reference cleanup failure: docker compose down failed" \
   "$TEST_DIR/compose-hang/err" >/dev/null \
@@ -186,7 +199,7 @@ done < "$TEST_DIR/compose-hang/state/docker-pids"
 run_case compose-leader-exits compose-leader-exits 0
 [[ "$(<"$TEST_DIR/compose-leader-exits/status")" == "70" ]] \
   || fail "compose descendant escape returned $(<"$TEST_DIR/compose-leader-exits/status") instead of 70"
-(( $(<"$TEST_DIR/compose-leader-exits/elapsed") < 6 )) \
+(( $(<"$TEST_DIR/compose-leader-exits/cleanup-elapsed-ms") < 6000 )) \
   || fail "compose descendant escape exceeded its bounded wall-clock deadline"
 grep -F "Reference cleanup detail: compose down exceeded the 2s wall-clock deadline" \
   "$TEST_DIR/compose-leader-exits/err" >/dev/null \
@@ -287,7 +300,7 @@ run_bounded_drain_signal_case bounded-drain-int INT 130
 run_case diagnostics-hang diagnostics-hang 1
 [[ "$(<"$TEST_DIR/diagnostics-hang/status")" == "23" ]] \
   || fail "hung diagnostics replaced the primary failure status"
-(( $(<"$TEST_DIR/diagnostics-hang/elapsed") < 6 )) \
+(( $(<"$TEST_DIR/diagnostics-hang/cleanup-elapsed-ms") < 6000 )) \
   || fail "hung diagnostics exceeded the bounded cleanup budget"
 grep -F "Reference diagnostics exceeded the 1s wall-clock deadline" \
   "$TEST_DIR/diagnostics-hang/err" >/dev/null \
@@ -334,7 +347,7 @@ grep -F "Reference cleanup failure: docker compose down failed" \
 run_case slow-jvm-cleanup "" 0 slow
 [[ "$(<"$TEST_DIR/slow-jvm-cleanup/status")" == "0" ]] \
   || fail "slow JVM cleanup did not complete successfully"
-(( $(<"$TEST_DIR/slow-jvm-cleanup/elapsed") < 6 )) \
+(( $(<"$TEST_DIR/slow-jvm-cleanup/cleanup-elapsed-ms") < 6000 )) \
   || fail "slow JVMs were stopped sequentially instead of under one shared deadline"
 [[ -f "$TEST_DIR/slow-jvm-cleanup/state/compose-down-finished" ]] \
   || fail "slow JVM cleanup did not reach docker compose down"

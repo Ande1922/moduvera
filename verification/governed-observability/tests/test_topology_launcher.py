@@ -14,6 +14,32 @@ HARNESS = Path(__file__).resolve().parents[2] / "reference-product/harness/run-t
 
 
 class ApplicationLaunchTest(unittest.TestCase):
+    def test_self_tests_cannot_write_the_actual_cleanup_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "tests").mkdir()
+            for name in ("test-port-plan.sh", "test-cleanup.sh", "test-parallel-scenario.sh"):
+                script = root / "tests" / name
+                script.write_text('#!/bin/bash\n'
+                                  'if [[ -n "${REFERENCE_CLEANUP_STATUS_FILE:-}" ]]; then\n'
+                                  '  printf "0\\n" > "$REFERENCE_CLEANUP_STATUS_FILE"\nfi\n')
+                script.chmod(0o700)
+            dispatch = root / "verify.sh"
+            dispatch.write_text(HARNESS.with_name("verify.sh").read_text())
+            topology = root / "run-topology.sh"
+            topology.write_text('#!/bin/bash\n'
+                                'printf "%s" "$REFERENCE_CLEANUP_STATUS_FILE" > "$OWNER_CAPTURE"\n')
+            topology.chmod(0o700)
+            receipt, owner = root / "receipt", root / "owner"
+            receipt.write_text("awaiting actual owner\n")
+            environment = dict(os.environ, REFERENCE_SKIP_BUILD="1", REFERENCE_KEEP_RUNNING="1",
+                               REFERENCE_CLEANUP_STATUS_FILE=str(receipt), OWNER_CAPTURE=str(owner))
+            result = subprocess.run(["/bin/bash", str(dispatch), "microservices"], env=environment,
+                                    capture_output=True, text=True, timeout=5)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual(str(receipt), owner.read_text())
+            self.assertEqual("awaiting actual owner\n", receipt.read_text())
+
     def test_keep_running_dispatch_preserves_the_cleanup_owner_pid(self) -> None:
         with tempfile.TemporaryDirectory(prefix="dispatch probe ") as directory:
             root = Path(directory)
