@@ -12,6 +12,7 @@ import io.github.ande1922.moduvera.messaging.kafka.JdbcDurablePublication;
 import io.github.ande1922.moduvera.messaging.kafka.InboundFailureDiagnostics;
 import io.github.ande1922.moduvera.messaging.kafka.InboundDeadLetterDiagnostics;
 import io.github.ande1922.moduvera.messaging.kafka.InboundRecoveryLogFilter;
+import io.github.ande1922.moduvera.messaging.kafka.ImmediateProducerDiagnostics;
 import io.github.ande1922.moduvera.messaging.kafka.JdbcInboxRepository;
 import io.github.ande1922.moduvera.messaging.kafka.JdbcMessagingDialect;
 import io.github.ande1922.moduvera.messaging.kafka.JdbcOutboxStore;
@@ -52,6 +53,11 @@ public class ModuveraMessagingKafkaAutoConfiguration {
     @Bean
     static InboundFailureDiagnostics moduveraInboundFailureDiagnostics() {
         return new InboundFailureDiagnostics();
+    }
+
+    @Bean
+    static ImmediateProducerDiagnostics moduveraImmediateProducerDiagnostics() {
+        return new ImmediateProducerDiagnostics();
     }
 
     @Bean
@@ -154,8 +160,13 @@ public class ModuveraMessagingKafkaAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean(ImmediatePublication.class)
-    KafkaImmediatePublication moduveraImmediatePublication(MessageTransport transport) {
-        return new KafkaImmediatePublication(transport);
+    KafkaImmediatePublication moduveraImmediatePublication(
+            MessageTransport transport, ModuveraMessagingKafkaProperties properties) {
+        var destinations = java.util.Set.copyOf(properties.getImmediateBusinessBoundaryDestinations());
+        if (!properties.getRoutes().keySet().containsAll(destinations)) {
+            throw new IllegalStateException("Immediate business boundary destinations require configured logical routes");
+        }
+        return new KafkaImmediatePublication(transport, destinations);
     }
 
     @Bean

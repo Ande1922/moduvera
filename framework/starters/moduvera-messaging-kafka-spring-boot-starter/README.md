@@ -104,3 +104,49 @@ parent export was reproduced before the native-log repair.
 
 Sources: [Agent 2.31.1 record interceptor](https://github.com/open-telemetry/opentelemetry-java-instrumentation/blob/v2.31.1/instrumentation/spring/spring-kafka-2.7/library/src/main/java/io/opentelemetry/instrumentation/spring/kafka/v2_7/InstrumentedRecordInterceptor.java#L102)
 and [Spring Kafka 4.1.1 record loop](https://github.com/spring-projects/spring-kafka/blob/v4.1.1/spring-kafka/src/main/java/org/springframework/kafka/listener/KafkaMessageListenerContainer.java#L2787).
+
+## Immediate publication diagnostics
+
+`ImmediatePublication.publish` still rejects any active database transaction
+before sending. Outside transactions it makes exactly one existing transport
+call; return means the configured synchronous Broker ACK, while an exception
+keeps the original send guarantee and can leave the Broker outcome unknown.
+No application retry, persistence or redrive is added.
+
+If a descriptor has no creation Context and the caller has a valid current
+Context, the standard W3C propagator captures its pure values into the outgoing
+immutable descriptor. Supplied creation and all other original message fields
+are preserved. An absent current Context leaves creation absent. Only the Agent
+creates producer spans and transport headers; no SDK or duplicate publication
+span is introduced.
+
+Assembly configuration `moduvera.messaging.kafka.immediate-business-boundary-destinations`
+lists the logical routes whose successful ACK results require INFO. The default
+empty list leaves internal success silent; configured entries must exist in
+`routes`. Every unhandled synchronous send failure receives an INFO result with
+monotonic duration and is rethrown unchanged to its final owner. `topic` names the
+logical message destination, and `messaging.message.body.size` is the known
+serialized payload byte length, not an inferred transport/envelope size. No
+retry count, message body or arbitrary headers are logged.
+
+A default-listener Bean adapter recognizes only the built-in
+`LoggingProducerListener` at its standard bean names. Within the original
+Immediate callback, identical ProducerRecord and Exception objects identify
+that propagating diagnostic; it becomes safe INFO, while the caller owns the
+final ERROR. Custom listeners and unmatched records pass through. There is no
+new global Logback filter or logger-level change. The additive producer
+postprocessor preserves the original callback, future, record and exception.
+It retains diagnostic fields for a late callback without reinstalling business
+authorization or changing its active transport Context.
+
+`ImmediatePublicationIT` uses production StreamBridge transport, real Kafka and
+a real PostgreSQL transaction manager. It reads ACKed bytes/headers back using
+the container's uninstrumented console consumer, checks read-only and writable
+transaction rejection against actual Producer invocation counts and Broker
+end offsets, and stops its own Broker for a real failure. It never interprets
+that timeout as proof that a remote business operation did not run. The locked
+Agent fixture is `verification/governed-observability/verify-immediate-fixture.sh`;
+reconcile its output with `analyze_immediate_fixture.py`. The fixture's absent
+caller Context lets the locked Agent create a native Spring Integration root
+and a producer child; creation remains absent and the caller result does not
+invent a trace. The analyzer accounts for this native shape explicitly.

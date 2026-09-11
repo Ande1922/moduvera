@@ -95,6 +95,21 @@ class ModuveraMessagingKafkaAutoConfigurationTest {
     }
 
     @Test
+    void rejectsAnUnconfiguredBusinessBoundaryDestination() {
+        runner.withPropertyValues(
+                        "moduvera.messaging.kafka.routes[inventory.commands]=inventoryCommands-out-0",
+                        "spring.cloud.stream.kafka.bindings.inventoryCommands-out-0.producer.sync=true",
+                        "spring.cloud.stream.kafka.bindings.inventoryCommands-out-0.producer.configuration.acks=all",
+                        "spring.cloud.stream.kafka.bindings.inventoryCommands-out-0.producer.configuration.delivery.timeout.ms=2000",
+                        "spring.cloud.stream.kafka.bindings.inventoryCommands-out-0.producer.configuration.request.timeout.ms=2000",
+                        "spring.cloud.stream.kafka.bindings.inventoryCommands-out-0.producer.configuration.max.block.ms=2000",
+                        "moduvera.messaging.kafka.relay-enabled=false",
+                        "moduvera.messaging.kafka.immediate-business-boundary-destinations[0]=unknown")
+                .run(context -> assertThat(context).hasFailed()
+                        .getFailure().hasRootCauseMessage("Immediate business boundary destinations require configured logical routes"));
+    }
+
+    @Test
     void failsFastInsteadOfCreatingAnUnroutedTransport() {
         runner.run(context -> assertThat(context).hasFailed());
     }

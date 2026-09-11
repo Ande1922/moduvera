@@ -27,6 +27,7 @@ public class ModuveraMessagingKafkaProperties {
     private Duration failureBackoff = Duration.ofSeconds(5);
     private int relayMaxAttempts = 10;
     private Map<String, String> routes = new LinkedHashMap<>();
+    private List<String> immediateBusinessBoundaryDestinations = new ArrayList<>();
     private List<String> consumerBindings = new ArrayList<>();
     private int consumerMaxAttempts = 3;
     private Duration consumerBackoffInitial = Duration.ofMillis(100);
@@ -171,6 +172,14 @@ public class ModuveraMessagingKafkaProperties {
 
     public List<String> getConsumerBindings() {
         return consumerBindings;
+    }
+
+    public List<String> getImmediateBusinessBoundaryDestinations() {
+        return immediateBusinessBoundaryDestinations;
+    }
+
+    public void setImmediateBusinessBoundaryDestinations(List<String> destinations) {
+        this.immediateBusinessBoundaryDestinations = destinations == null ? new ArrayList<>() : new ArrayList<>(destinations);
     }
 
     public void setConsumerBindings(List<String> consumerBindings) {
