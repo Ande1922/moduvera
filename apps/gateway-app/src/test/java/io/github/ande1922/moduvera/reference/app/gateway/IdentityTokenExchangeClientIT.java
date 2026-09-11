@@ -159,7 +159,7 @@ class IdentityTokenExchangeClientIT {
                 String correlation = UUID.randomUUID().toString();
                 CountDownLatch received = new CountDownLatch(1);
                 BODY_RECEIVED.put(correlation, received);
-                var result = client().exchange(action, correlation).toFuture();
+                var result = client(Duration.ofMillis(500)).exchange(action, correlation).toFuture();
                 assertThat(block.started().await(5, TimeUnit.SECONDS)).isTrue();
                 assertThat(received.await(5, TimeUnit.SECONDS)).isTrue();
                 assertThat(logs.clients()).isEmpty();
@@ -182,6 +182,11 @@ class IdentityTokenExchangeClientIT {
     }
 
     private static IdentityTokenExchangeClient client() {
+        // Propagation assertions do not impose the short deadline used by the fault scenario.
+        return client(LIMIT);
+    }
+
+    private static IdentityTokenExchangeClient client(Duration timeout) {
         return new IdentityTokenExchangeClient(WebClient.builder()
                 .baseUrl("http://localhost:" + PEER.getAddress().getPort() + "/identity-prefix?search=outbound-query-sentinel")
                 .filter((request, next) -> next.exchange(request).map(response -> response.mutate()
@@ -191,7 +196,7 @@ class IdentityTokenExchangeClientIT {
                                 received.countDown();
                             }
                         })).build())).build(),
-                "Basic fixture", Duration.ofMillis(500));
+                "Basic fixture", timeout);
     }
 
     private static HttpServer server() {
