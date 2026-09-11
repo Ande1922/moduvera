@@ -242,6 +242,14 @@ class RedriveIT {
 
     private static JdbcOutboxStore store(Database db, TransactionOperations transactions, AtomicInteger wakes, AtomicReference<Span> root) {
         var jdbc = new NamedParameterJdbcTemplate(db.source) {
+            @Override public <T> List<T> query(String sql, Map<String, ?> parameters, org.springframework.jdbc.core.RowMapper<T> mapper) {
+                if (parameters.containsKey("redriveToken")) {
+                    // Real SQL and row mapping follow; recovery diagnostics must never fetch the body.
+                    assertThat(sql.toLowerCase(java.util.Locale.ROOT)).doesNotContain("*", "payload", "content_type");
+                }
+                return super.query(sql, parameters, mapper);
+            }
+
             @Override public int update(String sql, Map<String, ?> parameters) {
                 if (sql.contains("publication_generation = publication_generation + 1")) {
                     root.set(Span.current());

@@ -459,12 +459,17 @@ public final class JdbcOutboxStore implements OutboxStore, OutboxAdministration 
         parameters.put("terminal", TERMINAL);
         parameters.put("redriveToken", redriveToken);
         String owned = "message_id = :messageId AND status = :terminal AND claim_token = :redriveToken";
-        var rows = jdbc.query("SELECT * FROM moduvera_message_outbox WHERE " + owned + " FOR UPDATE",
-                parameters, (resultSet, rowNumber) -> claimedMessage(resultSet));
+        var rows = jdbc.query("""
+                SELECT message_id, message_kind, message_type, source, destination, occurred_at,
+                       tenant_id, actor_type, actor_subject, correlation_id, causation_id,
+                       initiator_type, initiator_subject, partition_key, creation_traceparent, creation_tracestate
+                  FROM moduvera_message_outbox
+                 WHERE %s FOR UPDATE
+                """.formatted(owned), parameters, (resultSet, rowNumber) -> messageDescriptor(resultSet));
         if (rows.isEmpty()) {
             return;
         }
-        var replacement = redrive.start(rows.getFirst().message().descriptor());
+        var replacement = redrive.start(rows.getFirst());
         parameters.put("publicationParent", replacement == null ? null : replacement.traceParent());
         parameters.put("publicationState", replacement == null ? null : replacement.traceState());
         int updated = jdbc.update("""
@@ -565,10 +570,10 @@ public final class JdbcOutboxStore implements OutboxStore, OutboxAdministration 
         wakeSignal.signal();
     }
 
-    private static ClaimedOutboxMessage claimedMessage(ResultSet resultSet) throws SQLException {
+    private static MessageDescriptor messageDescriptor(ResultSet resultSet) throws SQLException {
         String causationId = resultSet.getString("causation_id");
         String creationParent = resultSet.getString("creation_traceparent");
-        var descriptor = new MessageDescriptor(
+        return new MessageDescriptor(
                 new MessageId(resultSet.getString("message_id")),
                 MessageKind.valueOf(resultSet.getString("message_kind")),
                 new MessageType(resultSet.getString("message_type")),
@@ -586,8 +591,11 @@ public final class JdbcOutboxStore implements OutboxStore, OutboxAdministration 
                         resultSet.getString("initiator_subject")),
                 resultSet.getString("partition_key"),
                 creationParent == null ? null : new TraceContextCarrier(creationParent, resultSet.getString("creation_tracestate")));
+    }
+
+    private static ClaimedOutboxMessage claimedMessage(ResultSet resultSet) throws SQLException {
         var message = new SerializedMessage(
-                descriptor, resultSet.getString("content_type"), resultSet.getBytes("payload"));
+                messageDescriptor(resultSet), resultSet.getString("content_type"), resultSet.getBytes("payload"));
         return new ClaimedOutboxMessage(message, resultSet.getInt("attempt_count"),
                 resultSet.getLong("publication_generation"), resultSet.getString("publication_traceparent"),
                 resultSet.getString("publication_tracestate"));
