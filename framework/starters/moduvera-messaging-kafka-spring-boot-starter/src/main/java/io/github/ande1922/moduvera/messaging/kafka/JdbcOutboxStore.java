@@ -10,6 +10,7 @@ import io.github.ande1922.moduvera.message.MessageId;
 import io.github.ande1922.moduvera.message.MessageKind;
 import io.github.ande1922.moduvera.message.MessageType;
 import io.github.ande1922.moduvera.message.SerializedMessage;
+import io.github.ande1922.moduvera.message.TraceContextCarrier;
 import io.github.ande1922.moduvera.message.outbox.ClaimedOutboxBatch;
 import io.github.ande1922.moduvera.message.outbox.ClaimedOutboxMessage;
 import io.github.ande1922.moduvera.message.outbox.OutboxAdministration;
@@ -107,6 +108,9 @@ public final class JdbcOutboxStore implements OutboxStore, OutboxAdministration 
         parameters.put("partitionKey", descriptor.partitionKey());
         parameters.put("contentType", message.contentType());
         parameters.put("payload", message.payload());
+        TraceContextCarrier creation = descriptor.creationContext();
+        parameters.put("creationTraceParent", creation == null ? null : creation.traceParent());
+        parameters.put("creationTraceState", creation == null ? null : creation.traceState());
         parameters.put("status", PENDING);
         jdbc.update(
                 ("""
@@ -114,12 +118,16 @@ public final class JdbcOutboxStore implements OutboxStore, OutboxAdministration 
                     message_id, message_kind, message_type, source, destination, occurred_at,
                     tenant_id, actor_type, actor_subject, correlation_id,
                     causation_id, initiator_type, initiator_subject, partition_key,
-                    content_type, payload, status, next_attempt_at, attempt_count)
+                    content_type, payload, status, next_attempt_at, attempt_count,
+                    creation_traceparent, creation_tracestate,
+                    publication_traceparent, publication_tracestate, publication_generation)
                 VALUES (
                     :messageId, :messageKind, :messageType, :source, :destination, :occurredAt,
                     :tenantId, :actorType, :actorSubject, :correlationId,
                     :causationId, :initiatorType, :initiatorSubject, :partitionKey,
-                    :contentType, :payload, :status, %s, 0)
+                    :contentType, :payload, :status, %s, 0,
+                    :creationTraceParent, :creationTraceState,
+                    :creationTraceParent, :creationTraceState, 0)
                 """)
                         .formatted(databaseCurrentTimestamp()),
                 parameters);
@@ -453,6 +461,7 @@ public final class JdbcOutboxStore implements OutboxStore, OutboxAdministration 
 
     private static ClaimedOutboxMessage claimedMessage(ResultSet resultSet) throws SQLException {
         String causationId = resultSet.getString("causation_id");
+        String creationParent = resultSet.getString("creation_traceparent");
         var descriptor = new MessageDescriptor(
                 new MessageId(resultSet.getString("message_id")),
                 MessageKind.valueOf(resultSet.getString("message_kind")),
@@ -469,10 +478,13 @@ public final class JdbcOutboxStore implements OutboxStore, OutboxAdministration 
                 new Initiator(
                         ActorType.valueOf(resultSet.getString("initiator_type")),
                         resultSet.getString("initiator_subject")),
-                resultSet.getString("partition_key"));
+                resultSet.getString("partition_key"),
+                creationParent == null ? null : new TraceContextCarrier(creationParent, resultSet.getString("creation_tracestate")));
         var message = new SerializedMessage(
                 descriptor, resultSet.getString("content_type"), resultSet.getBytes("payload"));
-        return new ClaimedOutboxMessage(message, resultSet.getInt("attempt_count"));
+        return new ClaimedOutboxMessage(message, resultSet.getInt("attempt_count"),
+                resultSet.getLong("publication_generation"), resultSet.getString("publication_traceparent"),
+                resultSet.getString("publication_tracestate"));
     }
 
     private static String boundedFailure(String failure) {

@@ -150,3 +150,47 @@ reconcile its output with `analyze_immediate_fixture.py`. The fixture's absent
 caller Context lets the locked Agent create a native Spring Integration root
 and a producer child; creation remains absent and the caller result does not
 invent a trace. The analyzer accounts for this native shape explicitly.
+
+## Durable append and persisted trace metadata
+
+`JdbcDurablePublication` validates the existing active, writable transaction on
+its own DataSource before starting a short `outbox.append` INTERNAL span. When
+creation is absent, the standard W3C propagator captures that span's context as
+pure values. Already supplied immutable creation is preserved. The intent writer
+saves creation and the initial publication context together, with generation 0,
+in the same transaction as the business state. No SDK, MDC or permissions are
+serialized. Without an effective SDK, absent context remains absent; existing
+valid propagation values can still be retained.
+
+Append return and span end mean only that the append call ended. They do not
+announce a committed business fact or Broker receipt. The original payload-free
+wake still runs only after commit; rollback discards the message and both trace
+contexts. The caller's complete OTel context and owned logging fields are
+restored on normal and exceptional exits, and the original exception is rethrown.
+
+PostgreSQL and MySQL append V3 migrations with two nullable, bounded propagation
+pairs and non-null `publication_generation` defaulting to 0. V1/V2 and existing
+rows are retained. Normal startup still validates; explicit assembly/release
+policy selects migration execution and database identity initialization. Upgrade
+readers and validators before enabling the optional creation extension on the
+wire, as described by the existing envelope compatibility contract.
+
+`ClaimedOutboxMessage` returns publication generation and raw nullable propagation
+strings separately from the message descriptor's creation. Raw invalid publication
+values remain representable for claim-owned preparation; reading them neither
+rewrites creation nor treats them as authorization or a valid parent. Append and
+claim alone do not qualify Relay trace recovery, publication repair or redrive.
+
+`DurableAppendIT` uses production migration/JDBC/transaction adapters on both real
+databases. It upgrades V2 rows including an active lease and terminal history,
+compares every legacy column, checks visibility from an independent connection,
+commit/rollback/wake behavior, transaction rejection and independent claim metadata.
+`verify-durable-fixture.sh` and `analyze_durable_fixture.py` additionally reconcile
+the locked Agent's short append spans with actual stored values, including
+unsampled execution, absent parent, supplied creation and duplicate-key failure.
+Connector/J 9.7.0 defaults to its own OpenTelemetry instrumentation through the
+same global SDK, independently of the Agent JDBC instrumentation switch. The
+fixture retains and counts these native MySQL CLIENT spans separately from
+append spans, including driver error statuses during metadata/transaction work.
+The analyzer scans all exports for unsafe query/exception content; it does not
+interpret native driver span counts as append attempts or committed outcomes.
