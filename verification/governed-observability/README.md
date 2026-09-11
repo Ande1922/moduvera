@@ -161,3 +161,20 @@ producer/consumer spans, application children and Links, process IDs, and safe l
 They explicitly account for one lost committed redrive root and two lost open publish
 spans in the new chain. Persisted carriers prove recovery; they do not prove that a
 killed process's unexported span is queryable. This remains at-least-once delivery.
+
+## Independent Notes consumer
+
+[Notes governed qualification](../../examples/simple-notes-demo/README.md#governed-observability-proof)
+uses `verify-notes.sh` with a fresh `MODUVERA_OBSERVABILITY_EVIDENCE_DIR` and the
+same fixed external Agent/extension. It provisions its own PostgreSQL/Kafka,
+builds public artifacts from the current checkout, and starts Notes via its
+independent Spring Boot Parent and imported BOM. Safe receipts join actual
+stdout, HTTP headers, creation/transport context, committed consumption and
+OTLP spans. Three minimal consumer builds check unused transport and SDK
+absence; source and runtime JAR hashes bind the evidence to the inputs.
+
+This is the Notes assembly proof. The full framework process-loss/CAS/redrive
+matrices remain in the dedicated fixtures; Notes does not establish MySQL or
+additional product support. Ordinary `NotesObservabilityIT` runs without the
+Agent retain HTTP/database/Kafka/registry assertions and do not claim exported
+Trace evidence.

@@ -32,6 +32,8 @@ moduvera:
       routes:
         notes.events: notesCreated-out-0
         failure.events: alwaysFail-out-0
+      relay-business-boundary-destinations:
+        - notes.events
       consumer-bindings:
         - noteCreated-in-0
         - alwaysFail-in-0
