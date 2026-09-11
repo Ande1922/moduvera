@@ -97,9 +97,7 @@ public final class RelayPublicationLifecycle implements PublicationLifecycle {
             sendCompleted = System.nanoTime();
             transportFailure = failure;
             if (businessBoundary) {
-                facts(PRODUCE.atInfo()).addKeyValue("event.outcome", failure == null ? "success" : "failure")
-                        .addKeyValue("duration_ms", (sendCompleted - started) / 1_000_000.0d)
-                        .setCause(failure).log("消息发布调用结束");
+                recordTransportResult();
             }
         }
 
@@ -180,7 +178,16 @@ public final class RelayPublicationLifecycle implements PublicationLifecycle {
                 facts(FINAL.atError()).setCause(transportFailure)
                         .addKeyValue("error.code", "DEP_OUTBOX_PUBLICATION_FAILED")
                         .log("消息发布失败，需要人工处理");
+            } else if (!businessBoundary && transportFailure != null) {
+                // No accepted recovery/final record identifies this failed internal interaction.
+                recordTransportResult();
             }
+        }
+
+        private void recordTransportResult() {
+            facts(PRODUCE.atInfo()).addKeyValue("event.outcome", transportFailure == null ? "success" : "failure")
+                    .addKeyValue("duration_ms", (sendCompleted - started) / 1_000_000.0d)
+                    .setCause(transportFailure).log("消息发布调用结束");
         }
 
         private LoggingEventBuilder facts(LoggingEventBuilder event) {

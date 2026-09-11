@@ -35,7 +35,7 @@ rows = collections.defaultdict(list)
 for receipt in receipts:
     if "row" in receipt:
         rows[receipt["id"]].append(receipt["row"])
-assert len(rows) == 32
+assert len(rows) == 54
 pair_keys = ("creation_traceparent", "creation_tracestate", "publication_traceparent", "publication_tracestate", "publication_generation")
 for message_id, versions in rows.items():
     assert all(row["message_id"] == message_id and row["correlation_id"] == "original-" + message_id for row in versions)
@@ -60,13 +60,13 @@ for span in publications:
     published = span["attributes"]["outbox.write.result"] == "published"
     assert (span["status"].get("code") == 2) == (not published)
     assert span["attributes"]["outbox.transport.result"] in ("success", "failure")
-assert len(publications) == 50
+assert len(publications) == 88
 
 canonical = [log for log in logs if log["log"]["logger"] == "task.execute"]
 interactions = [log for log in logs if log["log"]["logger"] == "mq.produce"]
 recoveries = [log for log in logs if log["log"]["logger"] == "outbox.recovery"]
 finals = [log for log in logs if log["log"]["logger"] == "outbox.publish.failure"]
-assert len(canonical) == 52 and len(recoveries) == 6 and len(finals) == 3
+assert len(canonical) == 90 and len(recoveries) == 10 and len(finals) == 5
 assert len({(log["trace_id"], log["span_id"]) for log in canonical}) == len(canonical)
 for log in logs:
     assert log["correlation_id"].startswith("original-")
@@ -110,19 +110,39 @@ by_message = collections.defaultdict(list)
 for log in canonical:
     by_message[log["message_id"]].append(log)
 for database in ("postgresql", "mysql"):
-    for mode in ("success", "retry", "terminal"):
-        for operation, result in (("stale", "stale"), ("write-failure", "failed")):
-            message_id = f"{database}-{operation}-{mode}"
-            outcomes = by_message[message_id]
-            assert [event["outbox_write_result"] for event in outcomes] == [result, "published"]
-            assert all(event["outbox_failed_attempts"] == 0 for event in outcomes)
+    for classification in ("", "internal-"):
+        prefix = f"{database}-{classification}"
+        for mode in ("success", "retry", "terminal"):
+            for operation, result in (("stale", "stale"), ("write-failure", "failed")):
+                message_id = f"{prefix}{operation}-{mode}"
+                outcomes = by_message[message_id]
+                assert [event["outbox_write_result"] for event in outcomes] == [result, "published"]
+                assert all(event["outbox_failed_attempts"] == 0 for event in outcomes)
+                assert not any(log["message_id"] == message_id for log in recoveries + finals)
+        for operation in ("interrupted", "error"):
+            event, = by_message[f"{prefix}{operation}"]
+            assert event["outbox_write_result"] == "not_attempted" and event["outbox_failed_attempts"] == 0
+        assert by_message[f"{prefix}interrupted"][0]["termination_reason"] == "interrupted"
+        assert [event["outbox_failed_attempts"] for event in by_message[f"{prefix}retry-success"]] == [1, 1]
+        assert [event["outbox_write_result"] for event in by_message[f"{prefix}terminal"]] == ["retry", "terminal"]
+    internal_ids = [message_id for message_id in by_message if message_id.startswith(f"{database}-internal-")]
+    assert len(internal_ids) == 11
+    for message_id in internal_ids:
+        outcomes = by_message[message_id]
+        results = [log for log in interactions if log["message_id"] == message_id]
+        first = outcomes[0]
+        fallback = first["transport_result"] == "failure" and first["outbox_write_result"] in ("stale", "failed", "not_attempted")
+        assert len(results) == int(fallback)
+        if fallback:
+            result, = results
+            assert result["event"]["outcome"] == "failure"
+            assert (result["trace_id"], result["span_id"]) == (first["trace_id"], first["span_id"])
+            assert result["duration_ms"] <= first["duration_ms"]
+            assert result["error"]["type"] == ("java.lang.AssertionError" if message_id.endswith("-error") else "java.lang.IllegalStateException")
+            if "write-failure" in message_id:
+                assert first["error"]["type"] != result["error"]["type"]
             assert not any(log["message_id"] == message_id for log in recoveries + finals)
-    for operation in ("interrupted", "error"):
-        event, = by_message[f"{database}-{operation}"]
-        assert event["outbox_write_result"] == "not_attempted" and event["outbox_failed_attempts"] == 0
-    assert by_message[f"{database}-interrupted"][0]["termination_reason"] == "interrupted"
-    assert [event["outbox_failed_attempts"] for event in by_message[f"{database}-retry-success"]] == [1, 1]
-    assert [event["outbox_write_result"] for event in by_message[f"{database}-terminal"]] == ["retry", "terminal"]
+assert sum("-internal-" in log["message_id"] for log in interactions) == 12
 
 wires = [receipt for receipt in receipts if receipt["phase"] == "broker-wire"]
 inboxes = [receipt for receipt in receipts if receipt["phase"] == "inbox"]
@@ -170,7 +190,7 @@ for sentinel in json.loads((root / "sentinels.json").read_text()).values():
         if path.name != "sentinels.json":
             assert sentinel not in path.read_text(), path.name
 print(json.dumps({"databases": 2, "messages": len(rows), "canonical": len(canonical),
-                  "publishSpans": len(publications), "unsampledAttempts": 2, "lostOpenCrashSpan": 1,
+                  "publishSpans": len(publications), "internalFailureResults": 12, "unsampledAttempts": 2, "lostOpenCrashSpan": 1,
                   "kafkaProducerSpans": len(producers), "acknowledgedRecords": len(wires),
                   "inboxApplied": 5, "inboxDuplicates": 3, "recoveryWarnings": len(recoveries),
                   "finalErrors": len(finals), "nativeMysqlSpans": len(native),

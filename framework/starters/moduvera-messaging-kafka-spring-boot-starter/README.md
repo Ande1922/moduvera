@@ -262,8 +262,12 @@ Interruption retains the existing deferred result and failure count.
 
 `relay-business-boundary-destinations` explicitly classifies logical routes that
 require an additional `mq.produce` INFO per broker ACK/failure. Listed destinations
-must exist in `routes`; the default empty list keeps internal sends represented
-by their canonical/recovery/final records. The built-in producer listener leaves
+must exist in `routes`. The default empty list omits normal internal send INFO.
+An internal failed send with no accepted recovery/final record (stale or failed
+completion write, interruption, or escaping transport Error) gets one fallback
+`mq.produce` INFO failure result after its disposition is known. Its captured
+send-only duration and transport cause remain distinct from the task canonical
+and any completion-write exception. The built-in producer listener leaves
 synchronous failure ownership with Worker; custom listeners are preserved.
 
 `outbox_failed_attempts` is the known persisted failure count after an accepted

@@ -68,9 +68,13 @@ final class RelayFixtureSupport {
     private RelayFixtureSupport() {}
 
     static OutboxWorker worker(OutboxStore store, MessageTransport transport, int maximum) {
+        return worker(store, transport, maximum, true);
+    }
+
+    static OutboxWorker worker(OutboxStore store, MessageTransport transport, int maximum, boolean boundary) {
         return new OutboxWorker(store, transport, Clock.systemUTC(), System::nanoTime, Duration.ofSeconds(60),
                 Duration.ofSeconds(2), Duration.ZERO, maximum, PublicationObserver.noop(),
-                new RelayPublicationLifecycle(Set.of(TOPIC)));
+                new RelayPublicationLifecycle(boundary ? Set.of(TOPIC) : Set.of()));
     }
 
     static SerializedMessage message(String id, TraceContextCarrier creation) {
