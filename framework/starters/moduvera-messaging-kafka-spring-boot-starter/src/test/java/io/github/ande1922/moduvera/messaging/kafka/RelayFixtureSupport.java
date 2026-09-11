@@ -154,10 +154,14 @@ final class RelayFixtureSupport {
         }
 
         Logs(Path output) {
+            this(output, List.of("task.execute", "mq.produce", "outbox.recovery", "outbox.publish.failure",
+                    "mq.produce.propagating", "org.springframework.kafka.support.LoggingProducerListener"));
+        }
+
+        Logs(Path output, List<String> names) {
             this.output = output;
             start();
-            for (String name : List.of("task.execute", "mq.produce", "outbox.recovery", "outbox.publish.failure",
-                    "mq.produce.propagating", "org.springframework.kafka.support.LoggingProducerListener")) {
+            for (String name : names) {
                 var logger = (Logger) LoggerFactory.getLogger(name);
                 previous.put(logger, logger.getLevel());
                 additive.put(logger, logger.isAdditive());

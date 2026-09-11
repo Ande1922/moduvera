@@ -125,3 +125,39 @@ MODUVERA_OTEL_JAVAAGENT=/path/to/opentelemetry-javaagent-2.31.1.jar \
 MODUVERA_LOGGING_EVIDENCE_DIR=/private/tmp/moduvera-logging-evidence \
 verification/governed-observability/verify-logging-fixture.sh
 ```
+
+The Relay fixture also qualifies atomic manual redrive. Supply the pinned Agent,
+repository extension, a running local OTLP receiver endpoint, and a fresh evidence
+directory through the existing runtime variables, then run:
+
+```bash
+verification/governed-observability/verify-relay-fixture.sh
+python3 verification/governed-observability/analyze_relay_fixture.py "$MODUVERA_OBSERVABILITY_EVIDENCE_DIR"
+python3 verification/governed-observability/analyze_redrive_fixture.py "$MODUVERA_OBSERVABILITY_EVIDENCE_DIR"
+```
+
+`RedriveIT` uses production JDBC adapters with real PostgreSQL and MySQL row locks,
+conditional updates, independent observation connections, transaction rollback,
+SQL rejection, concurrent callers, and complete immutable-column/payload comparisons.
+The locked-Agent run additionally verifies no-parent roots, creation/management Links,
+original-message diagnostics, and completion after an enclosing transaction decides,
+even when its management span has already ended. An ordinary run without an SDK
+verifies that no trace identity is fabricated or retained from the previous generation.
+
+`RelayProcessIT` preserves its existing publication fault matrix and adds one message
+through generations 0, 1, and 2. After the first real ACK and failed status write, the
+consumer has applied the message once. A separate redrive JVM commits generation 1
+and blocks in the existing payload-free wake callback; it is killed before the root
+ends. Automatic retry, an ACK-before-mark process crash, and another real Relay JVM
+retain generation 1. The next accepted redrive creates generation 2, followed by an
+automatic retry, another crash, and a fresh Relay restart. Four acknowledged records
+produce one Inbox APPLIED and three DUPLICATE outcomes; cumulative failures remain 4.
+Every send has a pre-send progress barrier and committed-offset observation before
+asserting the absence of another business effect.
+
+The two analyzers separate the original unchanged-generation matrix from the new
+redrive chain, then reconcile database carriers, actual record headers, Agent-owned
+producer/consumer spans, application children and Links, process IDs, and safe logs.
+They explicitly account for one lost committed redrive root and two lost open publish
+spans in the new chain. Persisted carriers prove recovery; they do not prove that a
+killed process's unexported span is queryable. This remains at-least-once delivery.

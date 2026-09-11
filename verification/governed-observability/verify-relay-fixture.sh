@@ -13,7 +13,7 @@ OPTIONS="$(governed_agent_java_options relay-ticket12 "$AGENT" "$EXTENSION") -Dm
 cd "$PROJECT_ROOT"
 set +e
 ./mvnw -pl framework/starters/moduvera-messaging-kafka-spring-boot-starter -am test-compile failsafe:integration-test failsafe:verify \
-  -Dit.test=RelayPublicationIT,RelayProcessIT -Dfailsafe.failIfNoSpecifiedTests=false "-DargLine=$OPTIONS" \
+  -Dit.test=RelayPublicationIT,RelayProcessIT,RedriveIT -Dfailsafe.failIfNoSpecifiedTests=false "-DargLine=$OPTIONS" \
   > "$EVIDENCE_DIR/relay-agent.log" 2>&1
 result=$?
 set -e

@@ -434,29 +434,56 @@ public final class JdbcOutboxStore implements OutboxStore, OutboxAdministration 
         if (redriveToken == null || redriveToken.isBlank()) {
             return false;
         }
-        boolean redriven = jdbc.update(
-                        """
-                        UPDATE moduvera_message_outbox
-                           SET status = :pending,
-                               next_attempt_at = CURRENT_TIMESTAMP,
-                               terminal_at = NULL,
-                               last_failure = NULL,
-                               claim_token = NULL,
-                               claim_expires_at = NULL
-                         WHERE message_id = :messageId
-                           AND status = :terminal
-                           AND claim_token = :redriveToken
-                        """,
-                        Map.of(
-                                "pending", PENDING,
-                                "messageId", id.value(),
-                                "terminal", TERMINAL,
-                                "redriveToken", redriveToken))
-                == 1;
-        if (redriven) {
+        var redrive = new OutboxRedrive();
+        transactions.executeWithoutResult(status -> {
+            if (!TransactionSynchronizationManager.isActualTransactionActive()
+                    || !TransactionSynchronizationManager.isSynchronizationActive()
+                    || TransactionSynchronizationManager.isCurrentTransactionReadOnly()) {
+                throw new IllegalStateException("outbox redrive requires a writable transaction");
+            }
+            try (redrive) {
+                redriveTerminal(id, redriveToken, redrive);
+            } catch (RuntimeException | Error failure) {
+                redrive.failed(failure);
+                throw failure;
+            }
+        });
+        // A joined outer transaction has not decided yet; an owned rollback-only transaction has.
+        return redrive.effectiveOrPending();
+    }
+
+    private void redriveTerminal(MessageId id, String redriveToken, OutboxRedrive redrive) {
+        Map<String, Object> parameters = new HashMap<>();
+        parameters.put("pending", PENDING);
+        parameters.put("messageId", id.value());
+        parameters.put("terminal", TERMINAL);
+        parameters.put("redriveToken", redriveToken);
+        String owned = "message_id = :messageId AND status = :terminal AND claim_token = :redriveToken";
+        var rows = jdbc.query("SELECT * FROM moduvera_message_outbox WHERE " + owned + " FOR UPDATE",
+                parameters, (resultSet, rowNumber) -> claimedMessage(resultSet));
+        if (rows.isEmpty()) {
+            return;
+        }
+        var replacement = redrive.start(rows.getFirst().message().descriptor());
+        parameters.put("publicationParent", replacement == null ? null : replacement.traceParent());
+        parameters.put("publicationState", replacement == null ? null : replacement.traceState());
+        int updated = jdbc.update("""
+                UPDATE moduvera_message_outbox
+                   SET status = :pending,
+                       next_attempt_at = CURRENT_TIMESTAMP,
+                       terminal_at = NULL,
+                       last_failure = NULL,
+                       claim_token = NULL,
+                       claim_expires_at = NULL,
+                       publication_generation = publication_generation + 1,
+                       publication_traceparent = :publicationParent,
+                       publication_tracestate = :publicationState
+                 WHERE %s
+                """.formatted(owned), parameters);
+        if (updated == 1) {
+            redrive.accepted();
             signalWhenVisible();
         }
-        return redriven;
     }
 
     @Override

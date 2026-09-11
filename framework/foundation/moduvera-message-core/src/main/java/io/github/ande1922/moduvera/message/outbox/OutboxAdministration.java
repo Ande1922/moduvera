@@ -8,6 +8,10 @@ public interface OutboxAdministration {
 
     List<TerminalOutboxMessage> findTerminal(int limit);
 
+    /**
+     * Accepts a new publication generation for the matching terminal token.
+     * When joined to a caller transaction, true remains conditional on that transaction committing.
+     */
     boolean redrive(MessageId id, String redriveToken);
 
     int deletePublishedBefore(Instant retentionCutoff, int limit);

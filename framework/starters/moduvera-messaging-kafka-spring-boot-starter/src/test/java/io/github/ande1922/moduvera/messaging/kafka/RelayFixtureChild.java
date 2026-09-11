@@ -47,10 +47,11 @@ public final class RelayFixtureChild {
             relay.start();
             long deadline = System.nanoTime() + Duration.ofSeconds(90).toNanos();
             while (System.nanoTime() < deadline) {
-                if ("PUBLISHED".equals(jdbc.queryForObject("SELECT status FROM moduvera_message_outbox", String.class))
+                String expected = "terminal".equals(mode) ? "TERMINAL" : "PUBLISHED";
+                if (expected.equals(jdbc.queryForObject("SELECT status FROM moduvera_message_outbox", String.class))
                         && relay.state() == OutboxRelay.State.WAITING) {
                     write(directory.resolve(mode + "-complete.json"), Map.of("pid", ProcessHandle.current().pid(),
-                            "status", "PUBLISHED", "relayState", relay.state().name(), "canonicalCount", logs.lines.stream()
+                            "status", expected, "relayState", relay.state().name(), "canonicalCount", logs.lines.stream()
                                     .filter(line -> line.contains("task.execute")).count()));
                     return;
                 }
@@ -101,8 +102,10 @@ public final class RelayFixtureChild {
             OutboxStore selected = "crash".equals(System.getenv("RELAY_FIXTURE_MODE"))
                     ? new CheckpointStore(store, Path.of(System.getenv("RELAY_FIXTURE_DIRECTORY"), "ack-before-mark.json")) : store;
             properties.validateRelayInvariant();
-            return new OutboxWorker(selected, transport, clock, System::nanoTime, properties.getClaimLease(),
-                    properties.getLeaseSafetyMargin(), properties.getFailureBackoff(), properties.getRelayMaxAttempts(), observer, lifecycle);
+            boolean terminal = "terminal".equals(System.getenv("RELAY_FIXTURE_MODE"));
+            MessageTransport selectedTransport = terminal ? message -> { throw new IllegalStateException(PRIVATE_CAUSE); } : transport;
+            return new OutboxWorker(selected, selectedTransport, clock, System::nanoTime, properties.getClaimLease(),
+                    properties.getLeaseSafetyMargin(), properties.getFailureBackoff(), terminal ? 1 : properties.getRelayMaxAttempts(), observer, lifecycle);
         }
 
         @Bean OutboxRelay fixtureRelay(OutboxWorker worker, ModuveraMessagingKafkaProperties properties, LocalOutboxWakeSignal signal) {

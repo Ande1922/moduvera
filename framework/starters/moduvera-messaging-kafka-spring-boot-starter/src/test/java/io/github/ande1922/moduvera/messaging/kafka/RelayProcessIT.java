@@ -106,6 +106,7 @@ public class RelayProcessIT {
             ackWriteFailure(db, logs);
             takeover(db, logs);
             independentRestart(db);
+            redriveRecovery(db);
             String id = db.seed("broker-failure");
             KAFKA.stop();
             var worker = worker(db.store, transport, 2);
@@ -245,7 +246,173 @@ public class RelayProcessIT {
         }
     }
 
+    private void redriveRecovery(Database db) throws Exception {
+        try (var consumerLogs = new Logs(null, List.of("mq.consume"))) {
+            redriveRecovery(db, consumerLogs);
+        }
+    }
+
+    private void redriveRecovery(Database db, Logs consumerLogs) throws Exception {
+        db.jdbc.update("DELETE FROM moduvera_message_outbox");
+        String id = "postgresql-redrive-chain";
+        var durable = new JdbcDurablePublication(db.source, db.store);
+        inManagement(id, () -> db.transactions.execute(status -> { durable.append(message(id, null)); return null; }));
+        var immutable = immutableMessage(db);
+        var initial = db.row();
+        assertThat(((Number) initial.get("publication_generation")).intValue()).isZero();
+        var progress = ProgressBarrier.capture(RelayProcessIT::consumed);
+        db.jdbc.execute("ALTER TABLE moduvera_message_outbox ADD CONSTRAINT redrive_ack_write_fault CHECK (status <> 'PUBLISHED')");
+        try {
+            assertThatThrownBy(() -> inManagement(id, () -> configuredWorker.publishBatch(1))).isInstanceOf(DataAccessException.class);
+        } finally {
+            db.jdbc.execute("ALTER TABLE moduvera_message_outbox DROP CONSTRAINT redrive_ack_write_fault");
+        }
+        progress.awaitAdvanceBy(1, Duration.ofSeconds(45), Duration.ofMillis(50), () -> "original generation ACK");
+        assertBusiness(id, 1, 1);
+        db.expire();
+        assertThat(worker(db.store, ignored -> { throw new IllegalStateException(PRIVATE_CAUSE); }, 1).publishBatch(1).failed()).isEqualTo(1);
+        assertThat(db.row().get("status")).isEqualTo("TERMINAL");
+        RECEIPTS.add(Map.of("phase", "redrive-original-terminal", "id", id, "row", db.row()));
+
+        String evidence = System.getenv("MODUVERA_OBSERVABILITY_EVIDENCE_DIR");
+        Path directory = evidence == null ? temporary.resolve("redrive") : Path.of(evidence, "redrive-process-children");
+        Files.createDirectories(directory);
+        Path management = directory.resolve("management");
+        Files.createDirectories(management);
+        Process redriver = child(management, "redrive", RedriveFixtureChild.class);
+        Map<String, Object> secondGeneration;
+        try {
+            await(() -> Files.exists(management.resolve("redrive-committed.json")), redriver, management.resolve("redrive-output.log"));
+            secondGeneration = db.row();
+            assertThat(secondGeneration.get("status")).isEqualTo("PENDING");
+            assertThat(((Number) secondGeneration.get("publication_generation")).intValue()).isEqualTo(1);
+            assertThat(immutableMessage(db)).isEqualTo(immutable);
+            var checkpoint = new ObjectMapper().readTree(Files.readString(management.resolve("redrive-committed.json")));
+            assertThat(checkpoint.path("pid").asLong()).isEqualTo(redriver.pid());
+            redriver.destroyForcibly();
+            assertThat(redriver.waitFor(30, TimeUnit.SECONDS)).isTrue();
+            assertThat(redriver.exitValue()).isNotZero();
+            assertThat(db.row()).isEqualTo(secondGeneration);
+            RECEIPTS.add(Map.of("phase", "redrive-root-lost", "id", id, "row", secondGeneration,
+                    "pid", redriver.pid(), "exit", redriver.exitValue(), "checkpoint", checkpoint));
+        } finally {
+            if (redriver.isAlive()) { redriver.destroyForcibly(); redriver.waitFor(30, TimeUnit.SECONDS); }
+            redriver.close();
+        }
+        retryGeneration(db, id, secondGeneration, 2);
+        crashGeneration(db, id, directory.resolve("generation-1-crash"), 2);
+        db.expire();
+        Path terminalDirectory = directory.resolve("generation-1-terminal");
+        var terminalCompletion = completeChild(terminalDirectory, "terminal");
+        assertThat(db.row().get("status")).isEqualTo("TERMINAL");
+        assertThat(((Number) db.row().get("attempt_count")).intValue()).isEqualTo(3);
+        assertGeneration(db.row(), secondGeneration);
+        assertThat(immutableMessage(db)).isEqualTo(immutable);
+        RECEIPTS.add(Map.of("phase", "redrive-second-terminal", "id", id, "row", db.row(), "completion", terminalCompletion));
+
+        var wakes = new AtomicInteger();
+        var administration = new JdbcOutboxStore(new org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate(db.source),
+                JdbcMessagingDialect.POSTGRESQL, db.transactions, wakes::incrementAndGet);
+        String token = db.external.queryForObject("SELECT claim_token FROM moduvera_message_outbox", String.class);
+        assertThat(inManagement(id, () -> administration.redrive(new io.github.ande1922.moduvera.message.MessageId(id), token))).isTrue();
+        assertThat(wakes).hasValue(1);
+        var thirdGeneration = db.row();
+        assertThat(((Number) thirdGeneration.get("publication_generation")).intValue()).isEqualTo(2);
+        if (AGENT) {
+            assertThat(thirdGeneration.get("publication_traceparent")).isNotEqualTo(secondGeneration.get("publication_traceparent"))
+                    .isNotEqualTo(initial.get("publication_traceparent"));
+        }
+        assertThat(immutableMessage(db)).isEqualTo(immutable);
+        RECEIPTS.add(Map.of("phase", "redrive-third-accepted", "id", id, "row", thirdGeneration, "wakes", wakes.get()));
+        retryGeneration(db, id, thirdGeneration, 4);
+        crashGeneration(db, id, directory.resolve("generation-2-crash"), 3);
+        db.expire();
+        progress = ProgressBarrier.capture(RelayProcessIT::consumed);
+        var restartCompletion = completeChild(directory.resolve("generation-2-restart"), "restart");
+        progress.awaitAdvanceBy(1, Duration.ofSeconds(45), Duration.ofMillis(50), () -> "third generation restart duplicate");
+        assertBusiness(id, 4, 1);
+        assertThat(db.row().get("status")).isEqualTo("PUBLISHED");
+        assertThat(((Number) db.row().get("attempt_count")).intValue()).isEqualTo(4);
+        assertGeneration(db.row(), thirdGeneration);
+        assertThat(immutableMessage(db)).isEqualTo(immutable);
+        RECEIPTS.add(Map.of("phase", "redrive-final-published", "id", id, "row", db.row(),
+                "completion", restartCompletion, "records", 4, "applied", 1, "duplicates", 3, "immutableColumnsAndPayloadVerified", true));
+        assertThat(consumerLogs.events(id, "mq.consume")).hasSize(4);
+        writeEvidence("redrive-inbound", RECEIPTS.stream().filter(row -> id.equals(row.get("id"))).toList(), consumerLogs);
+    }
+
+    private void retryGeneration(Database db, String id, Map<String, Object> generation, int count) {
+        assertThat(inManagement(id, () -> worker(db.store, ignored -> { throw new IllegalStateException(PRIVATE_CAUSE); }, 10)
+                .publishBatch(1)).failed()).isEqualTo(1);
+        assertThat(db.row().get("status")).isEqualTo("PENDING");
+        assertThat(((Number) db.row().get("attempt_count")).intValue()).isEqualTo(count);
+        if (AGENT) { assertGeneration(db.row(), generation); }
+        // Without an SDK no root is invented; governed preparation remains the only recovery path.
+        RECEIPTS.add(Map.of("phase", "redrive-automatic-retry", "id", id, "row", db.row(), "pid", ProcessHandle.current().pid()));
+    }
+
+    private void crashGeneration(Database db, String id, Path directory, int records) throws Exception {
+        Files.createDirectories(directory);
+        var before = db.row();
+        var progress = ProgressBarrier.capture(RelayProcessIT::consumed);
+        Process process = child(directory, "crash");
+        try {
+            await(() -> Files.exists(directory.resolve("ack-before-mark.json")), process, directory.resolve("crash-output.log"));
+            progress.awaitAdvanceBy(1, Duration.ofSeconds(45), Duration.ofMillis(50), () -> "new generation ACK before crash");
+            assertBusiness(id, records, 1);
+            assertThat(db.row()).isEqualTo(before);
+            // Wait for this record's producer, not the first record for this reused MessageId.
+            awaitProducerExport(id, process, directory.resolve("crash-output.log"));
+            var checkpoint = new ObjectMapper().readTree(Files.readString(directory.resolve("ack-before-mark.json")));
+            assertThat(checkpoint.path("pid").asLong()).isEqualTo(process.pid());
+            process.destroyForcibly();
+            assertThat(process.waitFor(30, TimeUnit.SECONDS)).isTrue();
+            assertThat(process.exitValue()).isNotZero();
+            assertThat(db.row()).isEqualTo(before);
+            RECEIPTS.add(Map.of("phase", "redrive-publish-lost", "id", id, "row", db.row(), "pid", process.pid(),
+                    "exit", process.exitValue(), "checkpoint", checkpoint, "directory", directory.getFileName().toString()));
+        } finally {
+            if (process.isAlive()) { process.destroyForcibly(); process.waitFor(30, TimeUnit.SECONDS); }
+            process.close();
+        }
+    }
+
+    private tools.jackson.databind.JsonNode completeChild(Path directory, String mode) throws Exception {
+        Files.createDirectories(directory);
+        Process process = child(directory, mode);
+        try {
+            await(() -> Files.exists(directory.resolve(mode + "-complete.json")), process, directory.resolve(mode + "-output.log"));
+            assertThat(process.waitFor(30, TimeUnit.SECONDS)).isTrue();
+            assertThat(process.exitValue()).isZero();
+            var completion = new ObjectMapper().readTree(Files.readString(directory.resolve(mode + "-complete.json")));
+            assertThat(completion.path("pid").asLong()).isEqualTo(process.pid());
+            assertThat(completion.path("canonicalCount").asInt()).isEqualTo(1);
+            return completion;
+        } finally {
+            if (process.isAlive()) { process.destroyForcibly(); process.waitFor(30, TimeUnit.SECONDS); }
+            process.close();
+        }
+    }
+
+    private static void assertGeneration(Map<String, Object> actual, Map<String, Object> expected) {
+        for (String field : List.of("creation_traceparent", "creation_tracestate", "publication_traceparent", "publication_tracestate", "publication_generation")) {
+            assertThat(actual.get(field)).as(field).isEqualTo(expected.get(field));
+        }
+    }
+
+    private static Map<String, Object> immutableMessage(Database db) {
+        var fields = new HashMap<>(db.external.queryForMap("SELECT message_id, message_kind, message_type, source, destination, occurred_at,"
+                + " tenant_id, actor_type, actor_subject, correlation_id, causation_id, initiator_type, initiator_subject,"
+                + " partition_key, content_type, payload, creation_traceparent, creation_tracestate FROM moduvera_message_outbox"));
+        fields.put("payload", java.util.HexFormat.of().formatHex((byte[]) fields.get("payload")));
+        return fields;
+    }
+
     private Process child(Path directory, String mode) throws Exception {
+        return child(directory, mode, RelayFixtureChild.class);
+    }
+
+    private Process child(Path directory, String mode, Class<?> mainClass) throws Exception {
         var command = new ArrayList<String>();
         command.add(Path.of(System.getProperty("java.home"), "bin", "java").toString());
         if (AGENT) {
@@ -258,7 +425,7 @@ public class RelayProcessIT {
         }
         command.add("-cp");
         command.add(System.getProperty("surefire.test.class.path", System.getProperty("java.class.path")));
-        command.add(RelayFixtureChild.class.getName());
+        command.add(mainClass.getName());
         var builder = new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(directory.resolve(mode + "-output.log").toFile());
         var environment = builder.environment();
         environment.put("RELAY_FIXTURE_JDBC_URL", POSTGRES.getJdbcUrl());
@@ -272,7 +439,7 @@ public class RelayProcessIT {
 
     private static void awaitProducerExport(String id, Process child, Path output) throws Exception {
         if (!AGENT) { return; }
-        var wire = RECEIPTS.stream().filter(row -> row.get("phase").equals("broker-wire") && row.get("id").equals(id)).findFirst().orElseThrow();
+        var wire = RECEIPTS.stream().filter(row -> row.get("phase").equals("broker-wire") && row.get("id").equals(id)).toList().getLast();
         String producer = ((String) wire.get("traceparent")).split("-")[2];
         Path spans = Path.of(System.getenv("MODUVERA_OBSERVABILITY_EVIDENCE_DIR"), "spans.jsonl");
         await(() -> {
@@ -348,6 +515,8 @@ public class RelayProcessIT {
                 var identity = ExecutionContextHolder.require();
                 assertThat(identity.correlationId()).isEqualTo("original-" + id);
                 assertThat(identity.actor().subjectId()).isEqualTo("local-consumer");
+                assertThat(identity.requireTenantId().value()).isEqualTo("origin-tenant");
+                assertThat(identity.initiator().subjectId()).isEqualTo("origin-user");
                 var outcome = inbox.handle(message.descriptor().id(), () -> jdbc.update(
                         "INSERT INTO fixture_relay_business (message_id, tenant_id) VALUES (?, ?)", id, identity.requireTenantId().value()));
                 RECEIPTS.add(Map.of("phase", "inbox", "id", id, "outcome", outcome.name(), "trace", trace()));

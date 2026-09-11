@@ -31,6 +31,13 @@ for name in ("relay-postgresql", "relay-mysql", "relay-process"):
 children = root / "relay-process-children"
 for name in ("crash", "restart"):
     logs.extend(json.loads(line) for line in (children / (name + "-logs.jsonl")).read_text().splitlines() if line)
+# Ticket 13's additional generation-changing chain is reconciled independently by analyze_redrive_fixture.py.
+redrive_id = "postgresql-redrive-chain"
+receipts = [receipt for receipt in receipts if receipt.get("id") != redrive_id]
+logs = [log for log in logs if log.get("message_id") != redrive_id]
+publications = [span for span in publications if span["attributes"]["messaging.message.id"] != redrive_id]
+redrive_traces = {span["traceId"] for span in spans if span["attributes"].get("messaging.message.id") == redrive_id}
+producers = [span for span in producers if span["traceId"] not in redrive_traces]
 rows = collections.defaultdict(list)
 for receipt in receipts:
     if "row" in receipt:
