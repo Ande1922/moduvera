@@ -88,7 +88,7 @@ final class OutboxPublicationPreparation implements AutoCloseable {
         var diagnostic = DiagnosticLogSnapshot.captureWithoutIdentity(descriptor.correlationId())
                 .withIdentity(descriptor.actor(), descriptor.initiator(), Optional.of(descriptor.tenantId()));
         try (var ignored = diagnostic.openFieldsScope()) {
-            LOGGER.atWarn().addKeyValue("event.action", "outbox.publication.repair")
+            LOGGER.atWarn()
                     .addKeyValue("message_id", descriptor.id().value())
                     .addKeyValue("messaging.system", "kafka")
                     .addKeyValue("topic", descriptor.destination().value())

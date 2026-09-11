@@ -64,7 +64,7 @@ for database in ("postgresql", "mysql"):
             assert len(matches) == 1
             log = matches[0]
             assert log["log"] == {"level": "WARN", "logger": "outbox.recovery"}
-            assert log["event"]["action"] == "outbox.publication.repair"
+            assert "event.action" not in log and "action" not in log.get("event", {})
             assert "连续性已中断" in log["message"] and "持久修复" in log["message"]
             assert (log["trace_id"], log["span_id"]) == (span["traceId"], span["spanId"])
             assert log["correlation_id"] == "original-" + message_id and log["tenant_id"] == "origin-tenant"
